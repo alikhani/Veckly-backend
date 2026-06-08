@@ -29,6 +29,13 @@
       "when": 1780928363257,
       "tag": "0003_week_plan_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780938607013,
+      "tag": "0004_household_bootstrap_rls",
+      "breakpoints": true
     }
   ]
 }

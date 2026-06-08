@@ -2,6 +2,7 @@ import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex, integer, date, jso
 
 export const householdMembershipRole = pgEnum('household_membership_role', ['owner', 'member'])
 export const householdMembershipStatus = pgEnum('household_membership_status', ['active', 'removed'])
+export const householdInviteStatus = pgEnum('household_invite_status', ['pending', 'accepted', 'revoked', 'expired'])
 
 export const households = pgTable('households', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -18,6 +19,21 @@ export const householdMemberships = pgTable('household_memberships', {
   joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('household_memberships_household_id_user_id_idx').on(table.householdId, table.userId),
+])
+
+export const householdInvites = pgTable('household_invites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  token: text('token').notNull(),
+  email: text('email'),
+  status: householdInviteStatus('status').notNull().default('pending'),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedBy: uuid('accepted_by'),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+}, (table) => [
+  uniqueIndex('household_invites_token_idx').on(table.token),
 ])
 
 export const weekPlanEventType = pgEnum('week_plan_event_type', ['week_started', 'meal_assigned'])

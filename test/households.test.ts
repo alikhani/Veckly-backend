@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
 import { bootstrapHousehold } from '../src/households.js'
+import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -45,15 +46,6 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
       await tx.execute(sql`set local role authenticated`)
       return run(tx as unknown as typeof db)
     })
-  }
-
-  // `bootstrapHousehold` goes through `withRls`, which decodes the caller's id
-  // from the access token's `sub` claim — it never calls out to Supabase to
-  // verify a signature. A `header.payload.signature`-shaped string whose
-  // payload is `base64url({ sub: userId })` is all `decodeUserId` needs.
-  function fakeAccessToken(userId: string): string {
-    const payload = Buffer.from(JSON.stringify({ sub: userId }), 'utf8').toString('base64url')
-    return `header.${payload}.signature`
   }
 
   it('creates "My household" with the caller as owner when they have no household', async () => {

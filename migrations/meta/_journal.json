@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1780908202497,
+      "tag": "0000_households_and_memberships",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780908498185,
+      "tag": "0001_household_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780927694358,
+      "tag": "0002_week_plan_events_and_projections",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780928363257,
+      "tag": "0003_week_plan_rls",
+      "breakpoints": true
+    }
+  ]
+}

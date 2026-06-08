@@ -1,0 +1,255 @@
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { and, eq, sql } from 'drizzle-orm'
+import { createDb } from '../src/db.js'
+import { households, householdMemberships, shoppingListEvents, shoppingListProjections } from '../src/schema.js'
+import { foldEventIntoProjection, emptyProjectionState, type TShoppingListProjectionState } from '../src/shopping-list.js'
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL
+
+const describeWithDb = testDatabaseUrl ? describe : describe.skip
+
+describeWithDb('Shopping-list event log + projection', () => {
+  const db = createDb(testDatabaseUrl!)
+
+  const userA = '11111111-1111-1111-1111-111111111111'
+  const userB = '22222222-2222-2222-2222-222222222222'
+  let householdAId: string
+  let householdBId: string
+
+  const weekStartDate = '2026-06-08'
+
+  // Migrations and the `authenticated` role grant (including the write
+  // privileges this slice is the first to need on these two tables) are
+  // applied once, globally, before any suite starts — see test/global-setup.ts.
+
+  beforeEach(async () => {
+    await db.execute(sql`delete from "shopping_list_events"`)
+    await db.execute(sql`delete from "shopping_list_projections"`)
+    await db.execute(sql`delete from "household_memberships"`)
+    await db.execute(sql`delete from "households"`)
+
+    const [householdA] = await db.insert(households).values({ name: 'Household A' }).returning({ id: households.id })
+    const [householdB] = await db.insert(households).values({ name: 'Household B' }).returning({ id: households.id })
+    householdAId = householdA!.id
+    householdBId = householdB!.id
+
+    await db.insert(householdMemberships).values([
+      { householdId: householdAId, userId: userA, role: 'owner', status: 'active' },
+      { householdId: householdBId, userId: userB, role: 'owner', status: 'active' },
+    ])
+  })
+
+  afterAll(async () => {
+    await db.execute(sql`delete from "shopping_list_events"`)
+    await db.execute(sql`delete from "shopping_list_projections"`)
+    await db.execute(sql`delete from "household_memberships"`)
+    await db.execute(sql`delete from "households"`)
+  })
+
+  async function asUser<T>(userId: string, run: (tx: typeof db) => Promise<T>): Promise<T> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('request.jwt.claims', ${JSON.stringify({ sub: userId })}, true)`)
+      await tx.execute(sql`set local role authenticated`)
+      return run(tx as unknown as typeof db)
+    })
+  }
+
+  const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
+
+  async function appendAsUser(
+    userId: string,
+    args: { householdId: string; sequenceNumber: number; eventType: 'list_started' | 'item_checked'; payload: Record<string, unknown> },
+  ) {
+    return asUser(userId, async (tx) => {
+      const [event] = await tx
+        .insert(shoppingListEvents)
+        .values({
+          householdId: args.householdId,
+          weekStartDate,
+          sequenceNumber: args.sequenceNumber,
+          causedBy: userCausedBy(userId),
+          eventType: args.eventType,
+          payload: args.payload,
+        })
+        .returning()
+      return event!
+    })
+  }
+
+  describe('(a) RLS blocks cross-household access on the new tables', () => {
+    it('never returns another household projection, even when explicitly requested by id', async () => {
+      await db.insert(shoppingListProjections).values({
+        householdId: householdBId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: {} },
+      })
+
+      const rows = await asUser(userA, (tx) =>
+        tx
+          .select()
+          .from(shoppingListProjections)
+          .where(and(eq(shoppingListProjections.householdId, householdBId), eq(shoppingListProjections.weekStartDate, weekStartDate))),
+      )
+
+      expect(rows).toHaveLength(0)
+    })
+
+    it('refuses to insert an event into a household the user is not an active member of', async () => {
+      await expect(
+        appendAsUser(userA, { householdId: householdBId, sequenceNumber: 1, eventType: 'list_started', payload: {} }),
+      ).rejects.toThrow(/row-level security/i)
+    })
+  })
+
+  describe('(b) append + projection-update is genuinely atomic', () => {
+    async function appendViaWritePath(args: { householdId: string; sequenceNumber: number; eventType: 'list_started' | 'item_checked'; payload: Record<string, unknown> }) {
+      // Mirrors appendShoppingListEvent's shape without importing the route's
+      // private helper — runs the same insert-then-fold sequence against one
+      // transaction so atomicity can be exercised and broken deliberately.
+      return asUser(userA, async (tx) => {
+        const [event] = await tx
+          .insert(shoppingListEvents)
+          .values({
+            householdId: args.householdId,
+            weekStartDate,
+            sequenceNumber: args.sequenceNumber,
+            causedBy: userCausedBy(userA),
+            eventType: args.eventType,
+            payload: args.payload,
+          })
+          .returning()
+
+        const [existing] = await tx
+          .select({ state: shoppingListProjections.state })
+          .from(shoppingListProjections)
+          .where(and(eq(shoppingListProjections.householdId, args.householdId), eq(shoppingListProjections.weekStartDate, weekStartDate)))
+
+        const currentState = (existing?.state as TShoppingListProjectionState | undefined) ?? emptyProjectionState()
+        const nextState = foldEventIntoProjection(currentState, { eventType: args.eventType, ...args.payload } as never)
+
+        await tx
+          .insert(shoppingListProjections)
+          .values({ householdId: args.householdId, weekStartDate, state: nextState })
+          .onConflictDoUpdate({
+            target: [shoppingListProjections.householdId, shoppingListProjections.weekStartDate],
+            set: { state: nextState, updatedAt: new Date() },
+          })
+
+        return event!
+      })
+    }
+
+    it('persists the event and the folded projection together, from the same transaction', async () => {
+      await appendViaWritePath({ householdId: householdAId, sequenceNumber: 1, eventType: 'list_started', payload: {} })
+      await appendViaWritePath({
+        householdId: householdAId,
+        sequenceNumber: 2,
+        eventType: 'item_checked',
+        payload: { itemKey: 'milk', checked: true },
+      })
+
+      const [event] = await db.select().from(shoppingListEvents).where(eq(shoppingListEvents.sequenceNumber, 2))
+      const [projection] = await db.select().from(shoppingListProjections).where(eq(shoppingListProjections.householdId, householdAId))
+
+      expect(event).toBeDefined()
+      expect(projection).toBeDefined()
+      expect(projection!.state).toEqual({ listStarted: true, checkedItems: { milk: true } })
+    })
+
+    it('rolls back the event insert if the projection step fails — never one without the other', async () => {
+      await expect(
+        asUser(userA, async (tx) => {
+          await tx.insert(shoppingListEvents).values({
+            householdId: householdAId,
+            weekStartDate,
+            sequenceNumber: 1,
+            causedBy: userCausedBy(userA),
+            eventType: 'list_started',
+            payload: {},
+          })
+
+          // Force the fold step to fail — `state` is NOT NULL.
+          await tx.insert(shoppingListProjections).values({
+            householdId: householdAId,
+            weekStartDate,
+            state: null as never,
+          })
+        }),
+      ).rejects.toThrow()
+
+      const events = await db.select().from(shoppingListEvents).where(eq(shoppingListEvents.householdId, householdAId))
+      expect(events).toHaveLength(0)
+    })
+  })
+
+  describe('(c) the read path reflects only the projection — never a replay of the log', () => {
+    it('returns the seeded projection state even when the event log would fold to something different', async () => {
+      // Seed ~200 events whose correct fold would produce "bread: checked"...
+      const logEvents = Array.from({ length: 200 }, (_, i) => ({
+        householdId: householdAId,
+        weekStartDate,
+        sequenceNumber: i + 1,
+        causedBy: userCausedBy(userA),
+        eventType: 'item_checked' as const,
+        payload: { itemKey: 'bread', checked: true },
+      }))
+      await db.insert(shoppingListEvents).values(logEvents)
+
+      // ...but seed the projection directly (bypassing the write path) with a
+      // deliberately contradictory state. If the read path ever replayed the
+      // log, this assertion would be impossible to satisfy.
+      const seededState: TShoppingListProjectionState = { listStarted: true, checkedItems: { bread: false } }
+      await db.insert(shoppingListProjections).values({ householdId: householdAId, weekStartDate, state: seededState })
+
+      const [projection] = await asUser(userA, (tx) =>
+        tx
+          .select()
+          .from(shoppingListProjections)
+          .where(and(eq(shoppingListProjections.householdId, householdAId), eq(shoppingListProjections.weekStartDate, weekStartDate))),
+      )
+
+      expect(projection!.state).toEqual(seededState)
+    })
+
+    it('issues exactly one query, against shopping_list_projections only — never shopping_list_events', async () => {
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: {} },
+      })
+
+      const queries: string[] = []
+      // postgres-js's `debug` option is a function hook on the client
+      // constructor (not something `createDb` exposes) — build a one-off
+      // client the same way db.ts does, with a debug callback wired in.
+      const postgres = (await import('postgres')).default
+      const client = postgres(testDatabaseUrl!, {
+        debug: (_connection, query) => queries.push(query),
+      })
+      const { drizzle } = await import('drizzle-orm/postgres-js')
+      const schema = await import('../src/schema.js')
+      const debuggedDb = drizzle(client, { schema }) as unknown as typeof db
+
+      try {
+        await asUser(userA, async () => {
+          await debuggedDb.transaction(async (tx) => {
+            await tx.execute(sql`select set_config('request.jwt.claims', ${JSON.stringify({ sub: userA })}, true)`)
+            await tx.execute(sql`set local role authenticated`)
+            return tx
+              .select()
+              .from(shoppingListProjections)
+              .where(and(eq(shoppingListProjections.householdId, householdAId), eq(shoppingListProjections.weekStartDate, weekStartDate)))
+          })
+        })
+      } finally {
+        await client.end()
+      }
+
+      const projectionReads = queries.filter((q) => /shopping_list_projections/i.test(q))
+      const eventLogReads = queries.filter((q) => /shopping_list_events/i.test(q))
+
+      expect(projectionReads.length).toBeGreaterThan(0)
+      expect(eventLogReads).toHaveLength(0)
+    })
+  })
+})

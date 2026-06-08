@@ -55,5 +55,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, update on "household_invites" to authenticated;
     grant select, insert on "week_plan_events" to authenticated;
     grant select, insert, update on "week_plan_projections" to authenticated;
+    grant select, insert on "shopping_list_events" to authenticated;
+    grant select, insert, update on "shopping_list_projections" to authenticated;
   `))
 }

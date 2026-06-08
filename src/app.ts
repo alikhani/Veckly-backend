@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi'
 import { buildHouseholdsRoutes } from './households.js'
 import { buildInvitesRoutes } from './invites.js'
 import { buildWeekPlanRoutes } from './week-plan.js'
+import { buildShoppingListRoutes } from './shopping-list.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -10,6 +11,7 @@ export function buildApp(db: Db) {
   app.route('/', buildHouseholdsRoutes(db))
   app.route('/', buildInvitesRoutes(db))
   app.route('/', buildWeekPlanRoutes(db))
+  app.route('/', buildShoppingListRoutes(db))
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',

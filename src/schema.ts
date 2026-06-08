@@ -59,3 +59,27 @@ export const weekPlanProjections = pgTable('week_plan_projections', {
 }, (table) => [
   uniqueIndex('week_plan_projections_household_week_idx').on(table.householdId, table.weekStartDate),
 ])
+
+export const shoppingListEventType = pgEnum('shopping_list_event_type', ['list_started', 'item_checked'])
+
+export const shoppingListEvents = pgTable('shopping_list_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  sequenceNumber: integer('sequence_number').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+  causedBy: jsonb('caused_by').notNull(),
+  eventType: shoppingListEventType('event_type').notNull(),
+  payload: jsonb('payload').notNull(),
+}, (table) => [
+  uniqueIndex('shopping_list_events_household_week_sequence_idx').on(table.householdId, table.weekStartDate, table.sequenceNumber),
+])
+
+export const shoppingListProjections = pgTable('shopping_list_projections', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  state: jsonb('state').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('shopping_list_projections_household_week_idx').on(table.householdId, table.weekStartDate),
+])

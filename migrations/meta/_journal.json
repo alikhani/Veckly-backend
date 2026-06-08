@@ -50,6 +50,20 @@
       "when": 1780944464408,
       "tag": "0006_household_invites_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780946013737,
+      "tag": "0007_shopping_list",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780946022144,
+      "tag": "0008_shopping_list_rls",
+      "breakpoints": true
     }
   ]
 }

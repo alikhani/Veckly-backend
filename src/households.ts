@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, eq } from 'drizzle-orm'
-import { requireAuth, type AuthedUser } from './auth.js'
+import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
 import { households, householdMemberships } from './schema.js'
 import type { Db } from './db.js'
@@ -89,6 +89,25 @@ export async function bootstrapHousehold(db: Db, accessToken: string, userId: st
 
     return { household: { id: householdId, name: householdName, role: membership.role }, created: true }
   })
+}
+
+// Internal server-to-server routes — not in the public OpenAPI spec, not
+// meant for direct client use. MealPlanner proxies through these during the
+// strangle phase; they get retired once the web frontend calls the backend
+// directly with its own auth tokens.
+export function buildInternalHouseholdsRoutes(db: Db) {
+  const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
+
+  app.use('/internal/*', requireInternalAuth)
+
+  app.post('/internal/households/me/bootstrap', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { household, created } = await bootstrapHousehold(db, accessToken, user.id)
+    return c.json({ id: household.id, name: household.name, role: household.role }, created ? 201 : 200)
+  })
+
+  return app
 }
 
 export function buildHouseholdsRoutes(db: Db) {

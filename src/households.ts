@@ -147,6 +147,16 @@ export async function createNamedHousehold(db: Db, accessToken: string, userId: 
   })
 }
 
+export async function listHouseholdMembers(db: Db, accessToken: string, householdId: string) {
+  return withRls(db, accessToken, (tx) =>
+    tx
+      .select({ userId: householdMemberships.userId, role: householdMemberships.role })
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active')))
+      .orderBy(householdMemberships.joinedAt),
+  )
+}
+
 // Internal server-to-server routes — not in the public OpenAPI spec, not
 // meant for direct client use. MealPlanner proxies through these during the
 // strangle phase; they get retired once the web frontend calls the backend
@@ -197,6 +207,13 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     const result = await renameHousehold(db, accessToken, householdId, rawName)
     if (!result) return c.json({ error: 'Household not found.' }, 404)
     return c.json({ id: result.id, name: result.name }, 200)
+  })
+
+  app.get('/internal/households/:householdId/members', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const members = await listHouseholdMembers(db, accessToken, householdId)
+    return c.json(members.map((m) => ({ userId: m.userId, role: m.role })))
   })
 
   return app

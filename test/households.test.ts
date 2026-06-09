@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { bootstrapHousehold } from '../src/households.js'
+import { bootstrapHousehold, createNamedHousehold } from '../src/households.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -99,6 +99,36 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
         tx.insert(householdMemberships).values({ householdId: freshHousehold!.id, userId: userB, role: 'owner', status: 'active' }),
       ),
     ).rejects.toThrow(/row-level security/i)
+  })
+
+  it('creates a household with the given name and adds the caller as owner', async () => {
+    const result = await createNamedHousehold(db, fakeAccessToken(stranger), stranger, 'Weekend House')
+
+    expect(result.name).toBe('Weekend House')
+    expect(result.role).toBe('owner')
+
+    const [membership] = await db
+      .select()
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.householdId, result.id), eq(householdMemberships.userId, stranger)))
+
+    expect(membership?.role).toBe('owner')
+    expect(membership?.status).toBe('active')
+  })
+
+  it('lets a user who already owns a household create an additional one', async () => {
+    // userA already has householdA from beforeEach
+    const second = await createNamedHousehold(db, fakeAccessToken(userA), userA, 'Summer Cabin')
+
+    expect(second.name).toBe('Summer Cabin')
+    expect(second.role).toBe('owner')
+
+    const rows = await db
+      .select()
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.userId, userA), eq(householdMemberships.status, 'active')))
+
+    expect(rows).toHaveLength(2)
   })
 
   it('rolls back the household insert if the membership insert fails — never one without the other', async () => {

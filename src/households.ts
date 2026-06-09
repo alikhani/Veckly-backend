@@ -91,6 +91,22 @@ export async function bootstrapHousehold(db: Db, accessToken: string, userId: st
   })
 }
 
+export async function createNamedHousehold(db: Db, accessToken: string, userId: string, name: string) {
+  return withRls(db, accessToken, async (tx) => {
+    // Same pattern as bootstrapHousehold: generate the id upfront rather than
+    // reading it back via .returning() because the SELECT policy on `households`
+    // requires an active membership that doesn't exist yet at insert time.
+    const householdId = randomUUID()
+    await tx.insert(households).values({ id: householdId, name })
+    const [membership] = await tx
+      .insert(householdMemberships)
+      .values({ householdId, userId, role: 'owner', status: 'active' })
+      .returning()
+    if (!membership) throw new Error('Insert did not return the persisted membership')
+    return { id: householdId, name, role: membership.role }
+  })
+}
+
 // Internal server-to-server routes — not in the public OpenAPI spec, not
 // meant for direct client use. MealPlanner proxies through these during the
 // strangle phase; they get retired once the web frontend calls the backend
@@ -105,6 +121,18 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     const user = c.get('user')
     const { household, created } = await bootstrapHousehold(db, accessToken, user.id)
     return c.json({ id: household.id, name: household.name, role: household.role }, created ? 201 : 200)
+  })
+
+  app.post('/internal/households', async (c) => {
+    const body = await c.req.json().catch(() => null)
+    const rawName = typeof body?.name === 'string' ? (body.name as string).trim().replace(/\s+/g, ' ') : ''
+    if (!rawName || rawName.length < 2 || rawName.length > 60) {
+      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
+    }
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const household = await createNamedHousehold(db, accessToken, user.id, rawName)
+    return c.json({ id: household.id, name: household.name, role: household.role }, 201)
   })
 
   return app

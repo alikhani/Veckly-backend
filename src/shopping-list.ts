@@ -1,7 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, desc } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { withRls } from './rls.js'
+import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { shoppingListEvents, shoppingListProjections } from './schema.js'
 import type { Db } from './db.js'
 
@@ -92,67 +91,14 @@ function foldEventIntoProjection(
   }
 }
 
-// --- The transactional write path -------------------------------------------
-//
-// Identical shape to `appendWeekPlanEvent`: append the event and fold it into
-// the projection inside one `withRls` transaction, so either both persist or
-// neither does. See that function's comments for why `withRls` needs no
-// changes to support this nested-transaction shape.
-async function appendShoppingListEvent(
-  db: Db,
-  accessToken: string,
-  args: { householdId: string; weekStartDate: string; causedBy: z.infer<typeof CausedBySchema>; payload: z.infer<typeof ShoppingListEventPayloadSchema> },
-) {
-  return withRls(db, accessToken, async (tx) => {
-    // Same "read-then-insert is sufficient at this product's realistic scale"
-    // reasoning as week-plan — see that function's comment for the race
-    // analysis and the unique-index backstop.
-    const [latest] = await tx
-      .select({ sequenceNumber: shoppingListEvents.sequenceNumber })
-      .from(shoppingListEvents)
-      .where(and(eq(shoppingListEvents.householdId, args.householdId), eq(shoppingListEvents.weekStartDate, args.weekStartDate)))
-      .orderBy(desc(shoppingListEvents.sequenceNumber))
-      .limit(1)
-
-    const nextSequenceNumber = (latest?.sequenceNumber ?? 0) + 1
-
-    const { eventType, ...payloadFields } = args.payload
-
-    const [event] = await tx
-      .insert(shoppingListEvents)
-      .values({
-        householdId: args.householdId,
-        weekStartDate: args.weekStartDate,
-        sequenceNumber: nextSequenceNumber,
-        causedBy: args.causedBy,
-        eventType,
-        payload: payloadFields,
-      })
-      .returning()
-
-    if (!event) throw new Error('Insert did not return the persisted event')
-
-    const [existingProjection] = await tx
-      .select({ state: shoppingListProjections.state })
-      .from(shoppingListProjections)
-      .where(and(eq(shoppingListProjections.householdId, args.householdId), eq(shoppingListProjections.weekStartDate, args.weekStartDate)))
-
-    const currentState = (existingProjection?.state as TShoppingListProjectionState | undefined) ?? emptyProjectionState()
-    const nextState = foldEventIntoProjection(currentState, args.payload)
-
-    await tx
-      .insert(shoppingListProjections)
-      .values({ householdId: args.householdId, weekStartDate: args.weekStartDate, state: nextState, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: [shoppingListProjections.householdId, shoppingListProjections.weekStartDate],
-        set: { state: nextState, updatedAt: new Date() },
-      })
-
-    return event
-  })
-}
-
 // --- Routes ------------------------------------------------------------------
+//
+// The transactional append-and-fold mechanism lives in `event-stream.ts` as
+// `appendStreamEvent` — extracted once this stream became the second
+// byte-identical instance of week-plan's shape, proving it's genuinely
+// shared rather than a one-off that happened to fit. See that module's
+// comment for the reasoning (including why the table arguments are duck-typed
+// rather than fought into Drizzle's generics).
 
 const appendShoppingListEventRoute = createRoute({
   method: 'post',
@@ -201,12 +147,13 @@ export function buildShoppingListRoutes(db: Db) {
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
 
-    const event = await appendShoppingListEvent(db, accessToken, {
-      householdId,
-      weekStartDate,
-      causedBy,
-      payload: payload as z.infer<typeof ShoppingListEventPayloadSchema>,
-    })
+    const event = await appendStreamEvent(
+      db,
+      accessToken,
+      { events: shoppingListEvents, projections: shoppingListProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy, payload: payload as z.infer<typeof ShoppingListEventPayloadSchema> },
+    )
 
     return c.json(
       {
@@ -216,7 +163,7 @@ export function buildShoppingListRoutes(db: Db) {
         sequenceNumber: event.sequenceNumber,
         occurredAt: event.occurredAt.toISOString(),
         causedBy: event.causedBy as z.infer<typeof CausedBySchema>,
-        eventType: event.eventType,
+        eventType: event.eventType as 'list_started' | 'item_checked',
         payload: event.payload as Record<string, unknown>,
       },
       201,
@@ -227,14 +174,10 @@ export function buildShoppingListRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
 
-    // Exactly one query, against the projection only — same read-path rule as
-    // week-plan's: never replay the event log on the read path.
-    const [projection] = await withRls(db, accessToken, (tx) =>
-      tx
-        .select()
-        .from(shoppingListProjections)
-        .where(and(eq(shoppingListProjections.householdId, householdId), eq(shoppingListProjections.weekStartDate, weekStartDate))),
-    )
+    // Exactly one query, against the projection only — `getStreamProjection`
+    // enforces the same read-path rule as week-plan's: never replay the event
+    // log on the read path.
+    const projection = await getStreamProjection(db, accessToken, shoppingListProjections, { householdId, weekStartDate })
 
     if (!projection) return c.json({ error: 'No shopping list found for this week' }, 404)
 

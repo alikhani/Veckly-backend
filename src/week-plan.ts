@@ -1,7 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, desc } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { withRls } from './rls.js'
+import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
@@ -94,72 +93,15 @@ function foldEventIntoProjection(
   }
 }
 
-// --- The transactional write path -------------------------------------------
-//
-// Append the event and fold it into the projection in the same `withRls`
-// transaction — if either step throws, both roll back. `withRls` needs zero
-// changes: it already hands back `tx` typed as `Db`, and a flat sequence of
-// statements against it gets atomicity from the one outer transaction it
-// opened (postgres-js nested transactions become savepoints on the same
-// connection — confirmed via node_modules/drizzle-orm/postgres-js/session.js).
-async function appendWeekPlanEvent(
-  db: Db,
-  accessToken: string,
-  args: { householdId: string; weekStartDate: string; causedBy: z.infer<typeof CausedBySchema>; payload: z.infer<typeof WeekPlanEventPayloadSchema> },
-) {
-  return withRls(db, accessToken, async (tx) => {
-    // Read-then-insert is sufficient at this product's realistic scale (one
-    // real session per household per week — design doc §6); the unique index
-    // on (household_id, week_start_date, sequence_number) is the race backstop
-    // that turns a concurrent double-append into a constraint violation rather
-    // than a silent corruption. `select ... for update` is the named escalation
-    // path if batch-generation concurrency (e.g. PlanGenerated) ever becomes real.
-    const [latest] = await tx
-      .select({ sequenceNumber: weekPlanEvents.sequenceNumber })
-      .from(weekPlanEvents)
-      .where(and(eq(weekPlanEvents.householdId, args.householdId), eq(weekPlanEvents.weekStartDate, args.weekStartDate)))
-      .orderBy(desc(weekPlanEvents.sequenceNumber))
-      .limit(1)
-
-    const nextSequenceNumber = (latest?.sequenceNumber ?? 0) + 1
-
-    const { eventType, ...payloadFields } = args.payload
-
-    const [event] = await tx
-      .insert(weekPlanEvents)
-      .values({
-        householdId: args.householdId,
-        weekStartDate: args.weekStartDate,
-        sequenceNumber: nextSequenceNumber,
-        causedBy: args.causedBy,
-        eventType,
-        payload: payloadFields,
-      })
-      .returning()
-
-    if (!event) throw new Error('Insert did not return the persisted event')
-
-    const [existingProjection] = await tx
-      .select({ state: weekPlanProjections.state })
-      .from(weekPlanProjections)
-      .where(and(eq(weekPlanProjections.householdId, args.householdId), eq(weekPlanProjections.weekStartDate, args.weekStartDate)))
-
-    const currentState = (existingProjection?.state as TWeekPlanProjectionState | undefined) ?? emptyProjectionState()
-    const nextState = foldEventIntoProjection(currentState, args.payload)
-
-    await tx
-      .insert(weekPlanProjections)
-      .values({ householdId: args.householdId, weekStartDate: args.weekStartDate, state: nextState, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: [weekPlanProjections.householdId, weekPlanProjections.weekStartDate],
-        set: { state: nextState, updatedAt: new Date() },
-      })
-
-    return event
-  })
-}
-
 // --- Routes ------------------------------------------------------------------
+//
+// The transactional append-and-fold mechanism (read latest sequence number,
+// insert the event, fold it into the projection, upsert — all in one `withRls`
+// transaction) now lives in `event-stream.ts` as `appendStreamEvent`.
+// Shopping-list's stream is the second instance that proved it's genuinely
+// shared: the two were byte-identical in shape, differing only in their
+// tables and fold function. See that module's comment for why the table
+// arguments are duck-typed rather than fought into Drizzle's generics.
 
 const appendWeekPlanEventRoute = createRoute({
   method: 'post',
@@ -210,12 +152,13 @@ export function buildWeekPlanRoutes(db: Db) {
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
 
-    const event = await appendWeekPlanEvent(db, accessToken, {
-      householdId,
-      weekStartDate,
-      causedBy,
-      payload: payload as z.infer<typeof WeekPlanEventPayloadSchema>,
-    })
+    const event = await appendStreamEvent(
+      db,
+      accessToken,
+      { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy, payload: payload as z.infer<typeof WeekPlanEventPayloadSchema> },
+    )
 
     return c.json(
       {
@@ -225,7 +168,7 @@ export function buildWeekPlanRoutes(db: Db) {
         sequenceNumber: event.sequenceNumber,
         occurredAt: event.occurredAt.toISOString(),
         causedBy: event.causedBy as z.infer<typeof CausedBySchema>,
-        eventType: event.eventType,
+        eventType: event.eventType as 'week_started' | 'meal_assigned',
         payload: event.payload as Record<string, unknown>,
       },
       201,
@@ -236,15 +179,10 @@ export function buildWeekPlanRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
 
-    // Exactly one query, against the projection only — this is the one rule
-    // the entire pattern hinges on (design doc §2: "never replay the event
-    // log on the read path"). It must never reference week_plan_events.
-    const [projection] = await withRls(db, accessToken, (tx) =>
-      tx
-        .select()
-        .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate))),
-    )
+    // Exactly one query, against the projection only — `getStreamProjection`
+    // is what enforces the one rule the entire pattern hinges on (design doc
+    // §2: "never replay the event log on the read path").
+    const projection = await getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate })
 
     if (!projection) return c.json({ error: 'No week plan found for this week' }, 404)
 

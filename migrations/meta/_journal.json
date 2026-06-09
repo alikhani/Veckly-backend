@@ -85,6 +85,13 @@
       "when": 1781022324842,
       "tag": "0011_household_rename_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781042809796,
+      "tag": "0012_member_remove_rls",
+      "breakpoints": true
     }
   ]
 }

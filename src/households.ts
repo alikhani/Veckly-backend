@@ -157,6 +157,48 @@ export async function listHouseholdMembers(db: Db, accessToken: string, househol
   )
 }
 
+// Sets the target member's status to 'removed'. Returns a typed outcome rather
+// than throwing so the caller can map errors to HTTP status codes without a
+// try/catch. LAST_OWNER is checked in code before the UPDATE — see the
+// migration 0012 comment for why that invariant lives here instead of in RLS.
+export async function removeMember(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  targetUserId: string,
+): Promise<{ outcome: 'removed' } | { outcome: 'not_found' } | { outcome: 'last_owner' }> {
+  return withRls(db, accessToken, async (tx) => {
+    const [target] = await tx
+      .select({ role: householdMemberships.role, status: householdMemberships.status })
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.userId, targetUserId)))
+      .limit(1)
+
+    if (!target || target.status !== 'active') return { outcome: 'not_found' as const }
+
+    if (target.role === 'owner') {
+      const owners = await tx
+        .select({ id: householdMemberships.id })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.role, 'owner'),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+      if (owners.length <= 1) return { outcome: 'last_owner' as const }
+    }
+
+    await tx
+      .update(householdMemberships)
+      .set({ status: 'removed' })
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.userId, targetUserId)))
+
+    return { outcome: 'removed' as const }
+  })
+}
+
 // Internal server-to-server routes — not in the public OpenAPI spec, not
 // meant for direct client use. MealPlanner proxies through these during the
 // strangle phase; they get retired once the web frontend calls the backend
@@ -214,6 +256,16 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     const householdId = c.req.param('householdId')
     const members = await listHouseholdMembers(db, accessToken, householdId)
     return c.json(members.map((m) => ({ userId: m.userId, role: m.role })))
+  })
+
+  app.delete('/internal/households/:householdId/members/:userId', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const targetUserId = c.req.param('userId')
+    const result = await removeMember(db, accessToken, householdId, targetUserId)
+    if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' }, 404)
+    if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' }, 409)
+    return c.body(null, 204)
   })
 
   return app

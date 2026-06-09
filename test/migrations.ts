@@ -52,7 +52,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     end $$;
     grant usage on schema public to authenticated;
     grant select, insert, update on "households" to authenticated;
-    grant select, insert on "household_memberships" to authenticated;
+    grant select, insert, update on "household_memberships" to authenticated;
     grant select, insert, update on "household_invites" to authenticated;
     grant select, insert on "week_plan_events" to authenticated;
     grant select, insert, update on "week_plan_projections" to authenticated;

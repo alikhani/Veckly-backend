@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:local": "DATABASE_URL=postgres://postgres:postgres@localhost:54333/postgres TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54333/postgres_test SUPABASE_URL=http://localhost:54321 SUPABASE_ANON_KEY=test vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },

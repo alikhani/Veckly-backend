@@ -27,13 +27,14 @@ const WeekStartedPayloadSchema = z.object({
   eventType: z.literal('week_started'),
 })
 
-// `recipeRef` is a placeholder freeform identifier, not a real FK — recipes
-// don't have a domain model yet (design doc §4 is future work). Coupling the
-// event-sourcing proof to a domain that doesn't exist yet would be backwards.
+// `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
+// as a UUID; the FK relationship is intentionally not enforced at the database
+// level (no FK constraint on a JSONB payload column) — the application is the
+// enforcement point, via `getRecipe` returning null for unknown IDs.
 const MealAssignedPayloadSchema = z.object({
   eventType: z.literal('meal_assigned'),
   dayOfWeek,
-  recipeRef: z.string().min(1),
+  recipeRef: z.string().uuid(),
 })
 
 const WeekPlanEventPayloadSchema = z.discriminatedUnion('eventType', [

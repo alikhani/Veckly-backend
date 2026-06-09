@@ -64,6 +64,20 @@
       "when": 1780946022144,
       "tag": "0008_shopping_list_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781020555554,
+      "tag": "0009_recipes",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781020560955,
+      "tag": "0010_recipes_rls",
+      "breakpoints": true
     }
   ]
 }

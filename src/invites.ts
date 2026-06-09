@@ -199,6 +199,21 @@ export async function revokeInvite(db: Db, accessToken: string, inviteId: string
   })
 }
 
+// Token-based revoke: MealPlanner's client uses the invite token (not the UUID)
+// as the URL segment. The WHERE includes householdId for defense-in-depth even
+// though RLS already enforces that only active members of the household can
+// update its invites.
+export async function revokeInviteByToken(db: Db, accessToken: string, householdId: string, token: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const result = await tx
+      .update(householdInvites)
+      .set({ status: 'revoked' })
+      .where(and(eq(householdInvites.token, token), eq(householdInvites.householdId, householdId)))
+      .returning({ id: householdInvites.id })
+    return { revoked: result.length > 0 }
+  })
+}
+
 const createInviteRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/invites',
@@ -301,6 +316,14 @@ export function buildInternalInvitesRoutes(db: Db) {
       expiresAt: invite.expiresAt.toISOString(),
       createdAt: invite.createdAt.toISOString(),
     })))
+  })
+
+  app.delete('/internal/households/:householdId/invites/by-token/:token', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const token = c.req.param('token')
+    await revokeInviteByToken(db, accessToken, householdId, token)
+    return c.body(null, 204)
   })
 
   return app

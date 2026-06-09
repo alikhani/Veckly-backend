@@ -1,6 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './households.js'
-import { buildInvitesRoutes } from './invites.js'
+import { buildInvitesRoutes, buildInternalInvitesRoutes } from './invites.js'
 import { buildWeekPlanRoutes } from './week-plan.js'
 import { buildShoppingListRoutes } from './shopping-list.js'
 import { buildRecipesRoutes } from './recipes.js'
@@ -11,6 +11,7 @@ export function buildApp(db: Db) {
 
   app.route('/', buildHouseholdsRoutes(db))
   app.route('/', buildInternalHouseholdsRoutes(db))
+  app.route('/', buildInternalInvitesRoutes(db))
   app.route('/', buildInvitesRoutes(db))
   app.route('/', buildWeekPlanRoutes(db))
   app.route('/', buildShoppingListRoutes(db))

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, eq } from 'drizzle-orm'
-import { requireAuth, type AuthedUser } from './auth.js'
+import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls, withRlsAndToken } from './rls.js'
 import { households, householdInvites, householdMemberships } from './schema.js'
 import type { Db } from './db.js'
@@ -264,6 +264,47 @@ const acceptInviteRoute = createRoute({
     401: { description: 'Missing or invalid session' },
   },
 })
+
+// Internal server-to-server routes for MealPlanner during the strangle phase.
+// The email-sending step stays in MealPlanner (it owns Resend); this module
+// only handles the database write and read. Retired once the frontend calls
+// the backend directly with its own auth tokens.
+export function buildInternalInvitesRoutes(db: Db) {
+  const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
+
+  app.use('/internal/*', requireInternalAuth)
+
+  app.post('/internal/households/:householdId/invites', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const householdId = c.req.param('householdId')
+    const body = await c.req.json().catch(() => ({}))
+    const email = typeof body.email === 'string' && body.email ? body.email : undefined
+    const invite = await createInvite(db, accessToken, user.id, householdId, { email })
+    return c.json({
+      id: invite.id,
+      token: invite.token,
+      householdId: invite.householdId,
+      email: invite.email,
+      expiresAt: invite.expiresAt.toISOString(),
+    }, 201)
+  })
+
+  app.get('/internal/households/:householdId/invites', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const invites = await listPendingInvites(db, accessToken, householdId)
+    return c.json(invites.map((invite) => ({
+      id: invite.id,
+      token: invite.token,
+      email: invite.email,
+      expiresAt: invite.expiresAt.toISOString(),
+      createdAt: invite.createdAt.toISOString(),
+    })))
+  })
+
+  return app
+}
 
 export function buildInvitesRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()

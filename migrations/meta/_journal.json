@@ -78,6 +78,13 @@
       "when": 1781020560955,
       "tag": "0010_recipes_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781022324842,
+      "tag": "0011_household_rename_rls",
+      "breakpoints": true
     }
   ]
 }

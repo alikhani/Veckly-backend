@@ -30,6 +30,35 @@ const getMyHouseholds = createRoute({
   },
 })
 
+const RenameHouseholdResponseSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+}).openapi('RenameHouseholdResponse')
+
+const renameHouseholdRoute = createRoute({
+  method: 'patch',
+  path: '/households/:id',
+  summary: 'Rename a household (owner only)',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      content: { 'application/json': { schema: z.object({ name: z.string() }) } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: 'Household renamed',
+      content: { 'application/json': { schema: RenameHouseholdResponseSchema } },
+    },
+    400: { description: 'Invalid household name' },
+    401: { description: 'Missing or invalid session' },
+    403: { description: 'Caller is not the household owner' },
+    404: { description: 'Household not found or caller is not a member' },
+  },
+})
+
 const bootstrapMyHousehold = createRoute({
   method: 'post',
   path: '/households/me/bootstrap',
@@ -91,6 +120,17 @@ export async function bootstrapHousehold(db: Db, accessToken: string, userId: st
   })
 }
 
+export async function renameHousehold(db: Db, accessToken: string, householdId: string, name: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [updated] = await tx
+      .update(households)
+      .set({ name })
+      .where(eq(households.id, householdId))
+      .returning({ id: households.id, name: households.name })
+    return updated ?? null
+  })
+}
+
 export async function createNamedHousehold(db: Db, accessToken: string, userId: string, name: string) {
   return withRls(db, accessToken, async (tx) => {
     // Same pattern as bootstrapHousehold: generate the id upfront rather than
@@ -135,6 +175,19 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     return c.json({ id: household.id, name: household.name, role: household.role }, 201)
   })
 
+  app.patch('/internal/households/:id', async (c) => {
+    const body = await c.req.json().catch(() => null)
+    const rawName = typeof body?.name === 'string' ? (body.name as string).trim().replace(/\s+/g, ' ') : ''
+    if (!rawName || rawName.length < 2 || rawName.length > 60) {
+      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
+    }
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('id')
+    const result = await renameHousehold(db, accessToken, householdId, rawName)
+    if (!result) return c.json({ error: 'Household not found.' }, 404)
+    return c.json({ id: result.id, name: result.name }, 200)
+  })
+
   return app
 }
 
@@ -168,6 +221,41 @@ export function buildHouseholdsRoutes(db: Db) {
     const { household, created } = await bootstrapHousehold(db, accessToken, user.id)
 
     return c.json({ id: household.id, name: household.name, role: household.role }, created ? 201 : 200)
+  })
+
+  app.openapi(renameHouseholdRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { id: householdId } = c.req.valid('param')
+    const { name: rawName } = c.req.valid('json')
+
+    const name = rawName.trim().replace(/\s+/g, ' ')
+    if (!name || name.length < 2 || name.length > 60) {
+      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' } as never, 400)
+    }
+
+    // Check membership role before attempting the update so non-owner members
+    // get a 403 rather than a silent 0-row update that would map to 404.
+    const [membership] = await withRls(db, accessToken, (tx) =>
+      tx
+        .select({ role: householdMemberships.role })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.userId, user.id),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+        .limit(1),
+    )
+
+    if (!membership) return c.json({ error: 'Household not found.' } as never, 404)
+    if (membership.role !== 'owner') return c.json({ error: 'FORBIDDEN' } as never, 403)
+
+    const result = await renameHousehold(db, accessToken, householdId, name)
+    if (!result) return c.json({ error: 'Household not found.' } as never, 404)
+    return c.json({ id: result.id, name: result.name }, 200)
   })
 
   return app

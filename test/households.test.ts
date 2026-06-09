@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { bootstrapHousehold, createNamedHousehold } from '../src/households.js'
+import { bootstrapHousehold, createNamedHousehold, renameHousehold } from '../src/households.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -129,6 +129,28 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
       .where(and(eq(householdMemberships.userId, userA), eq(householdMemberships.status, 'active')))
 
     expect(rows).toHaveLength(2)
+  })
+
+  it('owner can rename their household', async () => {
+    const result = await renameHousehold(db, fakeAccessToken(userA), householdAId, 'Renamed A')
+    expect(result).not.toBeNull()
+    expect(result!.name).toBe('Renamed A')
+    const [row] = await db.select({ name: households.name }).from(households).where(eq(households.id, householdAId))
+    expect(row?.name).toBe('Renamed A')
+  })
+
+  it('non-owner member cannot rename a household — RLS blocks the update', async () => {
+    // Make userB a plain member (not owner) of householdA
+    await db.insert(householdMemberships).values({ householdId: householdAId, userId: userB, role: 'member', status: 'active' })
+    const result = await renameHousehold(db, fakeAccessToken(userB), householdAId, 'Hijacked')
+    expect(result).toBeNull()
+    const [row] = await db.select({ name: households.name }).from(households).where(eq(households.id, householdAId))
+    expect(row?.name).toBe('Household A')
+  })
+
+  it('non-member cannot rename a household they have no access to', async () => {
+    const result = await renameHousehold(db, fakeAccessToken(stranger), householdAId, 'Hijacked')
+    expect(result).toBeNull()
   })
 
   it('rolls back the household insert if the membership insert fails — never one without the other', async () => {

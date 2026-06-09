@@ -163,6 +163,17 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     return c.json({ id: household.id, name: household.name, role: household.role }, created ? 201 : 200)
   })
 
+  // Ensures the user has a household (bootstraps if missing), then returns the
+  // full list. Mirrors MealPlanner's ensurePersonalHousehold + listHouseholdsForUser
+  // semantics so the proxy can replace the old bootstrap-and-wrap hack.
+  app.get('/internal/households/me', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    await bootstrapHousehold(db, accessToken, user.id)
+    const rows = await listHouseholdsForUser(db, accessToken)
+    return c.json(rows.map((r) => ({ id: r.id, name: r.name, role: r.role })))
+  })
+
   app.post('/internal/households', async (c) => {
     const body = await c.req.json().catch(() => null)
     const rawName = typeof body?.name === 'string' ? (body.name as string).trim().replace(/\s+/g, ' ') : ''
@@ -191,6 +202,20 @@ export function buildInternalHouseholdsRoutes(db: Db) {
   return app
 }
 
+// Plain select scoped only by `auth.uid()` via RLS — no `where userId = ...`
+// here. That's the point: even if this query were written wrong (or a future
+// route forgot to scope it), the database would still only return rows this
+// user is allowed to see.
+export async function listHouseholdsForUser(db: Db, accessToken: string) {
+  return withRls(db, accessToken, (tx) =>
+    tx
+      .select({ id: households.id, name: households.name, role: householdMemberships.role })
+      .from(householdMemberships)
+      .innerJoin(households, eq(households.id, householdMemberships.householdId))
+      .where(eq(householdMemberships.status, 'active')),
+  )
+}
+
 export function buildHouseholdsRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
@@ -198,19 +223,7 @@ export function buildHouseholdsRoutes(db: Db) {
 
   app.openapi(getMyHouseholds, async (c) => {
     const accessToken = c.get('accessToken')
-
-    // Plain selects scoped only by `auth.uid()` via RLS — no `where userId = ...`
-    // here. That's the point: even if this query were written wrong (or a future
-    // route forgot to scope it), the database would still only return rows this
-    // user is allowed to see.
-    const rows = await withRls(db, accessToken, (tx) =>
-      tx
-        .select({ id: households.id, name: households.name, role: householdMemberships.role })
-        .from(householdMemberships)
-        .innerJoin(households, eq(households.id, householdMemberships.householdId))
-        .where(eq(householdMemberships.status, 'active')),
-    )
-
+    const rows = await listHouseholdsForUser(db, accessToken)
     return c.json({ households: rows.map((row) => ({ id: row.id, name: row.name, role: row.role })) }, 200)
   })
 

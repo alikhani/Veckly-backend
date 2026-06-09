@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { bootstrapHousehold, createNamedHousehold, renameHousehold } from '../src/households.js'
+import { bootstrapHousehold, createNamedHousehold, listHouseholdsForUser, renameHousehold } from '../src/households.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -47,6 +47,24 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
       return run(tx as unknown as typeof db)
     })
   }
+
+  it('lists all active households the caller belongs to', async () => {
+    const rows = await listHouseholdsForUser(db, fakeAccessToken(userA))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.id).toBe(householdAId)
+    expect(rows[0]?.role).toBe('owner')
+  })
+
+  it('returns an empty list for a user with no household', async () => {
+    const rows = await listHouseholdsForUser(db, fakeAccessToken(stranger))
+    expect(rows).toHaveLength(0)
+  })
+
+  it('returns multiple households when the user belongs to more than one', async () => {
+    await createNamedHousehold(db, fakeAccessToken(userA), userA, 'Second House')
+    const rows = await listHouseholdsForUser(db, fakeAccessToken(userA))
+    expect(rows).toHaveLength(2)
+  })
 
   it('creates "My household" with the caller as owner when they have no household', async () => {
     const result = await bootstrapHousehold(db, fakeAccessToken(stranger), stranger)

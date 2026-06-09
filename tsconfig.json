@@ -13,5 +13,5 @@
     "declaration": false,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "api"]
 }

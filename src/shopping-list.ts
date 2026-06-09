@@ -1,7 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
+import { and, eq, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
-import { shoppingListEvents, shoppingListProjections } from './schema.js'
+import { withRls } from './rls.js'
+import { households, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -65,6 +67,26 @@ const ParamsSchema = z.object({
   householdId: z.string().uuid(),
   weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
 })
+
+const ShoppingListSummaryItemSchema = z.object({
+  itemKey: z.string(),
+  label: z.string(),
+  amount: z.string().nullable(),
+  unit: z.string().nullable(),
+  checked: z.boolean(),
+}).openapi('ShoppingListSummaryItem')
+
+const ShoppingListSummaryGroupSchema = z.object({
+  category: z.string(),
+  items: z.array(ShoppingListSummaryItemSchema),
+}).openapi('ShoppingListSummaryGroup')
+
+const ShoppingListSummarySchema = z.object({
+  household: z.object({ id: z.string().uuid(), name: z.string() }),
+  weekStartDate: z.string(),
+  updatedAt: z.string().nullable(),
+  groups: z.array(ShoppingListSummaryGroupSchema),
+}).openapi('ShoppingListSummary')
 
 // --- Projection fold --------------------------------------------------------
 //
@@ -134,6 +156,130 @@ const getShoppingListRoute = createRoute({
   },
 })
 
+const getShoppingListSummaryRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/shopping-lists/{weekStartDate}/summary',
+  summary: "Read a household shopping list as an iOS-friendly grouped summary",
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'The current shopping list summary. Missing projections return an empty list.',
+      content: { 'application/json': { schema: ShoppingListSummarySchema } },
+    },
+    404: { description: 'Household not found or caller is not a member' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const weekDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
+
+type TRecipeIngredient = {
+  item: string
+  amount?: string
+  unit?: string
+  category?: string
+}
+
+type TWeekPlanProjectionState = {
+  meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string }>>
+}
+
+function normalizeKeyPart(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
+}
+
+function buildItemKey(ingredient: TRecipeIngredient) {
+  const category = normalizeKeyPart(ingredient.category || 'Other')
+  const item = normalizeKeyPart(ingredient.item)
+  const amount = normalizeKeyPart(ingredient.amount)
+  const unit = normalizeKeyPart(ingredient.unit)
+  return [category, item, amount, unit].join(':')
+}
+
+function readShoppingProjectionState(state: unknown): TShoppingListProjectionState {
+  const candidate = state as Partial<TShoppingListProjectionState> | null | undefined
+  return {
+    listStarted: candidate?.listStarted === true,
+    checkedItems: candidate?.checkedItems && typeof candidate.checkedItems === 'object' ? candidate.checkedItems : {},
+  }
+}
+
+export async function getShoppingListSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [household] = await tx
+      .select({ id: households.id, name: households.name })
+      .from(households)
+      .where(eq(households.id, householdId))
+      .limit(1)
+
+    if (!household) return null
+
+    const [weekProjection] = await tx
+      .select({ state: weekPlanProjections.state })
+      .from(weekPlanProjections)
+      .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    const [shoppingProjection] = await tx
+      .select({ state: shoppingListProjections.state, updatedAt: shoppingListProjections.updatedAt })
+      .from(shoppingListProjections)
+      .where(and(eq(shoppingListProjections.householdId, householdId), eq(shoppingListProjections.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    const shoppingState = readShoppingProjectionState(shoppingProjection?.state)
+    const weekState = (weekProjection?.state ?? {}) as TWeekPlanProjectionState
+    const recipeIds = weekDays
+      .map((day) => weekState.meals?.[day]?.recipeRef)
+      .filter((id): id is string => Boolean(id))
+
+    const recipeRows = recipeIds.length
+      ? await tx
+        .select({ id: recipes.id, ingredients: recipes.ingredients })
+        .from(recipes)
+        .where(and(eq(recipes.householdId, householdId), inArray(recipes.id, recipeIds)))
+      : []
+
+    const itemsByKey = new Map<string, { category: string; label: string; amount: string | null; unit: string | null; checked: boolean }>()
+
+    for (const recipe of recipeRows) {
+      for (const ingredient of recipe.ingredients as TRecipeIngredient[]) {
+        if (!ingredient.item.trim()) continue
+        const itemKey = buildItemKey(ingredient)
+        if (itemsByKey.has(itemKey)) continue
+        itemsByKey.set(itemKey, {
+          category: ingredient.category?.trim() || 'Other',
+          label: ingredient.item.trim(),
+          amount: ingredient.amount?.trim() || null,
+          unit: ingredient.unit?.trim() || null,
+          checked: shoppingState.checkedItems[itemKey] === true,
+        })
+      }
+    }
+
+    const groupsByCategory = new Map<string, Array<{ itemKey: string; label: string; amount: string | null; unit: string | null; checked: boolean }>>()
+    for (const [itemKey, item] of itemsByKey) {
+      const group = groupsByCategory.get(item.category) ?? []
+      group.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked })
+      groupsByCategory.set(item.category, group)
+    }
+
+    const groups = Array.from(groupsByCategory.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([category, items]) => ({
+        category,
+        items: items.sort((left, right) => left.label.localeCompare(right.label)),
+      }))
+
+    return {
+      household,
+      weekStartDate,
+      updatedAt: shoppingProjection?.updatedAt.toISOString() ?? null,
+      groups,
+    }
+  })
+}
+
 export function buildShoppingListRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
@@ -190,6 +336,15 @@ export function buildShoppingListRoutes(db: Db) {
       },
       200,
     )
+  })
+
+  app.openapi(getShoppingListSummaryRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate)
+
+    if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
+    return c.json(summary, 200)
   })
 
   return app

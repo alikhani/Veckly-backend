@@ -1,8 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
-import { households, householdMemberships, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
-import { foldEventIntoProjection, emptyProjectionState, type TWeekPlanProjectionState } from '../src/week-plan.js'
+import { createRecipe } from '../src/recipes.js'
+import { households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { foldEventIntoProjection, emptyProjectionState, getWeekPlanSummary, type TWeekPlanProjectionState } from '../src/week-plan.js'
+import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -23,6 +26,7 @@ describeWithDb('Week-plan event log + projection', () => {
   // before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -40,6 +44,7 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -250,6 +255,75 @@ describeWithDb('Week-plan event log + projection', () => {
 
       expect(projectionReads.length).toBeGreaterThan(0)
       expect(eventLogReads).toHaveLength(0)
+    })
+  })
+
+  describe('(d) iOS summary read model', () => {
+    const baseRecipe = {
+      title: 'Monday Pasta',
+      description: 'Fast family pasta',
+      servings: 4,
+      ingredients: [{ item: 'spaghetti', amount: '400', unit: 'g', category: 'Pantry' }],
+      steps: [{ text: 'Cook pasta' }],
+      tags: ['weekday'],
+      prepTimeMinutes: 10,
+      cookTimeMinutes: 15,
+      cuisine: 'Italian',
+      proteinSource: 'cheese',
+      mealWeight: 'medium',
+      source: 'user_created' as const,
+      isPublic: false,
+    }
+
+    it('returns 401 from the route when no bearer token is supplied', async () => {
+      const app = buildApp(db)
+
+      const response = await app.request(`/households/${householdAId}/week-plans/${weekStartDate}/summary`)
+
+      expect(response.status).toBe(401)
+    })
+
+    it('returns an empty seven-day week when no projection exists', async () => {
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary).not.toBeNull()
+      expect(summary!.updatedAt).toBeNull()
+      expect(summary!.days).toHaveLength(7)
+      expect(summary!.days.every((day) => day.state === 'empty')).toBe(true)
+      expect(summary!.days[0]).toMatchObject({ dayOfWeek: 'monday', date: '2026-06-08' })
+      expect(summary!.days[6]).toMatchObject({ dayOfWeek: 'sunday', date: '2026-06-14' })
+    })
+
+    it('hydrates planned recipe refs into readable day summaries', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        meals: { monday: { recipeRef: recipe.id } },
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]).toEqual({
+        dayOfWeek: 'monday',
+        date: '2026-06-08',
+        state: 'planned',
+        recipe: {
+          id: recipe.id,
+          title: 'Monday Pasta',
+          description: 'Fast family pasta',
+          servings: 4,
+          prepTimeMinutes: 10,
+          cookTimeMinutes: 15,
+          tags: ['weekday'],
+        },
+      })
+    })
+
+    it('does not expose another household summary across RLS', async () => {
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
+
+      expect(summary).toBeNull()
     })
   })
 })

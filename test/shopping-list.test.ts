@@ -1,8 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
-import { households, householdMemberships, shoppingListEvents, shoppingListProjections } from '../src/schema.js'
-import { foldEventIntoProjection, emptyProjectionState, type TShoppingListProjectionState } from '../src/shopping-list.js'
+import { createRecipe } from '../src/recipes.js'
+import { households, householdMemberships, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from '../src/schema.js'
+import { foldEventIntoProjection, emptyProjectionState, getShoppingListSummary, type TShoppingListProjectionState } from '../src/shopping-list.js'
+import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -23,6 +26,8 @@ describeWithDb('Shopping-list event log + projection', () => {
   // applied once, globally, before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "recipes"`)
+    await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "shopping_list_events"`)
     await db.execute(sql`delete from "shopping_list_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -40,6 +45,8 @@ describeWithDb('Shopping-list event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "recipes"`)
+    await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "shopping_list_events"`)
     await db.execute(sql`delete from "shopping_list_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -250,6 +257,76 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(projectionReads.length).toBeGreaterThan(0)
       expect(eventLogReads).toHaveLength(0)
+    })
+  })
+
+  describe('(d) iOS summary read model', () => {
+    const baseRecipe = {
+      title: 'Monday Pasta',
+      description: 'Fast family pasta',
+      servings: 4,
+      ingredients: [
+        { item: 'spaghetti', amount: '400', unit: 'g', category: 'Pantry' },
+        { item: 'tomatoes', amount: '2', unit: 'can', category: 'Produce' },
+      ],
+      steps: [{ text: 'Cook pasta' }],
+      tags: ['weekday'],
+      prepTimeMinutes: 10,
+      cookTimeMinutes: 15,
+      cuisine: 'Italian',
+      proteinSource: 'cheese',
+      mealWeight: 'medium',
+      source: 'user_created' as const,
+      isPublic: false,
+    }
+
+    it('returns 401 from the route when no bearer token is supplied', async () => {
+      const app = buildApp(db)
+
+      const response = await app.request(`/households/${householdAId}/shopping-lists/${weekStartDate}/summary`)
+
+      expect(response.status).toBe(401)
+    })
+
+    it('returns an empty shopping summary when no week plan exists', async () => {
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary).not.toBeNull()
+      expect(summary!.updatedAt).toBeNull()
+      expect(summary!.groups).toEqual([])
+    })
+
+    it('groups planned recipe ingredients deterministically and applies checked state', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true } },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Pantry',
+          items: [{ itemKey: 'pantry:spaghetti:400:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true }],
+        },
+        {
+          category: 'Produce',
+          items: [{ itemKey: 'produce:tomatoes:2:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false }],
+        },
+      ])
+    })
+
+    it('does not expose another household shopping summary across RLS', async () => {
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
+
+      expect(summary).toBeNull()
     })
   })
 })

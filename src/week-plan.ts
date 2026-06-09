@@ -1,7 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
+import { and, eq, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
-import { weekPlanEvents, weekPlanProjections } from './schema.js'
+import { withRls } from './rls.js'
+import { households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -68,6 +70,30 @@ const ParamsSchema = z.object({
   householdId: z.string().uuid(),
   weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
 })
+
+const WeekPlanSummaryRecipeSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string(),
+  description: z.string(),
+  servings: z.number().int(),
+  prepTimeMinutes: z.number().int().nullable(),
+  cookTimeMinutes: z.number().int().nullable(),
+  tags: z.array(z.string()),
+}).openapi('WeekPlanSummaryRecipe')
+
+const WeekPlanSummaryDaySchema = z.object({
+  dayOfWeek,
+  date: z.string(),
+  state: z.enum(['empty', 'planned', 'skipped']),
+  recipe: WeekPlanSummaryRecipeSchema.nullable(),
+}).openapi('WeekPlanSummaryDay')
+
+const WeekPlanSummarySchema = z.object({
+  household: z.object({ id: z.string().uuid(), name: z.string() }),
+  weekStartDate: z.string(),
+  updatedAt: z.string().nullable(),
+  days: z.array(WeekPlanSummaryDaySchema),
+}).openapi('WeekPlanSummary')
 
 // --- Projection fold --------------------------------------------------------
 //
@@ -138,6 +164,103 @@ const getWeekPlanRoute = createRoute({
   },
 })
 
+const getWeekPlanSummaryRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/summary',
+  summary: "Read a household week plan as an iOS-friendly hydrated summary",
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'The current week plan summary. Missing projections return an empty week.',
+      content: { 'application/json': { schema: WeekPlanSummarySchema } },
+    },
+    404: { description: 'Household not found or caller is not a member' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const orderedDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
+
+function addDays(yyyyMmDd: string, offset: number) {
+  const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + offset)
+  return date.toISOString().slice(0, 10)
+}
+
+function readProjectionState(state: unknown): TWeekPlanProjectionState {
+  const candidate = state as Partial<TWeekPlanProjectionState> | null | undefined
+  return {
+    weekStarted: candidate?.weekStarted === true,
+    meals: candidate?.meals && typeof candidate.meals === 'object' ? candidate.meals : {},
+  }
+}
+
+export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [household] = await tx
+      .select({ id: households.id, name: households.name })
+      .from(households)
+      .where(eq(households.id, householdId))
+      .limit(1)
+
+    if (!household) return null
+
+    const [projection] = await tx
+      .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
+      .from(weekPlanProjections)
+      .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    const projectionState = readProjectionState(projection?.state)
+    const recipeIds = orderedDays
+      .map((day) => projectionState.meals[day]?.recipeRef)
+      .filter((id): id is string => Boolean(id))
+
+    const recipeRows = recipeIds.length
+      ? await tx
+        .select({
+          id: recipes.id,
+          title: recipes.title,
+          description: recipes.description,
+          servings: recipes.servings,
+          prepTimeMinutes: recipes.prepTimeMinutes,
+          cookTimeMinutes: recipes.cookTimeMinutes,
+          tags: recipes.tags,
+        })
+        .from(recipes)
+        .where(and(eq(recipes.householdId, householdId), inArray(recipes.id, recipeIds)))
+      : []
+
+    const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
+
+    return {
+      household,
+      weekStartDate,
+      updatedAt: projection?.updatedAt.toISOString() ?? null,
+      days: orderedDays.map((dayOfWeek, index) => {
+        const meal = projectionState.meals[dayOfWeek]
+        const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
+
+        return {
+          dayOfWeek,
+          date: addDays(weekStartDate, index),
+          state: recipe ? 'planned' as const : 'empty' as const,
+          recipe: recipe ? {
+            id: recipe.id,
+            title: recipe.title,
+            description: recipe.description,
+            servings: recipe.servings,
+            prepTimeMinutes: recipe.prepTimeMinutes ?? null,
+            cookTimeMinutes: recipe.cookTimeMinutes ?? null,
+            tags: recipe.tags as string[],
+          } : null,
+        }
+      }),
+    }
+  })
+}
+
 export function buildWeekPlanRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
@@ -196,6 +319,15 @@ export function buildWeekPlanRoutes(db: Db) {
       },
       200,
     )
+  })
+
+  app.openapi(getWeekPlanSummaryRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const summary = await getWeekPlanSummary(db, accessToken, householdId, weekStartDate)
+
+    if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
+    return c.json(summary, 200)
   })
 
   return app

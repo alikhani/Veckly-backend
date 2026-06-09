@@ -199,6 +199,48 @@ export async function removeMember(
   })
 }
 
+// Changes a member's role. Returns a typed outcome so the caller can map
+// errors to HTTP status codes without a try/catch. LAST_OWNER is checked in
+// code (not RLS) for the same reasons stated in removeMember above.
+export async function updateMemberRole(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  targetUserId: string,
+  role: 'owner' | 'member',
+): Promise<{ outcome: 'updated'; role: 'owner' | 'member' } | { outcome: 'not_found' } | { outcome: 'last_owner' }> {
+  return withRls(db, accessToken, async (tx) => {
+    const [target] = await tx
+      .select({ role: householdMemberships.role, status: householdMemberships.status })
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.userId, targetUserId)))
+      .limit(1)
+
+    if (!target || target.status !== 'active') return { outcome: 'not_found' as const }
+
+    if (target.role === 'owner' && role === 'member') {
+      const owners = await tx
+        .select({ id: householdMemberships.id })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.role, 'owner'),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+      if (owners.length <= 1) return { outcome: 'last_owner' as const }
+    }
+
+    await tx
+      .update(householdMemberships)
+      .set({ role })
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.userId, targetUserId)))
+
+    return { outcome: 'updated' as const, role }
+  })
+}
+
 // Internal server-to-server routes — not in the public OpenAPI spec, not
 // meant for direct client use. MealPlanner proxies through these during the
 // strangle phase; they get retired once the web frontend calls the backend
@@ -266,6 +308,19 @@ export function buildInternalHouseholdsRoutes(db: Db) {
     if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' }, 404)
     if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' }, 409)
     return c.body(null, 204)
+  })
+
+  app.patch('/internal/households/:householdId/members/:userId', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const targetUserId = c.req.param('userId')
+    const body = await c.req.json().catch(() => ({}))
+    const role = body.role === 'owner' || body.role === 'member' ? (body.role as 'owner' | 'member') : null
+    if (!role) return c.json({ error: 'INVALID_ROLE' }, 400)
+    const result = await updateMemberRole(db, accessToken, householdId, targetUserId, role)
+    if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' }, 404)
+    if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' }, 409)
+    return c.json({ userId: targetUserId, role: result.role }, 200)
   })
 
   return app

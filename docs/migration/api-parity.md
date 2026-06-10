@@ -1,6 +1,6 @@
 # API Parity Matrix
 
-Status: phase 0 in progress
+Status: phase 0 complete
 Created: 2026-06-10
 
 This matrix tracks the backend move from `MealPlanner/src/app/api/**` into
@@ -178,3 +178,9 @@ Recommended next slice after this inventory:
 
 This order keeps the first phase focused on backend contract stability before
 iOS feature parity work begins.
+
+## Phase 0 Exit Check
+
+- API parity matrix exists: complete.
+- Every active `MealPlanner/src/app/api/**/route.ts` file has a target status: complete.
+- First backend implementation slice is selected: complete.

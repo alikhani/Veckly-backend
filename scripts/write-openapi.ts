@@ -15,7 +15,7 @@ if (!response.ok) {
   throw new Error(`Failed to generate OpenAPI spec: ${response.status}`)
 }
 
-const spec = await response.json()
+const spec = normalizeOpenApi31(await response.json())
 const formattedSpec = `${JSON.stringify(spec, null, 2)}\n`
 const resolvedOutputPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', outputPath)
 
@@ -23,3 +23,34 @@ await mkdir(path.dirname(resolvedOutputPath), { recursive: true })
 await writeFile(resolvedOutputPath, formattedSpec)
 
 console.log(`Wrote ${resolvedOutputPath}`)
+
+function normalizeOpenApi31(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizeOpenApi31(item))
+  if (!value || typeof value !== 'object') return value
+
+  const record = value as Record<string, unknown>
+  if (key === 'additionalProperties' && Object.keys(record).length === 1 && record.nullable === true) {
+    return true
+  }
+
+  const normalized: Record<string, unknown> = {}
+  for (const [entryKey, entryValue] of Object.entries(record)) {
+    if (entryKey === 'nullable') continue
+    normalized[entryKey] = normalizeOpenApi31(entryValue, entryKey)
+  }
+
+  if (record.nullable === true) {
+    const type = normalized.type
+    if (typeof type === 'string') {
+      normalized.type = type === 'null' ? type : [type, 'null']
+    } else if (Array.isArray(type)) {
+      normalized.type = Array.from(new Set([...type, 'null']))
+    } else if (Array.isArray(normalized.oneOf)) {
+      normalized.oneOf = [...normalized.oneOf, { type: 'null' }]
+    } else if (Array.isArray(normalized.anyOf)) {
+      normalized.anyOf = [...normalized.anyOf, { type: 'null' }]
+    }
+  }
+
+  return normalized
+}

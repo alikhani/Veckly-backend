@@ -1,0 +1,180 @@
+# API Parity Matrix
+
+Status: phase 0 in progress
+Created: 2026-06-10
+
+This matrix tracks the backend move from `MealPlanner/src/app/api/**` into
+`Veckly-backend`. `MealPlanner` remains the behavior reference until a row is
+marked `migrated`.
+
+Status values:
+
+- `migrated`: public `Veckly-backend` route exists and covers the MealPlanner behavior.
+- `partial`: some backend route exists, but contract or behavior is incomplete.
+- `internal-proxy`: backend has an internal strangle route used by MealPlanner, but no final public contract.
+- `missing`: no equivalent backend implementation yet.
+- `deprecated`: do not move; replace or retire during the migration.
+
+## Backend Routes Already Present
+
+Public OpenAPI routes:
+
+| Method | Backend route | Operation id | Notes |
+|---|---|---|---|
+| GET | `/households/me` | `getMyHouseholds` | Public household list, no MealPlanner auto-bootstrap semantics. |
+| POST | `/households/me/bootstrap` | `bootstrapMyHousehold` | Supabase Auth replacement for MealPlanner auto-household creation. |
+| PATCH | `/households/{id}` | `renameHousehold` | Owner-only rename via RLS. |
+| POST | `/households/{householdId}/invites` | `createHouseholdInvite` | Invite DB write only; email delivery not moved. |
+| GET | `/households/{householdId}/invites` | `listHouseholdInvites` | Pending invites. |
+| DELETE | `/households/{householdId}/invites/{inviteId}` | `revokeHouseholdInvite` | Uses invite UUID, while MealPlanner client route uses token. |
+| GET | `/invites/{token}` | `getInviteLanding` | Authenticated token preview. |
+| POST | `/invites/{token}/accept` | `acceptInvite` | Accept invite and join household. |
+| POST | `/households/{householdId}/week-plans/{weekStartDate}/events` | `appendWeekPlanEvent` | Event model proof slice. |
+| GET | `/households/{householdId}/week-plans/{weekStartDate}` | `getWeekPlan` | Raw projection read. |
+| GET | `/households/{householdId}/week-plans/{weekStartDate}/summary` | `getWeekPlanSummary` | iOS-friendly read model. |
+| POST | `/households/{householdId}/shopping-lists/{weekStartDate}/events` | `appendShoppingListEvent` | Event model proof slice. |
+| GET | `/households/{householdId}/shopping-lists/{weekStartDate}` | `getShoppingList` | Raw projection read. |
+| GET | `/households/{householdId}/shopping-lists/{weekStartDate}/summary` | `getShoppingListSummary` | iOS-friendly grouped read model. |
+| GET | `/households/{householdId}/recipes` | `listRecipes` | Household recipes CRUD foundation. |
+| POST | `/households/{householdId}/recipes` | `createRecipe` | Household recipes CRUD foundation. |
+| GET | `/households/{householdId}/recipes/{recipeId}` | `getRecipe` | Household recipes CRUD foundation. |
+| PATCH | `/households/{householdId}/recipes/{recipeId}` | `updateRecipe` | Includes archive via `isArchived`. |
+
+Internal strangle routes already present:
+
+| Method | Backend route | Used by MealPlanner route | Notes |
+|---|---|---|---|
+| GET | `/internal/households/me` | `GET /api/households` | Preserves ensure-personal-household semantics. |
+| POST | `/internal/households` | `POST /api/households` | Named household creation. |
+| PATCH | `/internal/households/:id` | `PATCH /api/households/[id]` | Rename proxy. |
+| GET | `/internal/households/:householdId/members` | `GET /api/households/[id]/members` | MealPlanner still hydrates emails. |
+| PATCH | `/internal/households/:householdId/members/:userId` | `PATCH /api/households/[id]/members/[userId]` | Role update proxy. |
+| DELETE | `/internal/households/:householdId/members/:userId` | `DELETE /api/households/[id]/members/[userId]` | Remove member proxy. |
+| POST | `/internal/households/:householdId/invites` | `POST /api/households/[id]/invites` | Email remains in MealPlanner. |
+| GET | `/internal/households/:householdId/invites` | `GET /api/households/[id]/invites` | Pending invite list. |
+| DELETE | `/internal/households/:householdId/invites/:token` | `DELETE /api/households/[id]/invites/[token]` | Token revoke compatibility. |
+
+## MealPlanner Route Parity
+
+### Auth and User State
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET/POST `/api/auth/[...all]` | Better Auth web session endpoints. | Supabase Auth, not Hono route. | Supabase Auth | n/a | deprecated | Do not port as-is. iOS and backend use Supabase Auth bearer tokens. Web migration needs a separate auth cutover plan. |
+| GET `/api/users/me/trial-status` | Reads trial/subscription status for current user. | TBD `/users/me/trial-status` or billing module. | required | user scoped | missing | Move with billing/premium slice. |
+
+### Households and Members
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/households` | Ensure personal household, list memberships. | Public: `GET /households/me`; internal: `GET /internal/households/me`. | required | RLS memberships | internal-proxy | Backend tests cover list/bootstrap. Decide whether public route should auto-bootstrap or keep explicit bootstrap. |
+| POST `/api/households` | Create named household for current user. | Internal: `POST /internal/households`; public target TBD `POST /households`. | required | RLS memberships | internal-proxy | Backend has domain function and internal proxy; add public OpenAPI operation if iOS needs create-household outside bootstrap. |
+| PATCH `/api/households/[id]` | Owner renames household. | Public: `PATCH /households/{id}`; internal: `PATCH /internal/households/:id`. | required | RLS owner update | partial | Backend tests cover owner/member/non-member. Response shape differs from MealPlanner `{ ok, householdId, name }`. |
+| GET `/api/households/[id]/members` | List household members with emails. | Internal: `GET /internal/households/:householdId/members`; public target TBD. | required | RLS membership | internal-proxy | Backend returns userId/role only; MealPlanner hydrates email separately. Need public contract for iOS member list. |
+| PATCH `/api/households/[id]/members/[userId]` | Owner changes role, preserves last-owner invariant. | Internal: `PATCH /internal/households/:householdId/members/:userId`; public target TBD. | required | RLS + owner policy | internal-proxy | Backend tests cover role update invariants. Add public OpenAPI operation. |
+| DELETE `/api/households/[id]/members/[userId]` | Owner removes member, preserves last-owner invariant. | Internal: `DELETE /internal/households/:householdId/members/:userId`; public target TBD. | required | RLS + owner policy | internal-proxy | Backend tests cover remove-member invariants. Add public OpenAPI operation. |
+
+### Household Profile and Preferences
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/household-profile` | Read current user's household planning profile. | TBD `/households/{householdId}/profile` or `/households/{householdId}/preferences`. | required | household scoped | missing | First recommended backend slice. Need schema for adults, children, priorities, avoid ingredients, default days. |
+| PUT `/api/household-profile` | Upsert planning profile. | TBD `/households/{householdId}/profile` or `/households/{householdId}/preferences`. | required | household scoped | missing | First recommended backend slice. Decide whether profile is household-owned only; MealPlanner route is user-oriented. |
+
+### Invites
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/households/[id]/invites` | List pending invites. | Public: `GET /households/{householdId}/invites`; internal proxy exists. | required | RLS membership | partial | Backend tests cover invite visibility. Response shape differs. |
+| POST `/api/households/[id]/invites` | Create invite, optionally send Resend email. | Public: `POST /households/{householdId}/invites`; internal proxy exists. | required | RLS membership | partial | Backend creates invite; email delivery still in MealPlanner. Move email integration or keep web-owned temporarily. |
+| DELETE `/api/households/[id]/invites/[token]` | Revoke invite by token. | Public uses invite id: `DELETE /households/{householdId}/invites/{inviteId}`; internal token proxy exists. | required | RLS membership | partial | Add public token revoke or update clients to use invite id consistently. |
+| POST `/api/household-invites/accept` | Accept invite from token body. | `POST /invites/{token}/accept`. | required | token-assisted RLS | partial | Backend route uses path token and Supabase session. Web route compatibility wrapper needed during cutover. |
+
+### Active Week, Week Plans, and History
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/households/[id]/active-plan` | Read current active plan state, week-aware fallback. | `GET /households/{householdId}/week-plans/{weekStartDate}/summary` plus raw projection. | required | RLS projection | partial | Backend has iOS summary only. Need full state contract or web adapter. |
+| PATCH `/api/households/[id]/active-plan` | OCC write/clear active plan, sync to week history, premium gate. | Event routes under `/week-plans/{weekStartDate}/events`. | required | RLS event append | partial | Backend only supports `week_started` and `meal_assigned`. Need full event vocabulary and premium gate. |
+| GET `/api/households/[id]/active-week` | Read household active week pointer. | TBD `/households/{householdId}/active-week`. | required | RLS household state | missing | Needed for web parity and likely iOS week navigation. |
+| PATCH `/api/households/[id]/active-week` | Set/clear active week with OCC. | TBD `/households/{householdId}/active-week` or household event stream. | required | RLS household state | missing | Implement after deciding event-stream vs CRUD shape for active week. |
+| GET `/api/households/[id]/weeks` | List week history with filters/pagination. | TBD `/households/{householdId}/week-plans`. | required | RLS week projections | missing | Move in week history slice. |
+| GET `/api/households/[id]/weeks/[weekStartDate]` | Read week history/detail. | Raw/summarized week-plan projection route. | required | RLS week projection | partial | Backend can read projection but not MealPlanner history status/source metadata. |
+| PATCH `/api/households/[id]/weeks/[weekStartDate]` | Upsert draft/finalized week with OCC, source, timezone. | Event routes plus projection metadata TBD. | required | RLS event append/projection | missing | Requires full event vocabulary and projection metadata. |
+| POST `/api/households/[id]/weeks/[weekStartDate]/finalize` | Finalize week, premium gate. | TBD `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`. | required | RLS week projection | missing | Add finalization event or status transition. |
+
+### Shopping List
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/households/[id]/shopping-state` | Read checked items and pantry stock with OCC timestamp. | `GET /households/{householdId}/shopping-lists/{weekStartDate}` and `/summary`. | required | RLS projection | partial | Backend has event/projection and grouped summary, but no pantry stock or old OCC shape. |
+| PATCH `/api/households/[id]/shopping-state` | Write/clear checked items and pantry stock with OCC. | `POST /households/{householdId}/shopping-lists/{weekStartDate}/events`. | required | RLS event append | partial | Backend only supports `list_started` and `item_checked`. Need pantry/manual/bulk semantics if retained. |
+
+### Saved Plans and Meal Feedback
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/saved-plans` | List user's saved plan templates. | TBD `/households/{householdId}/saved-plans` or recipes/templates module. | required | user or household scoped | missing | Decide if templates are household-owned in new backend. |
+| POST `/api/saved-plans` | Save current plan as template. | TBD. | required | user or household scoped | missing | Move after week-plan projection shape stabilizes. |
+| PATCH `/api/saved-plans/[id]` | Rename/update saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
+| DELETE `/api/saved-plans/[id]` | Delete saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
+| GET `/api/meal-feedback` | Read persisted meal feedback. | TBD `/households/{householdId}/meal-feedback`. | required | user/household scoped | missing | Needed for recommendations and personalization. |
+| PUT `/api/meal-feedback` | Upsert/remove meal feedback. | TBD. | required | user/household scoped | missing | Must preserve feedback effects on generation. |
+
+### Recipes
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/custom-recipes` | List custom/family recipes. | `GET /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend has CRUD list but not MealPlanner response compatibility, built-in/fork/bookmark semantics. |
+| POST `/api/custom-recipes` | Create custom recipe, including fork support. | `POST /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend can create recipe but lacks fork lineage/public/community save behavior. |
+| GET `/api/custom-recipes/[id]` | Get custom recipe detail. | `GET /households/{householdId}/recipes/{recipeId}`. | required | RLS recipes | partial | Backend can read household recipe; historical compatibility needs mapping. |
+| PATCH `/api/custom-recipes/[id]` | Edit recipe. | `PATCH /households/{householdId}/recipes/{recipeId}`. | required | RLS recipes | partial | Backend has basic update. Need MealPlanner validation and field mapping parity. |
+| PATCH `/api/custom-recipes/[id]/archive` | Archive recipe. | `PATCH /households/{householdId}/recipes/{recipeId}` with `isArchived`. | required | RLS recipes | partial | Backend supports archive via update. Add compatibility route only if web migration needs it. |
+| GET `/api/recipes/public` | Search public community recipes. | TBD `/recipes/public` or `/households/{householdId}/recipes/public-search`. | required | public + RLS exclusions | missing | Backend tests mention public visibility at domain level, but no OpenAPI search route. |
+| GET `/api/recipes/saved` | List saved/bookmarked recipes. | TBD `/households/{householdId}/recipes/saved`. | required | user scoped | missing | Move with bookmarks. |
+| POST `/api/recipes/[id]/save` | Save/bookmark community recipe. | TBD. | required | user scoped | missing | Move with bookmarks. |
+| DELETE `/api/recipes/[id]/save` | Remove saved/bookmarked recipe. | TBD. | required | user scoped | missing | Move with bookmarks. |
+| POST `/api/recipes/[id]/translate` | AI translate and cache recipe translation. | TBD `/recipes/{id}/translate`. | required | recipe visibility/RLS | missing | Move with AI/translation slice. |
+| POST `/api/recipes/fill-in` | AI fill-in title-only recipe details. | TBD `/recipes/fill-in`. | required | user scoped | missing | Move with AI slice. |
+| POST `/api/recipes/import-from-url` | Fetch URL, structured-data extraction, AI fallback, SSRF guard/rate limit. | TBD `/recipes/import-from-url`. | required | user scoped | missing | Move with URL import slice. |
+| POST `/api/recipes/recommend` | AI recommendations, including prep context. | TBD `/recipes/recommend`. | required | household scoped | missing | Move after feedback/history/profile parity. |
+
+### Meal Prep
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| GET `/api/households/[id]/prep-batches` | List prep batches for a date window. | TBD `/households/{householdId}/prep-batches`. | required | household scoped | missing | Move after week/shopping base. |
+| POST `/api/households/[id]/prep-batches` | Create prep batch with covered days/meals. | TBD `/households/{householdId}/prep-batches`. | required | household scoped | missing | Move with meal prep slice. |
+| DELETE `/api/households/[id]/prep-batches/[batchId]` | Delete prep batch. | TBD `/households/{householdId}/prep-batches/{batchId}`. | required | household scoped | missing | Move with meal prep slice. |
+
+### Billing, Premium, and Subscribe
+
+| MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
+|---|---|---|---|---|---|---|
+| POST `/api/stripe/checkout` | Create Stripe Checkout session. | TBD `/billing/checkout`. | required | user/subscription scoped | missing | Move after core beta flows or before commercial iOS test. |
+| POST `/api/stripe/webhook` | Stripe webhook updates subscription state. | TBD `/billing/stripe/webhook`. | Stripe signature | user/subscription scoped | missing | Requires raw body handling in Hono/Vercel. |
+| GET `/api/subscribe/insights` | Conversion insight data for upgrade modal. | TBD `/subscribe/insights` or `/billing/insights`. | required | household scoped | missing | Depends on week history, recipes, household membership parity. |
+
+## First Implementation Slice
+
+Recommended next slice after this inventory:
+
+1. Household profile/preferences:
+   - add schema/table fields or a dedicated table in `Veckly-backend`
+   - implement `GET/PATCH /households/{householdId}/profile`
+   - cover RLS: member can read/write own household, non-member cannot
+   - add OpenAPI operation ids
+2. Public member-management routes:
+   - expose list/update/remove members in OpenAPI
+   - decide whether to include email in backend contract
+3. Active week pointer:
+   - implement read/set/clear active week
+   - decide whether this is CRUD or a household event stream
+4. Week-plan event vocabulary expansion:
+   - add events required to replace active-plan PATCH semantics
+   - keep projection as read path
+5. Shopping list compatibility:
+   - add events for pantry/manual/bulk behavior if retained
+
+This order keeps the first phase focused on backend contract stability before
+iOS feature parity work begins.

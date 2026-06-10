@@ -19,7 +19,7 @@ The order is deliberate:
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 0 — Migration inventory | Not started | First task. Define exact API parity target. |
+| Phase 0 — Migration inventory | In progress | API parity matrix started in `docs/migration/api-parity.md`. |
 | Phase 1 — Backend parity foundation | In progress | `Veckly-backend` already has Hono, Drizzle, Supabase Auth/RLS direction, OpenAPI, households, invites, week summary, shopping list, and recipes foundations. Needs parity audit before extending. |
 | Phase 2 — Backend product parity | Not started | Move remaining MealPlanner API behavior route by route. |
 | Phase 3 — Web strangler migration | Not started | Existing web app starts calling/proxying to `Veckly-backend`. |
@@ -39,7 +39,7 @@ The order is deliberate:
 
 ## Phase 0 — Migration Inventory
 
-Status: not started
+Status: in progress
 
 Purpose: define exactly what "all backend functionality is moved" means.
 
@@ -242,3 +242,4 @@ Start here:
 ## Progress Log
 
 - 2026-06-10: Plan created. Phase 0 is the next active task. Phase 1 and Phase 4 already have foundations in place but need parity validation before being marked complete.
+- 2026-06-10: Phase 0 started. API parity matrix created at `docs/migration/api-parity.md`; first recommended implementation slice is household profile/preferences, public member routes, active week pointer, week event expansion, then shopping-list compatibility.

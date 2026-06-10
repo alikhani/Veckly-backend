@@ -10,6 +10,18 @@ export const households = pgTable('households', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+export const householdProfiles = pgTable('household_profiles', {
+  householdId: uuid('household_id').primaryKey().references(() => households.id, { onDelete: 'cascade' }),
+  adults: integer('adults').notNull(),
+  children: integer('children').notNull(),
+  priorities: jsonb('priorities').notNull(),
+  avoidIngredients: jsonb('avoid_ingredients').notNull(),
+  selectedDays: jsonb('selected_days').notNull(),
+  updatedBy: uuid('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const householdMemberships = pgTable('household_memberships', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),

@@ -26,10 +26,14 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
-  const [marker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.week_plan_projections') as exists`)
-  if (marker?.exists) return
+  const [latestMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_profiles') as exists`)
+  if (latestMarker?.exists) return
+
+  const [baseMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.week_plan_projections') as exists`)
+  const alreadyHasBaseMigrations = Boolean(baseMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasBaseMigrations && file < '0014_') continue
     const contents = fs.readFileSync(path.join(migrationsDir, file), 'utf8')
     const statements = contents.split('--> statement-breakpoint')
     for (const statement of statements) {
@@ -59,5 +63,6 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert on "shopping_list_events" to authenticated;
     grant select, insert, update on "shopping_list_projections" to authenticated;
     grant select, insert, update on "recipes" to authenticated;
+    grant select, insert, update on "household_profiles" to authenticated;
   `))
 }

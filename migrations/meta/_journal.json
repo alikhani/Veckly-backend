@@ -99,6 +99,13 @@
       "when": 1781043422811,
       "tag": "0013_member_role_update_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1781100000000,
+      "tag": "0014_household_profiles",
+      "breakpoints": true
     }
   ]
 }

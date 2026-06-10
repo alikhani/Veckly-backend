@@ -78,8 +78,8 @@ Internal strangle routes already present:
 
 | MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
 |---|---|---|---|---|---|---|
-| GET `/api/household-profile` | Read current user's household planning profile. | TBD `/households/{householdId}/profile` or `/households/{householdId}/preferences`. | required | household scoped | missing | First recommended backend slice. Need schema for adults, children, priorities, avoid ingredients, default days. |
-| PUT `/api/household-profile` | Upsert planning profile. | TBD `/households/{householdId}/profile` or `/households/{householdId}/preferences`. | required | household scoped | missing | First recommended backend slice. Decide whether profile is household-owned only; MealPlanner route is user-oriented. |
+| GET `/api/household-profile` | Read current user's household planning profile. | `GET /households/{householdId}/profile`. | required | RLS active membership | migrated | New backend profile is household-owned, not user-owned. Route returns `{ profile }`, with `null` when no profile exists. |
+| PUT `/api/household-profile` | Upsert planning profile. | `PUT /households/{householdId}/profile`. | required | RLS active membership | migrated | Supports adults, children, priorities, avoid ingredients, selected days. Non-members and removed members blocked by RLS. |
 
 ### Invites
 
@@ -159,21 +159,16 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Household profile/preferences:
-   - add schema/table fields or a dedicated table in `Veckly-backend`
-   - implement `GET/PATCH /households/{householdId}/profile`
-   - cover RLS: member can read/write own household, non-member cannot
-   - add OpenAPI operation ids
-2. Public member-management routes:
+1. Public member-management routes:
    - expose list/update/remove members in OpenAPI
    - decide whether to include email in backend contract
-3. Active week pointer:
+2. Active week pointer:
    - implement read/set/clear active week
    - decide whether this is CRUD or a household event stream
-4. Week-plan event vocabulary expansion:
+3. Week-plan event vocabulary expansion:
    - add events required to replace active-plan PATCH semantics
    - keep projection as read path
-5. Shopping list compatibility:
+4. Shopping list compatibility:
    - add events for pantry/manual/bulk behavior if retained
 
 This order keeps the first phase focused on backend contract stability before
@@ -184,3 +179,7 @@ iOS feature parity work begins.
 - API parity matrix exists: complete.
 - Every active `MealPlanner/src/app/api/**/route.ts` file has a target status: complete.
 - First backend implementation slice is selected: complete.
+
+## Progress Log
+
+- 2026-06-10: Household profile/preferences migrated to `GET/PUT /households/{householdId}/profile` with RLS-backed household ownership, OpenAPI operations, and tests.

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex, index, integer, date, jsonb, boolean } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex, index, integer, date, jsonb, boolean, primaryKey } from 'drizzle-orm/pg-core'
 
 export const householdMembershipRole = pgEnum('household_membership_role', ['owner', 'member'])
 export const householdMembershipStatus = pgEnum('household_membership_status', ['active', 'removed'])
@@ -153,4 +153,13 @@ export const recipes = pgTable('recipes', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('recipes_household_updated_idx').on(table.householdId, table.updatedAt),
+])
+
+export const userSavedRecipes = pgTable('user_saved_recipes', {
+  userId: uuid('user_id').notNull(),
+  recipeId: uuid('recipe_id').notNull().references(() => recipes.id, { onDelete: 'cascade' }),
+  savedAt: timestamp('saved_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.recipeId], name: 'user_saved_recipes_pk' }),
+  index('user_saved_recipes_user_saved_at_idx').on(table.userId, table.savedAt),
 ])

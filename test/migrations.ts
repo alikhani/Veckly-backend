@@ -27,10 +27,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
   const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
-    select enumlabel as exists
-    from pg_enum
-    where enumtypid = 'public.shopping_list_event_type'::regtype
-      and enumlabel = 'shopping_list_cleared'
+    select to_regclass('public.user_saved_recipes') as exists
   `)
   if (latestMarker?.exists) return
 
@@ -74,6 +71,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert on "shopping_list_events" to authenticated;
     grant select, insert, update on "shopping_list_projections" to authenticated;
     grant select, insert, update on "recipes" to authenticated;
+    grant select, insert, delete on "user_saved_recipes" to authenticated;
     grant select, insert, update on "household_profiles" to authenticated;
     grant select, insert, update, delete on "household_active_weeks" to authenticated;
   `))

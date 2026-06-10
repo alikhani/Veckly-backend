@@ -41,6 +41,10 @@ Public OpenAPI routes:
 | POST | `/households/{householdId}/recipes` | `createRecipe` | Household recipes CRUD foundation. |
 | GET | `/households/{householdId}/recipes/{recipeId}` | `getRecipe` | Household recipes CRUD foundation. |
 | PATCH | `/households/{householdId}/recipes/{recipeId}` | `updateRecipe` | Includes archive via `isArchived`. |
+| GET | `/recipes/public` | `listPublicRecipes` | Community recipe search; excludes caller households. |
+| GET | `/recipes/saved` | `listSavedRecipes` | Current user's saved/bookmarked recipes. |
+| POST | `/recipes/{recipeId}/save` | `saveRecipe` | Idempotent save for readable recipes. |
+| DELETE | `/recipes/{recipeId}/save` | `unsaveRecipe` | Idempotent unsave. |
 
 Internal strangle routes already present:
 
@@ -127,15 +131,15 @@ Internal strangle routes already present:
 
 | MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
 |---|---|---|---|---|---|---|
-| GET `/api/custom-recipes` | List custom/family recipes. | `GET /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend has CRUD list but not MealPlanner response compatibility, built-in/fork/bookmark semantics. |
-| POST `/api/custom-recipes` | Create custom recipe, including fork support. | `POST /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend can create recipe but lacks fork lineage/public/community save behavior. |
+| GET `/api/custom-recipes` | List custom/family recipes. | `GET /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend has household CRUD list, but not MealPlanner search response mapping or fork-lineage fields. |
+| POST `/api/custom-recipes` | Create custom recipe, including fork support. | `POST /households/{householdId}/recipes`. | required | RLS recipes | partial | Backend can create recipe but lacks fork lineage fields and premium gate for publishing. |
 | GET `/api/custom-recipes/[id]` | Get custom recipe detail. | `GET /households/{householdId}/recipes/{recipeId}`. | required | RLS recipes | partial | Backend can read household recipe; historical compatibility needs mapping. |
 | PATCH `/api/custom-recipes/[id]` | Edit recipe. | `PATCH /households/{householdId}/recipes/{recipeId}`. | required | RLS recipes | partial | Backend has basic update. Need MealPlanner validation and field mapping parity. |
 | PATCH `/api/custom-recipes/[id]/archive` | Archive recipe. | `PATCH /households/{householdId}/recipes/{recipeId}` with `isArchived`. | required | RLS recipes | partial | Backend supports archive via update. Add compatibility route only if web migration needs it. |
-| GET `/api/recipes/public` | Search public community recipes. | TBD `/recipes/public` or `/households/{householdId}/recipes/public-search`. | required | public + RLS exclusions | missing | Backend tests mention public visibility at domain level, but no OpenAPI search route. |
-| GET `/api/recipes/saved` | List saved/bookmarked recipes. | TBD `/households/{householdId}/recipes/saved`. | required | user scoped | missing | Move with bookmarks. |
-| POST `/api/recipes/[id]/save` | Save/bookmark community recipe. | TBD. | required | user scoped | missing | Move with bookmarks. |
-| DELETE `/api/recipes/[id]/save` | Remove saved/bookmarked recipe. | TBD. | required | user scoped | missing | Move with bookmarks. |
+| GET `/api/recipes/public` | Search public community recipes. | `GET /recipes/public?q=...`. | required | public + RLS exclusions | migrated | Returns `{ recipes }`, requires non-blank query, caps at 120 chars, excludes caller households, limits to non-archived public `user_created` recipes. |
+| GET `/api/recipes/saved` | List saved/bookmarked recipes. | `GET /recipes/saved`. | required | user scoped + recipe RLS | migrated | Backed by `user_saved_recipes`; archived saved recipes are hidden. |
+| POST `/api/recipes/[id]/save` | Save/bookmark community recipe. | `POST /recipes/{recipeId}/save`. | required | user scoped + recipe RLS | migrated | Idempotent; saves only recipes readable by the caller. Non-readable recipe returns not found. |
+| DELETE `/api/recipes/[id]/save` | Remove saved/bookmarked recipe. | `DELETE /recipes/{recipeId}/save`. | required | user scoped | migrated | Idempotent unsave for current user. |
 | POST `/api/recipes/[id]/translate` | AI translate and cache recipe translation. | TBD `/recipes/{id}/translate`. | required | recipe visibility/RLS | missing | Move with AI/translation slice. |
 | POST `/api/recipes/fill-in` | AI fill-in title-only recipe details. | TBD `/recipes/fill-in`. | required | user scoped | missing | Move with AI slice. |
 | POST `/api/recipes/import-from-url` | Fetch URL, structured-data extraction, AI fallback, SSRF guard/rate limit. | TBD `/recipes/import-from-url`. | required | user scoped | missing | Move with URL import slice. |
@@ -161,9 +165,9 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Recipes/public-community parity, or week-history parity:
-   - recipes unblock iOS library/detail/edit flows
+1. Week-history parity, or recipe fork-lineage/premium publish parity:
    - week history unblocks active-week rollover and web strangler confidence
+   - fork-lineage/premium publish closes the remaining custom recipe gaps
 
 This order keeps the first phase focused on backend contract stability before
 iOS feature parity work begins.
@@ -181,3 +185,4 @@ iOS feature parity work begins.
 - 2026-06-10: Active week pointer added as `GET/PUT/DELETE /households/{householdId}/active-week`, backed by `household_active_weeks` with active-membership RLS.
 - 2026-06-10: Week-plan event vocabulary expanded beyond `week_started`/`meal_assigned`: planning request update, unassign, lock/unlock, move, skip/unskip, servings change, and clear. Projection remains the read path.
 - 2026-06-10: Shopping-state compatibility added as `GET/PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state`, with checked items, pantry stock, clear semantics, stale-write conflicts, OpenAPI updates, and iOS client regeneration.
+- 2026-06-10: Recipe community/saved parity added: `GET /recipes/public`, `GET /recipes/saved`, `POST/DELETE /recipes/{recipeId}/save`, plus `user_saved_recipes` RLS table and iOS client regeneration.

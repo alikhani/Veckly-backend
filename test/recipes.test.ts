@@ -1,8 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { createDb } from '../src/db.js'
-import { households, householdMemberships, recipes } from '../src/schema.js'
-import { createRecipe, listRecipes, getRecipe, updateRecipe } from '../src/recipes.js'
+import { households, householdMemberships, recipes, userSavedRecipes } from '../src/schema.js'
+import { createRecipe, listRecipes, getRecipe, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -33,6 +33,7 @@ describeWithDb('Recipes + RLS', () => {
   }
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "user_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -49,6 +50,7 @@ describeWithDb('Recipes + RLS', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "user_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -128,6 +130,24 @@ describeWithDb('Recipes + RLS', () => {
 
       expect(rows).toHaveLength(0)
     })
+
+    it('searches public community recipes and excludes the caller household recipes', async () => {
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Family Pasta', isPublic: true })
+      const publicOther = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Pasta', isPublic: true })
+      await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Stew', isPublic: true })
+
+      const results = await listPublicRecipes(db, fakeAccessToken(userA), userA, 'pasta')
+
+      expect(results.map((recipe) => recipe.id)).toEqual([publicOther.id])
+      expect(results[0]?.title).toBe('Community Pasta')
+    })
+
+    it('returns no public recipes for blank or too-long queries', async () => {
+      await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Pasta', isPublic: true })
+
+      await expect(listPublicRecipes(db, fakeAccessToken(userA), userA, '')).resolves.toEqual([])
+      await expect(listPublicRecipes(db, fakeAccessToken(userA), userA, 'x'.repeat(121))).resolves.toEqual([])
+    })
   })
 
   describe('(c) CRUD happy paths', () => {
@@ -198,6 +218,54 @@ describeWithDb('Recipes + RLS', () => {
       expect(withoutArchived).toHaveLength(0)
       expect(withArchived).toHaveLength(1)
       expect(withArchived[0]?.isArchived).toBe(true)
+    })
+  })
+
+  describe('(d) saved recipes', () => {
+    it('saves readable public recipes idempotently and lists them newest first', async () => {
+      const first = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Pasta', isPublic: true })
+      const second = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Tacos', isPublic: true })
+
+      await expect(saveRecipe(db, fakeAccessToken(userA), userA, first.id)).resolves.toBe('saved')
+      await expect(saveRecipe(db, fakeAccessToken(userA), userA, first.id)).resolves.toBe('saved')
+      await expect(saveRecipe(db, fakeAccessToken(userA), userA, second.id)).resolves.toBe('saved')
+
+      await db
+        .update(userSavedRecipes)
+        .set({ savedAt: new Date('2026-06-01T10:00:00.000Z') })
+        .where(and(eq(userSavedRecipes.userId, userA), eq(userSavedRecipes.recipeId, first.id)))
+      await db
+        .update(userSavedRecipes)
+        .set({ savedAt: new Date('2026-06-01T11:00:00.000Z') })
+        .where(and(eq(userSavedRecipes.userId, userA), eq(userSavedRecipes.recipeId, second.id)))
+
+      const rows = await db.select().from(userSavedRecipes).where(eq(userSavedRecipes.userId, userA))
+      expect(rows).toHaveLength(2)
+
+      const saved = await listSavedRecipes(db, fakeAccessToken(userA), userA)
+      expect(saved.map((recipe) => recipe.id)).toEqual([second.id, first.id])
+    })
+
+    it('does not save a private cross-household recipe because it is not readable through RLS', async () => {
+      const privateOther = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, isPublic: false })
+
+      await expect(saveRecipe(db, fakeAccessToken(userA), userA, privateOther.id)).resolves.toBe('not_found')
+
+      const saved = await listSavedRecipes(db, fakeAccessToken(userA), userA)
+      expect(saved).toEqual([])
+    })
+
+    it('can unsave a recipe and hides archived saved recipes', async () => {
+      const publicOther = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, isPublic: true })
+      await saveRecipe(db, fakeAccessToken(userA), userA, publicOther.id)
+
+      await unsaveRecipe(db, fakeAccessToken(userA), userA, publicOther.id)
+      await expect(listSavedRecipes(db, fakeAccessToken(userA), userA)).resolves.toEqual([])
+
+      await saveRecipe(db, fakeAccessToken(userA), userA, publicOther.id)
+      await updateRecipe(db, fakeAccessToken(userB), householdBId, publicOther.id, { isArchived: true })
+
+      await expect(listSavedRecipes(db, fakeAccessToken(userA), userA)).resolves.toEqual([])
     })
   })
 })

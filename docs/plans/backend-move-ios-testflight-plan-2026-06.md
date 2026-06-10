@@ -20,7 +20,7 @@ The order is deliberate:
 | Phase | Status | Notes |
 |---|---|---|
 | Phase 0 — Migration inventory | Complete | API parity matrix exists in `docs/migration/api-parity.md`; first implementation slice selected. |
-| Phase 1 — Backend parity foundation | In progress | Core OpenAPI/RLS loop is working. Household profile, member routes, active week pointer, week-plan event vocabulary, and shopping-state compatibility slices are complete. |
+| Phase 1 — Backend parity foundation | In progress | Core OpenAPI/RLS loop is working. Household profile, member routes, active week pointer, week-plan event vocabulary, shopping-state compatibility, and recipe community/saved slices are complete. |
 | Phase 2 — Backend product parity | Not started | Move remaining MealPlanner API behavior route by route. |
 | Phase 3 — Web strangler migration | Not started | Existing web app starts calling/proxying to `Veckly-backend`. |
 | Phase 4 — iOS foundation | In progress | `Veckly-ios` exists with generated OpenAPI client, tabs, week/shopping/settings foundations. Needs auth and full environment setup. |
@@ -250,3 +250,4 @@ Start here:
 - 2026-06-10: Phase 1 active week slice completed. Active week pointer added as `GET/PUT/DELETE /households/{householdId}/active-week`, backed by active-membership RLS; iOS client regenerated and compiled.
 - 2026-06-10: Phase 1 week-plan event vocabulary slice completed. Projection now folds planning request update, assign/unassign, lock/unlock, move, skip/unskip, servings change, and clear events; iOS client regenerated and compiled.
 - 2026-06-10: Phase 1 shopping-state compatibility slice completed. Added projection-backed `GET/PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state` for checked items, pantry stock, clear, and `expectedUpdatedAt` conflict handling; iOS client regenerated and compiled.
+- 2026-06-10: Phase 1 recipe community/saved slice completed. Added public recipe search, saved recipe listing, save/unsave operations, and `user_saved_recipes` RLS table; iOS client regenerated and compiled.

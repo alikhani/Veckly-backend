@@ -1,8 +1,8 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, desc } from 'drizzle-orm'
+import { and, desc, eq, ilike, inArray, not } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
-import { recipes } from './schema.js'
+import { householdMemberships, recipes, userSavedRecipes } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes ------------------------------------------------------------
@@ -78,6 +78,10 @@ const UpdateRecipeSchema = z.object({
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
 const RecipeParamsSchema = z.object({ householdId: z.string().uuid(), recipeId: z.string().uuid() })
 const ListQuerySchema = z.object({ includeArchived: z.enum(['true', 'false']).optional() })
+const PublicRecipeQuerySchema = z.object({ q: z.string().max(120).optional() })
+const PublicRecipeParamsSchema = z.object({ recipeId: z.string().uuid() })
+const RecipesEnvelopeSchema = z.object({ recipes: z.array(RecipeSchema) }).openapi('RecipesEnvelope')
+const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse')
 
 // --- Domain functions -------------------------------------------------------
 
@@ -209,6 +213,81 @@ export async function updateRecipe(
   })
 }
 
+export async function listPublicRecipes(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  search: string,
+) {
+  return withRls(db, accessToken, async (tx) => {
+    const normalizedSearch = search.trim()
+    if (!normalizedSearch || normalizedSearch.length > 120) return []
+
+    const membershipRows = await tx
+      .select({ householdId: householdMemberships.householdId })
+      .from(householdMemberships)
+      .where(eq(householdMemberships.userId, userId))
+    const householdIds = membershipRows.map((row) => row.householdId)
+
+    const conditions = [
+      eq(recipes.source, 'user_created' as const),
+      eq(recipes.isPublic, true),
+      eq(recipes.isArchived, false),
+      ilike(recipes.title, `%${normalizedSearch}%`),
+    ]
+    if (householdIds.length > 0) conditions.push(not(inArray(recipes.householdId, householdIds)))
+
+    const rows = await tx
+      .select()
+      .from(recipes)
+      .where(and(...conditions))
+      .orderBy(desc(recipes.updatedAt))
+      .limit(30)
+
+    return rows.map(toRecipeResponse)
+  })
+}
+
+export async function listSavedRecipes(db: Db, accessToken: string, userId: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const rows = await tx
+      .select({ recipe: recipes })
+      .from(userSavedRecipes)
+      .innerJoin(recipes, eq(recipes.id, userSavedRecipes.recipeId))
+      .where(and(eq(userSavedRecipes.userId, userId), eq(recipes.isArchived, false)))
+      .orderBy(desc(userSavedRecipes.savedAt))
+
+    return rows.map((row) => toRecipeResponse(row.recipe))
+  })
+}
+
+export async function saveRecipe(db: Db, accessToken: string, userId: string, recipeId: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [readableRecipe] = await tx
+      .select({ id: recipes.id })
+      .from(recipes)
+      .where(eq(recipes.id, recipeId))
+      .limit(1)
+
+    if (!readableRecipe) return 'not_found' as const
+
+    await tx
+      .insert(userSavedRecipes)
+      .values({ userId, recipeId })
+      .onConflictDoNothing()
+
+    return 'saved' as const
+  })
+}
+
+export async function unsaveRecipe(db: Db, accessToken: string, userId: string, recipeId: string) {
+  return withRls(db, accessToken, async (tx) => {
+    await tx
+      .delete(userSavedRecipes)
+      .where(and(eq(userSavedRecipes.userId, userId), eq(userSavedRecipes.recipeId, recipeId)))
+  })
+}
+
 // --- Routes -----------------------------------------------------------------
 
 const listRecipesRoute = createRoute({
@@ -271,10 +350,63 @@ const updateRecipeRoute = createRoute({
   },
 })
 
+const listPublicRecipesRoute = createRoute({
+  method: 'get',
+  path: '/recipes/public',
+  operationId: 'listPublicRecipes',
+  summary: 'Search public community recipes',
+  security: [{ bearerAuth: [] }],
+  request: { query: PublicRecipeQuerySchema },
+  responses: {
+    200: { description: 'Public recipes matching the search query', content: { 'application/json': { schema: RecipesEnvelopeSchema } } },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const listSavedRecipesRoute = createRoute({
+  method: 'get',
+  path: '/recipes/saved',
+  operationId: 'listSavedRecipes',
+  summary: "List the current user's saved recipes",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: { description: 'Saved recipes', content: { 'application/json': { schema: RecipesEnvelopeSchema } } },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const saveRecipeRoute = createRoute({
+  method: 'post',
+  path: '/recipes/{recipeId}/save',
+  operationId: 'saveRecipe',
+  summary: 'Save a readable recipe for the current user',
+  security: [{ bearerAuth: [] }],
+  request: { params: PublicRecipeParamsSchema },
+  responses: {
+    201: { description: 'Recipe saved, or already saved', content: { 'application/json': { schema: OkResponseSchema } } },
+    404: { description: 'Recipe not found or not readable by caller' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const unsaveRecipeRoute = createRoute({
+  method: 'delete',
+  path: '/recipes/{recipeId}/save',
+  operationId: 'unsaveRecipe',
+  summary: 'Remove a recipe from the current user saved list',
+  security: [{ bearerAuth: [] }],
+  request: { params: PublicRecipeParamsSchema },
+  responses: {
+    200: { description: 'Recipe unsaved, or was not saved', content: { 'application/json': { schema: OkResponseSchema } } },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
 export function buildRecipesRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/households/*', requireAuth)
+  app.use('/recipes/*', requireAuth)
 
   app.openapi(listRecipesRoute, async (c) => {
     const accessToken = c.get('accessToken')
@@ -308,6 +440,38 @@ export function buildRecipesRoutes(db: Db) {
     const recipe = await updateRecipe(db, accessToken, householdId, recipeId, body)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)
     return c.json(recipe, 200)
+  })
+
+  app.openapi(listPublicRecipesRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { q } = c.req.valid('query')
+    const list = await listPublicRecipes(db, accessToken, user.id, q ?? '')
+    return c.json({ recipes: list }, 200)
+  })
+
+  app.openapi(listSavedRecipesRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const list = await listSavedRecipes(db, accessToken, user.id)
+    return c.json({ recipes: list }, 200)
+  })
+
+  app.openapi(saveRecipeRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { recipeId } = c.req.valid('param')
+    const result = await saveRecipe(db, accessToken, user.id, recipeId)
+    if (result === 'not_found') return c.json({ error: 'Recipe not found' }, 404)
+    return c.json({ ok: true }, 201)
+  })
+
+  app.openapi(unsaveRecipeRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { recipeId } = c.req.valid('param')
+    await unsaveRecipe(db, accessToken, user.id, recipeId)
+    return c.json({ ok: true }, 200)
   })
 
   return app

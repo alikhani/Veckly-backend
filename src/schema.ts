@@ -57,7 +57,19 @@ export const householdInvites = pgTable('household_invites', {
   uniqueIndex('household_invites_token_idx').on(table.token),
 ])
 
-export const weekPlanEventType = pgEnum('week_plan_event_type', ['week_started', 'meal_assigned'])
+export const weekPlanEventType = pgEnum('week_plan_event_type', [
+  'week_started',
+  'planning_request_updated',
+  'meal_assigned',
+  'meal_unassigned',
+  'meal_locked',
+  'meal_unlocked',
+  'meal_moved',
+  'day_skipped',
+  'day_unskipped',
+  'servings_changed',
+  'week_plan_cleared',
+])
 
 export const weekPlanEvents = pgTable('week_plan_events', {
   id: uuid('id').primaryKey().defaultRandom(),

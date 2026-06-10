@@ -26,15 +26,23 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
-  const [latestMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_active_weeks') as exists`)
+  const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
+    select enumlabel as exists
+    from pg_enum
+    where enumtypid = 'public.week_plan_event_type'::regtype
+      and enumlabel = 'week_plan_cleared'
+  `)
   if (latestMarker?.exists) return
 
   const [baseMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.week_plan_projections') as exists`)
   const [profileMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_profiles') as exists`)
+  const [activeWeekMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_active_weeks') as exists`)
   const alreadyHasBaseMigrations = Boolean(baseMarker?.exists)
   const alreadyHasProfilesMigration = Boolean(profileMarker?.exists)
+  const alreadyHasActiveWeekMigration = Boolean(activeWeekMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasActiveWeekMigration && file < '0016_') continue
     if (alreadyHasProfilesMigration && file < '0015_') continue
     if (alreadyHasBaseMigrations && file < '0014_') continue
     const contents = fs.readFileSync(path.join(migrationsDir, file), 'utf8')

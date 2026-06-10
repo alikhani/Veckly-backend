@@ -247,3 +247,4 @@ Start here:
 - 2026-06-10: Phase 1 first slice completed. Household profile/preferences added as `GET/PUT /households/{householdId}/profile`, backed by `household_profiles` RLS table, OpenAPI generation, and iOS client regeneration.
 - 2026-06-10: Phase 1 member route slice completed. Public OpenAPI operations added for member list, role update, and member removal; iOS client regenerated and compiled.
 - 2026-06-10: Phase 1 active week slice completed. Active week pointer added as `GET/PUT/DELETE /households/{householdId}/active-week`, backed by active-membership RLS; iOS client regenerated and compiled.
+- 2026-06-10: Phase 1 week-plan event vocabulary slice completed. Projection now folds planning request update, assign/unassign, lock/unlock, move, skip/unskip, servings change, and clear events; iOS client regenerated and compiled.

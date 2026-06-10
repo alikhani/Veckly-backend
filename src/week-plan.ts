@@ -21,12 +21,50 @@ const CausedBySchema = z.discriminatedUnion('source', [
 ]).openapi('CausedBy')
 
 const dayOfWeek = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
+const WeekPlanEventTypeSchema = z.enum([
+  'week_started',
+  'planning_request_updated',
+  'meal_assigned',
+  'meal_unassigned',
+  'meal_locked',
+  'meal_unlocked',
+  'meal_moved',
+  'day_skipped',
+  'day_unskipped',
+  'servings_changed',
+  'week_plan_cleared',
+])
+
+const PrioritySchema = z.enum(['quick', 'budget', 'child-friendly', 'meal-prep', 'varied'])
+const PlanningDaySelectionSchema = z.object({
+  day: dayOfWeek,
+  servingsOverride: z.number().int().min(1).optional(),
+  occasion: z.enum(['standard', 'guests', 'treat']).optional(),
+  effortLevel: z.enum(['standard', 'busy']).optional(),
+  leftoversIntent: z.boolean().optional(),
+  lateEvening: z.boolean().optional(),
+  cookingTolerance: z.enum(['standard', 'relaxed']).optional(),
+})
+const PlanningRequestSchema = z.object({
+  household: z.object({
+    adults: z.number().int().min(1),
+    children: z.number().int().min(0),
+    priorities: z.array(PrioritySchema),
+    avoidIngredients: z.array(z.string()),
+  }),
+  selectedDays: z.array(PlanningDaySelectionSchema),
+})
 
 // Minimal lifecycle marker — this slice proves the append/fold/read mechanism,
 // not WeekStarted's eventual real shape (the design doc lists ~15 event types;
 // these two are enough to prove the pattern earns its keep).
 const WeekStartedPayloadSchema = z.object({
   eventType: z.literal('week_started'),
+})
+
+const PlanningRequestUpdatedPayloadSchema = z.object({
+  eventType: z.literal('planning_request_updated'),
+  request: PlanningRequestSchema,
 })
 
 // `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
@@ -39,9 +77,59 @@ const MealAssignedPayloadSchema = z.object({
   recipeRef: z.string().uuid(),
 })
 
+const MealUnassignedPayloadSchema = z.object({
+  eventType: z.literal('meal_unassigned'),
+  dayOfWeek,
+})
+
+const MealLockedPayloadSchema = z.object({
+  eventType: z.literal('meal_locked'),
+  dayOfWeek,
+})
+
+const MealUnlockedPayloadSchema = z.object({
+  eventType: z.literal('meal_unlocked'),
+  dayOfWeek,
+})
+
+const MealMovedPayloadSchema = z.object({
+  eventType: z.literal('meal_moved'),
+  fromDayOfWeek: dayOfWeek,
+  toDayOfWeek: dayOfWeek,
+})
+
+const DaySkippedPayloadSchema = z.object({
+  eventType: z.literal('day_skipped'),
+  dayOfWeek,
+})
+
+const DayUnskippedPayloadSchema = z.object({
+  eventType: z.literal('day_unskipped'),
+  dayOfWeek,
+})
+
+const ServingsChangedPayloadSchema = z.object({
+  eventType: z.literal('servings_changed'),
+  dayOfWeek,
+  servings: z.number().int().min(1),
+})
+
+const WeekPlanClearedPayloadSchema = z.object({
+  eventType: z.literal('week_plan_cleared'),
+})
+
 const WeekPlanEventPayloadSchema = z.discriminatedUnion('eventType', [
   WeekStartedPayloadSchema,
+  PlanningRequestUpdatedPayloadSchema,
   MealAssignedPayloadSchema,
+  MealUnassignedPayloadSchema,
+  MealLockedPayloadSchema,
+  MealUnlockedPayloadSchema,
+  MealMovedPayloadSchema,
+  DaySkippedPayloadSchema,
+  DayUnskippedPayloadSchema,
+  ServingsChangedPayloadSchema,
+  WeekPlanClearedPayloadSchema,
 ])
 
 const AppendWeekPlanEventRequestSchema = z.object({
@@ -55,7 +143,7 @@ const WeekPlanEventSchema = z.object({
   sequenceNumber: z.number().int(),
   occurredAt: z.string(),
   causedBy: CausedBySchema,
-  eventType: z.enum(['week_started', 'meal_assigned']),
+  eventType: WeekPlanEventTypeSchema,
   payload: z.record(z.string(), z.unknown()),
 }).openapi('WeekPlanEvent')
 
@@ -103,10 +191,24 @@ const WeekPlanSummarySchema = z.object({
 // types are scoped, would be premature.
 type TWeekPlanProjectionState = {
   weekStarted: boolean
-  meals: Partial<Record<z.infer<typeof dayOfWeek>, { recipeRef: string }>>
+  request: z.infer<typeof PlanningRequestSchema> | null
+  meals: Partial<Record<z.infer<typeof dayOfWeek>, { recipeRef: string; servings?: number }>>
+  lockedDays: z.infer<typeof dayOfWeek>[]
+  skippedDays: z.infer<typeof dayOfWeek>[]
 }
 
-const emptyProjectionState = (): TWeekPlanProjectionState => ({ weekStarted: false, meals: {} })
+const emptyProjectionState = (): TWeekPlanProjectionState => ({
+  weekStarted: false,
+  request: null,
+  meals: {},
+  lockedDays: [],
+  skippedDays: [],
+})
+
+function toggleSortedDay(days: z.infer<typeof dayOfWeek>[], day: z.infer<typeof dayOfWeek>, enabled: boolean) {
+  const next = enabled ? [...new Set([...days, day])] : days.filter((entry) => entry !== day)
+  return orderedDays.filter((entry) => next.includes(entry))
+}
 
 function foldEventIntoProjection(
   state: TWeekPlanProjectionState,
@@ -115,8 +217,54 @@ function foldEventIntoProjection(
   switch (payload.eventType) {
     case 'week_started':
       return { ...state, weekStarted: true }
+    case 'planning_request_updated':
+      return { ...state, request: payload.request }
     case 'meal_assigned':
-      return { ...state, meals: { ...state.meals, [payload.dayOfWeek]: { recipeRef: payload.recipeRef } } }
+      return {
+        ...state,
+        meals: { ...state.meals, [payload.dayOfWeek]: { ...state.meals[payload.dayOfWeek], recipeRef: payload.recipeRef } },
+        skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false),
+      }
+    case 'meal_unassigned': {
+      const meals = { ...state.meals }
+      delete meals[payload.dayOfWeek]
+      return { ...state, meals, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false) }
+    }
+    case 'meal_locked':
+      return { ...state, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, true) }
+    case 'meal_unlocked':
+      return { ...state, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false) }
+    case 'meal_moved': {
+      const meal = state.meals[payload.fromDayOfWeek]
+      if (!meal) return state
+      const meals = { ...state.meals, [payload.toDayOfWeek]: meal }
+      delete meals[payload.fromDayOfWeek]
+      return {
+        ...state,
+        meals,
+        lockedDays: toggleSortedDay(toggleSortedDay(state.lockedDays, payload.fromDayOfWeek, false), payload.toDayOfWeek, state.lockedDays.includes(payload.fromDayOfWeek)),
+        skippedDays: toggleSortedDay(toggleSortedDay(state.skippedDays, payload.toDayOfWeek, false), payload.fromDayOfWeek, false),
+      }
+    }
+    case 'day_skipped': {
+      const meals = { ...state.meals }
+      delete meals[payload.dayOfWeek]
+      return {
+        ...state,
+        meals,
+        lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false),
+        skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, true),
+      }
+    }
+    case 'day_unskipped':
+      return { ...state, skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false) }
+    case 'servings_changed': {
+      const existing = state.meals[payload.dayOfWeek]
+      if (!existing) return state
+      return { ...state, meals: { ...state.meals, [payload.dayOfWeek]: { ...existing, servings: payload.servings } } }
+    }
+    case 'week_plan_cleared':
+      return emptyProjectionState()
   }
 }
 
@@ -195,7 +343,10 @@ function readProjectionState(state: unknown): TWeekPlanProjectionState {
   const candidate = state as Partial<TWeekPlanProjectionState> | null | undefined
   return {
     weekStarted: candidate?.weekStarted === true,
+    request: candidate?.request ?? null,
     meals: candidate?.meals && typeof candidate.meals === 'object' ? candidate.meals : {},
+    lockedDays: Array.isArray(candidate?.lockedDays) ? candidate.lockedDays : [],
+    skippedDays: Array.isArray(candidate?.skippedDays) ? candidate.skippedDays : [],
   }
 }
 
@@ -244,11 +395,12 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       days: orderedDays.map((dayOfWeek, index) => {
         const meal = projectionState.meals[dayOfWeek]
         const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
+        const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
 
         return {
           dayOfWeek,
           date: addDays(weekStartDate, index),
-          state: recipe ? 'planned' as const : 'empty' as const,
+          state,
           recipe: recipe ? {
             id: recipe.id,
             title: recipe.title,
@@ -295,7 +447,7 @@ export function buildWeekPlanRoutes(db: Db) {
         sequenceNumber: event.sequenceNumber,
         occurredAt: event.occurredAt.toISOString(),
         causedBy: event.causedBy as z.infer<typeof CausedBySchema>,
-        eventType: event.eventType as 'week_started' | 'meal_assigned',
+        eventType: event.eventType as z.infer<typeof WeekPlanEventTypeSchema>,
         payload: event.payload as Record<string, unknown>,
       },
       201,

@@ -60,10 +60,22 @@ describeWithDb('Week-plan event log + projection', () => {
   }
 
   const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
+  type TWeekPlanEventType =
+    | 'week_started'
+    | 'planning_request_updated'
+    | 'meal_assigned'
+    | 'meal_unassigned'
+    | 'meal_locked'
+    | 'meal_unlocked'
+    | 'meal_moved'
+    | 'day_skipped'
+    | 'day_unskipped'
+    | 'servings_changed'
+    | 'week_plan_cleared'
 
   async function appendAsUser(
     userId: string,
-    args: { householdId: string; sequenceNumber: number; eventType: 'week_started' | 'meal_assigned'; payload: Record<string, unknown> },
+    args: { householdId: string; sequenceNumber: number; eventType: TWeekPlanEventType; payload: Record<string, unknown> },
   ) {
     return asUser(userId, async (tx) => {
       const [event] = await tx
@@ -107,7 +119,7 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   describe('(b) append + projection-update is genuinely atomic', () => {
-    async function appendViaWritePath(args: { householdId: string; sequenceNumber: number; eventType: 'week_started' | 'meal_assigned'; payload: Record<string, unknown> }) {
+    async function appendViaWritePath(args: { householdId: string; sequenceNumber: number; eventType: TWeekPlanEventType; payload: Record<string, unknown> }) {
       // Mirrors appendWeekPlanEvent's shape without importing the route's
       // private helper — runs the same insert-then-fold sequence against one
       // transaction so atomicity can be exercised and broken deliberately.
@@ -158,7 +170,13 @@ describeWithDb('Week-plan event log + projection', () => {
 
       expect(event).toBeDefined()
       expect(projection).toBeDefined()
-      expect(projection!.state).toEqual({ weekStarted: true, meals: { monday: { recipeRef: 'recipe-123' } } })
+      expect(projection!.state).toEqual({
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: 'recipe-123' } },
+        lockedDays: [],
+        skippedDays: [],
+      })
     })
 
     it('rolls back the event insert if the projection step fails — never one without the other', async () => {
@@ -203,7 +221,13 @@ describeWithDb('Week-plan event log + projection', () => {
       // ...but seed the projection directly (bypassing the write path) with a
       // deliberately contradictory state. If the read path ever replayed the
       // log, this assertion would be impossible to satisfy.
-      const seededState: TWeekPlanProjectionState = { weekStarted: true, meals: { tuesday: { recipeRef: 'recipe-from-projection' } } }
+      const seededState: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { tuesday: { recipeRef: 'recipe-from-projection' } },
+        lockedDays: [],
+        skippedDays: [],
+      }
       await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: seededState })
 
       const [projection] = await asUser(userA, (tx) =>
@@ -258,7 +282,83 @@ describeWithDb('Week-plan event log + projection', () => {
     })
   })
 
-  describe('(d) iOS summary read model', () => {
+  describe('(d) week-plan event vocabulary', () => {
+    const planningRequest = {
+      household: { adults: 2, children: 1, priorities: ['quick' as const], avoidIngredients: ['nuts'] },
+      selectedDays: [
+        { day: 'monday' as const, effortLevel: 'busy' as const },
+        { day: 'tuesday' as const },
+      ],
+    }
+
+    async function appendVocabularyEvent(args: { eventType: TWeekPlanEventType; payload: Record<string, unknown> }) {
+      return asUser(userA, async (tx) => {
+        const [event] = await tx
+          .insert(weekPlanEvents)
+          .values({
+            householdId: householdAId,
+            weekStartDate,
+            sequenceNumber: 1,
+            causedBy: userCausedBy(userA),
+            eventType: args.eventType,
+            payload: args.payload,
+          })
+          .returning()
+
+        const nextState = foldEventIntoProjection(emptyProjectionState(), { eventType: args.eventType, ...args.payload } as never)
+        await tx.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: nextState })
+        return event!
+      })
+    }
+
+    it('folds request, assignment, lock, servings, skip, move, unassign and clear events', () => {
+      const afterRequest = foldEventIntoProjection(emptyProjectionState(), {
+        eventType: 'planning_request_updated',
+        request: planningRequest,
+      })
+      expect(afterRequest.request).toEqual(planningRequest)
+
+      const afterAssign = foldEventIntoProjection(afterRequest, {
+        eventType: 'meal_assigned',
+        dayOfWeek: 'monday',
+        recipeRef: '11111111-1111-1111-1111-111111111111',
+      })
+      expect(afterAssign.meals.monday).toEqual({ recipeRef: '11111111-1111-1111-1111-111111111111' })
+
+      const afterLock = foldEventIntoProjection(afterAssign, { eventType: 'meal_locked', dayOfWeek: 'monday' })
+      expect(afterLock.lockedDays).toEqual(['monday'])
+
+      const afterServings = foldEventIntoProjection(afterLock, { eventType: 'servings_changed', dayOfWeek: 'monday', servings: 5 })
+      expect(afterServings.meals.monday).toEqual({ recipeRef: '11111111-1111-1111-1111-111111111111', servings: 5 })
+
+      const afterMove = foldEventIntoProjection(afterServings, { eventType: 'meal_moved', fromDayOfWeek: 'monday', toDayOfWeek: 'tuesday' })
+      expect(afterMove.meals.monday).toBeUndefined()
+      expect(afterMove.meals.tuesday).toEqual({ recipeRef: '11111111-1111-1111-1111-111111111111', servings: 5 })
+      expect(afterMove.lockedDays).toEqual(['tuesday'])
+
+      const afterSkip = foldEventIntoProjection(afterMove, { eventType: 'day_skipped', dayOfWeek: 'tuesday' })
+      expect(afterSkip.meals.tuesday).toBeUndefined()
+      expect(afterSkip.lockedDays).toEqual([])
+      expect(afterSkip.skippedDays).toEqual(['tuesday'])
+
+      const afterUnskip = foldEventIntoProjection(afterSkip, { eventType: 'day_unskipped', dayOfWeek: 'tuesday' })
+      expect(afterUnskip.skippedDays).toEqual([])
+
+      const cleared = foldEventIntoProjection(afterUnskip, { eventType: 'week_plan_cleared' })
+      expect(cleared).toEqual(emptyProjectionState())
+    })
+
+    it('writes the expanded event vocabulary through the append-and-fold path', async () => {
+      await appendVocabularyEvent({
+        eventType: 'planning_request_updated',
+        payload: { request: planningRequest },
+      })
+      const [projection] = await db.select().from(weekPlanProjections).where(eq(weekPlanProjections.householdId, householdAId))
+      expect((projection?.state as TWeekPlanProjectionState | undefined)?.request).toEqual(planningRequest)
+    })
+  })
+
+  describe('(e) iOS summary read model', () => {
     const baseRecipe = {
       title: 'Monday Pasta',
       description: 'Fast family pasta',
@@ -298,7 +398,10 @@ describeWithDb('Week-plan event log + projection', () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
       const state: TWeekPlanProjectionState = {
         weekStarted: true,
+        request: null,
         meals: { monday: { recipeRef: recipe.id } },
+        lockedDays: [],
+        skippedDays: [],
       }
       await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
 
@@ -318,6 +421,21 @@ describeWithDb('Week-plan event log + projection', () => {
           tags: ['weekday'],
         },
       })
+    })
+
+    it('renders skipped days from the projection without requiring a recipe', async () => {
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: {},
+        lockedDays: [],
+        skippedDays: ['wednesday'],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
     })
 
     it('does not expose another household summary across RLS', async () => {

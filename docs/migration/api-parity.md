@@ -96,8 +96,8 @@ Internal strangle routes already present:
 |---|---|---|---|---|---|---|
 | GET `/api/households/[id]/active-plan` | Read current active plan state, week-aware fallback. | `GET /households/{householdId}/week-plans/{weekStartDate}/summary` plus raw projection. | required | RLS projection | partial | Backend has iOS summary only. Need full state contract or web adapter. |
 | PATCH `/api/households/[id]/active-plan` | OCC write/clear active plan, sync to week history, premium gate. | Event routes under `/week-plans/{weekStartDate}/events`. | required | RLS event append | partial | Backend only supports `week_started` and `meal_assigned`. Need full event vocabulary and premium gate. |
-| GET `/api/households/[id]/active-week` | Read household active week pointer. | TBD `/households/{householdId}/active-week`. | required | RLS household state | missing | Needed for web parity and likely iOS week navigation. |
-| PATCH `/api/households/[id]/active-week` | Set/clear active week with OCC. | TBD `/households/{householdId}/active-week` or household event stream. | required | RLS household state | missing | Implement after deciding event-stream vs CRUD shape for active week. |
+| GET `/api/households/[id]/active-week` | Read household active week pointer. | `GET /households/{householdId}/active-week`. | required | RLS active membership | migrated | Implemented as a small CRUD pointer resource, not an event stream. |
+| PATCH `/api/households/[id]/active-week` | Set/clear active week with OCC. | `PUT /households/{householdId}/active-week`; `DELETE /households/{householdId}/active-week`. | required | RLS active membership | partial | New backend omits MealPlanner's `expectedUpdatedAt` OCC shape; event/projection writes carry ordering elsewhere. |
 | GET `/api/households/[id]/weeks` | List week history with filters/pagination. | TBD `/households/{householdId}/week-plans`. | required | RLS week projections | missing | Move in week history slice. |
 | GET `/api/households/[id]/weeks/[weekStartDate]` | Read week history/detail. | Raw/summarized week-plan projection route. | required | RLS week projection | partial | Backend can read projection but not MealPlanner history status/source metadata. |
 | PATCH `/api/households/[id]/weeks/[weekStartDate]` | Upsert draft/finalized week with OCC, source, timezone. | Event routes plus projection metadata TBD. | required | RLS event append/projection | missing | Requires full event vocabulary and projection metadata. |
@@ -159,13 +159,10 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Active week pointer:
-   - implement read/set/clear active week
-   - decide whether this is CRUD or a household event stream
-2. Week-plan event vocabulary expansion:
+1. Week-plan event vocabulary expansion:
    - add events required to replace active-plan PATCH semantics
    - keep projection as read path
-3. Shopping list compatibility:
+2. Shopping list compatibility:
    - add events for pantry/manual/bulk behavior if retained
 
 This order keeps the first phase focused on backend contract stability before
@@ -181,3 +178,4 @@ iOS feature parity work begins.
 
 - 2026-06-10: Household profile/preferences migrated to `GET/PUT /households/{householdId}/profile` with RLS-backed household ownership, OpenAPI operations, and tests.
 - 2026-06-10: Public household member routes added to OpenAPI: list members, update role, remove member. Response intentionally omits email until a user profile contract exists.
+- 2026-06-10: Active week pointer added as `GET/PUT/DELETE /households/{householdId}/active-week`, backed by `household_active_weeks` with active-membership RLS.

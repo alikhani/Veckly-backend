@@ -22,6 +22,15 @@ export const householdProfiles = pgTable('household_profiles', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+export const householdActiveWeeks = pgTable('household_active_weeks', {
+  householdId: uuid('household_id').primaryKey().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  timezone: text('timezone').notNull(),
+  updatedBy: uuid('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const householdMemberships = pgTable('household_memberships', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),

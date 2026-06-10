@@ -70,9 +70,9 @@ Internal strangle routes already present:
 | GET `/api/households` | Ensure personal household, list memberships. | Public: `GET /households/me`; internal: `GET /internal/households/me`. | required | RLS memberships | internal-proxy | Backend tests cover list/bootstrap. Decide whether public route should auto-bootstrap or keep explicit bootstrap. |
 | POST `/api/households` | Create named household for current user. | Internal: `POST /internal/households`; public target TBD `POST /households`. | required | RLS memberships | internal-proxy | Backend has domain function and internal proxy; add public OpenAPI operation if iOS needs create-household outside bootstrap. |
 | PATCH `/api/households/[id]` | Owner renames household. | Public: `PATCH /households/{id}`; internal: `PATCH /internal/households/:id`. | required | RLS owner update | partial | Backend tests cover owner/member/non-member. Response shape differs from MealPlanner `{ ok, householdId, name }`. |
-| GET `/api/households/[id]/members` | List household members with emails. | Internal: `GET /internal/households/:householdId/members`; public target TBD. | required | RLS membership | internal-proxy | Backend returns userId/role only; MealPlanner hydrates email separately. Need public contract for iOS member list. |
-| PATCH `/api/households/[id]/members/[userId]` | Owner changes role, preserves last-owner invariant. | Internal: `PATCH /internal/households/:householdId/members/:userId`; public target TBD. | required | RLS + owner policy | internal-proxy | Backend tests cover role update invariants. Add public OpenAPI operation. |
-| DELETE `/api/households/[id]/members/[userId]` | Owner removes member, preserves last-owner invariant. | Internal: `DELETE /internal/households/:householdId/members/:userId`; public target TBD. | required | RLS + owner policy | internal-proxy | Backend tests cover remove-member invariants. Add public OpenAPI operation. |
+| GET `/api/households/[id]/members` | List household members with emails. | `GET /households/{householdId}/members`. | required | RLS membership | migrated | Backend public contract returns `userId` and `role`; email remains web-side/compat concern until user profile contract exists. |
+| PATCH `/api/households/[id]/members/[userId]` | Owner changes role, preserves last-owner invariant. | `PATCH /households/{householdId}/members/{userId}`. | required | RLS + owner policy | migrated | Backend tests cover role update invariants; public route added to OpenAPI. |
+| DELETE `/api/households/[id]/members/[userId]` | Owner removes member, preserves last-owner invariant. | `DELETE /households/{householdId}/members/{userId}`. | required | RLS + owner policy | migrated | Backend tests cover remove-member invariants; public route added to OpenAPI. |
 
 ### Household Profile and Preferences
 
@@ -159,16 +159,13 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Public member-management routes:
-   - expose list/update/remove members in OpenAPI
-   - decide whether to include email in backend contract
-2. Active week pointer:
+1. Active week pointer:
    - implement read/set/clear active week
    - decide whether this is CRUD or a household event stream
-3. Week-plan event vocabulary expansion:
+2. Week-plan event vocabulary expansion:
    - add events required to replace active-plan PATCH semantics
    - keep projection as read path
-4. Shopping list compatibility:
+3. Shopping list compatibility:
    - add events for pantry/manual/bulk behavior if retained
 
 This order keeps the first phase focused on backend contract stability before
@@ -183,3 +180,4 @@ iOS feature parity work begins.
 ## Progress Log
 
 - 2026-06-10: Household profile/preferences migrated to `GET/PUT /households/{householdId}/profile` with RLS-backed household ownership, OpenAPI operations, and tests.
+- 2026-06-10: Public household member routes added to OpenAPI: list members, update role, remove member. Response intentionally omits email until a user profile contract exists.

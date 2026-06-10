@@ -245,3 +245,4 @@ Start here:
 - 2026-06-10: Phase 0 started. API parity matrix created at `docs/migration/api-parity.md`; first recommended implementation slice is household profile/preferences, public member routes, active week pointer, week event expansion, then shopping-list compatibility.
 - 2026-06-10: Phase 0 completed. Next implementation work starts in Phase 1 with household profile/preferences as the first backend parity slice.
 - 2026-06-10: Phase 1 first slice completed. Household profile/preferences added as `GET/PUT /households/{householdId}/profile`, backed by `household_profiles` RLS table, OpenAPI generation, and iOS client regeneration.
+- 2026-06-10: Phase 1 member route slice completed. Public OpenAPI operations added for member list, role update, and member removal; iOS client regenerated and compiled.

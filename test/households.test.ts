@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
 import { bootstrapHousehold, createNamedHousehold, listHouseholdsForUser, renameHousehold } from '../src/households.js'
@@ -184,5 +185,22 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
 
     const orphans = await db.select().from(households).where(eq(households.name, 'My household'))
     expect(orphans).toHaveLength(0)
+  })
+
+  it('requires auth for public household member routes', async () => {
+    const app = buildApp(db)
+
+    const listResponse = await app.request(`/households/${householdAId}/members`)
+    expect(listResponse.status).toBe(401)
+
+    const updateResponse = await app.request(`/households/${householdAId}/members/${userB}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'member' }),
+    })
+    expect(updateResponse.status).toBe(401)
+
+    const deleteResponse = await app.request(`/households/${householdAId}/members/${userB}`, { method: 'DELETE' })
+    expect(deleteResponse.status).toBe(401)
   })
 })

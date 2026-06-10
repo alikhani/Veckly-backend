@@ -36,6 +36,19 @@ const RenameHouseholdResponseSchema = z.object({
   name: z.string(),
 }).openapi('RenameHouseholdResponse')
 
+const HouseholdMemberSchema = z.object({
+  userId: z.string().uuid(),
+  role: z.enum(['owner', 'member']),
+}).openapi('HouseholdMember')
+
+const ListHouseholdMembersResponseSchema = z.object({
+  members: z.array(HouseholdMemberSchema),
+}).openapi('ListHouseholdMembersResponse')
+
+const UpdateHouseholdMemberRoleRequestSchema = z.object({
+  role: z.enum(['owner', 'member']),
+}).openapi('UpdateHouseholdMemberRoleRequest')
+
 const renameHouseholdRoute = createRoute({
   method: 'patch',
   path: '/households/{id}',
@@ -77,6 +90,59 @@ const bootstrapMyHousehold = createRoute({
       content: { 'application/json': { schema: HouseholdSchema } },
     },
     401: { description: 'Missing or invalid session' },
+  },
+})
+
+const listHouseholdMembersRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/members',
+  operationId: 'listHouseholdMembers',
+  summary: "List a household's active members",
+  security: [{ bearerAuth: [] }],
+  request: { params: z.object({ householdId: z.string().uuid() }) },
+  responses: {
+    200: {
+      description: 'Active household members',
+      content: { 'application/json': { schema: ListHouseholdMembersResponseSchema } },
+    },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const updateHouseholdMemberRoleRoute = createRoute({
+  method: 'patch',
+  path: '/households/{householdId}/members/{userId}',
+  operationId: 'updateHouseholdMemberRole',
+  summary: "Update a household member's role",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ householdId: z.string().uuid(), userId: z.string().uuid() }),
+    body: { content: { 'application/json': { schema: UpdateHouseholdMemberRoleRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Updated household member',
+      content: { 'application/json': { schema: HouseholdMemberSchema } },
+    },
+    400: { description: 'Invalid role' },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Member not found or caller cannot see this household' },
+    409: { description: 'Cannot remove the last owner role' },
+  },
+})
+
+const removeHouseholdMemberRoute = createRoute({
+  method: 'delete',
+  path: '/households/{householdId}/members/{userId}',
+  operationId: 'removeHouseholdMember',
+  summary: 'Remove a household member',
+  security: [{ bearerAuth: [] }],
+  request: { params: z.object({ householdId: z.string().uuid(), userId: z.string().uuid() }) },
+  responses: {
+    204: { description: 'Member removed' },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Member not found or caller cannot see this household' },
+    409: { description: 'Cannot remove the last owner' },
   },
 })
 
@@ -396,6 +462,32 @@ export function buildHouseholdsRoutes(db: Db) {
     const result = await renameHousehold(db, accessToken, householdId, name)
     if (!result) return c.json({ error: 'Household not found.' } as never, 404)
     return c.json({ id: result.id, name: result.name }, 200)
+  })
+
+  app.openapi(listHouseholdMembersRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId } = c.req.valid('param')
+    const members = await listHouseholdMembers(db, accessToken, householdId)
+    return c.json({ members }, 200)
+  })
+
+  app.openapi(updateHouseholdMemberRoleRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, userId } = c.req.valid('param')
+    const { role } = c.req.valid('json')
+    const result = await updateMemberRole(db, accessToken, householdId, userId, role)
+    if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' } as never, 404)
+    if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' } as never, 409)
+    return c.json({ userId, role: result.role }, 200)
+  })
+
+  app.openapi(removeHouseholdMemberRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, userId } = c.req.valid('param')
+    const result = await removeMember(db, accessToken, householdId, userId)
+    if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' } as never, 404)
+    if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' } as never, 409)
+    return c.body(null, 204)
   })
 
   return app

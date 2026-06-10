@@ -3,8 +3,17 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
-import { households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
-import { foldEventIntoProjection, emptyProjectionState, getWeekPlanSummary, type TWeekPlanProjectionState } from '../src/week-plan.js'
+import { householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import {
+  finalizeWeekHistoryPlan,
+  foldEventIntoProjection,
+  emptyProjectionState,
+  getWeekHistoryPlan,
+  getWeekPlanSummary,
+  listWeekHistoryPlans,
+  upsertWeekHistoryPlan,
+  type TWeekPlanProjectionState,
+} from '../src/week-plan.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -27,6 +36,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
   beforeEach(async () => {
     await db.execute(sql`delete from "recipes"`)
+    await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -45,6 +55,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
   afterAll(async () => {
     await db.execute(sql`delete from "recipes"`)
+    await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -60,6 +71,18 @@ describeWithDb('Week-plan event log + projection', () => {
   }
 
   const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
+  const baseHistoryState = {
+    request: {
+      household: { adults: 2, children: 1, priorities: ['quick' as const], avoidIngredients: [] },
+      selectedDays: [
+        { day: 'monday' as const, occasion: 'standard' as const },
+        { day: 'friday' as const, occasion: 'treat' as const },
+      ],
+    },
+    replacements: {},
+    lockedDays: ['monday' as const],
+    skippedDays: ['friday' as const],
+  }
   type TWeekPlanEventType =
     | 'week_started'
     | 'planning_request_updated'
@@ -358,7 +381,120 @@ describeWithDb('Week-plan event log + projection', () => {
     })
   })
 
-  describe('(e) iOS summary read model', () => {
+  describe('(e) week history metadata', () => {
+    it('upserts, reads, and lists week history plans with ISO week identity', async () => {
+      const saved = await upsertWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, '2024-12-30', {
+        timezone: 'Europe/Stockholm',
+        state: baseHistoryState,
+        status: 'draft',
+        source: 'generated',
+      })
+
+      expect(saved.outcome).toBe('saved')
+      if (saved.outcome !== 'saved') throw new Error('Expected saved week history plan')
+      expect(saved.plan.weekNumber).toBe(1)
+      expect(saved.plan.weekYear).toBe(2025)
+
+      const detail = await getWeekHistoryPlan(db, fakeAccessToken(userA), householdAId, '2024-12-30')
+      expect(detail).toMatchObject({
+        householdId: householdAId,
+        weekStartDate: '2024-12-30',
+        weekNumber: 1,
+        weekYear: 2025,
+        timezone: 'Europe/Stockholm',
+        status: 'draft',
+        source: 'generated',
+        updatedBy: userA,
+      })
+
+      const list = await listWeekHistoryPlans(db, fakeAccessToken(userA), householdAId, { from: '2024-12-30', to: '2024-12-30' })
+      expect(list).toEqual([
+        expect.objectContaining({
+          weekStartDate: '2024-12-30',
+          weekNumber: 1,
+          weekYear: 2025,
+          plannedDays: ['monday', 'friday'],
+          request: baseHistoryState.request,
+          replacements: {},
+          skippedDays: ['friday'],
+        }),
+      ])
+    })
+
+    it('returns stale conflict details when expectedUpdatedAt does not match', async () => {
+      const created = await upsertWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, {
+        timezone: 'Europe/Stockholm',
+        state: baseHistoryState,
+        status: 'draft',
+        source: 'manual',
+      })
+      expect(created.outcome).toBe('saved')
+      if (created.outcome !== 'saved') throw new Error('Expected saved week history plan')
+
+      const stale = await upsertWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, {
+        expectedUpdatedAt: '2026-04-06T08:00:00.000Z',
+        timezone: 'Europe/Stockholm',
+        state: baseHistoryState,
+        status: 'finalized',
+        source: 'manual',
+      })
+
+      expect(stale).toEqual({ outcome: 'stale', updatedAt: created.plan.updatedAt })
+
+      const detail = await getWeekHistoryPlan(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(detail?.status).toBe('draft')
+    })
+
+    it('finalizes an existing week history plan and returns null for a missing plan', async () => {
+      await expect(finalizeWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate)).resolves.toBeNull()
+
+      await upsertWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, {
+        timezone: 'Europe/Stockholm',
+        state: baseHistoryState,
+        status: 'draft',
+        source: 'manual',
+      })
+
+      const finalized = await finalizeWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate)
+      expect(finalized?.status).toBe('finalized')
+      expect(finalized?.updatedBy).toBe(userA)
+    })
+
+    it('does not expose another household week history across RLS', async () => {
+      await upsertWeekHistoryPlan(db, fakeAccessToken(userB), userB, householdBId, weekStartDate, {
+        timezone: 'Europe/Stockholm',
+        state: baseHistoryState,
+        status: 'draft',
+        source: 'manual',
+      })
+
+      await expect(getWeekHistoryPlan(db, fakeAccessToken(userA), householdBId, weekStartDate)).resolves.toBeNull()
+      await expect(listWeekHistoryPlans(db, fakeAccessToken(userA), householdBId, {})).resolves.toEqual([])
+      await expect(
+        upsertWeekHistoryPlan(db, fakeAccessToken(userA), userA, householdBId, weekStartDate, {
+          timezone: 'Europe/Stockholm',
+          state: baseHistoryState,
+          status: 'draft',
+          source: 'manual',
+        }),
+      ).rejects.toThrow(/row-level security/i)
+    })
+
+    it('returns 401 from week history routes when no bearer token is supplied', async () => {
+      const app = buildApp(db)
+
+      const listResponse = await app.request(`/households/${householdAId}/week-plans`)
+      expect(listResponse.status).toBe(401)
+
+      const detailResponse = await app.request(`/households/${householdAId}/week-plans/${weekStartDate}/history`)
+      expect(detailResponse.status).toBe(401)
+
+      const finalizeResponse = await app.request(`/households/${householdAId}/week-plans/${weekStartDate}/finalize`, { method: 'POST' })
+      expect(finalizeResponse.status).toBe(401)
+    })
+  })
+
+  describe('(f) iOS summary read model', () => {
     const baseRecipe = {
       title: 'Monday Pasta',
       description: 'Fast family pasta',

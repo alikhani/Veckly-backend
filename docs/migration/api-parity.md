@@ -32,6 +32,10 @@ Public OpenAPI routes:
 | POST | `/households/{householdId}/week-plans/{weekStartDate}/events` | `appendWeekPlanEvent` | Event model proof slice. |
 | GET | `/households/{householdId}/week-plans/{weekStartDate}` | `getWeekPlan` | Raw projection read. |
 | GET | `/households/{householdId}/week-plans/{weekStartDate}/summary` | `getWeekPlanSummary` | iOS-friendly read model. |
+| GET | `/households/{householdId}/week-plans` | `listWeekHistoryPlans` | Persisted week history list/read model. |
+| GET | `/households/{householdId}/week-plans/{weekStartDate}/history` | `getWeekHistoryPlan` | Persisted week history detail. |
+| PATCH | `/households/{householdId}/week-plans/{weekStartDate}/history` | `upsertWeekHistoryPlan` | Persist/update week history state with OCC. |
+| POST | `/households/{householdId}/week-plans/{weekStartDate}/finalize` | `finalizeWeekHistoryPlan` | Finalize persisted week plan metadata. |
 | POST | `/households/{householdId}/shopping-lists/{weekStartDate}/events` | `appendShoppingListEvent` | Event model proof slice. |
 | GET | `/households/{householdId}/shopping-lists/{weekStartDate}` | `getShoppingList` | Raw projection read. |
 | GET | `/households/{householdId}/shopping-lists/{weekStartDate}/summary` | `getShoppingListSummary` | iOS-friendly grouped read model. |
@@ -104,10 +108,10 @@ Internal strangle routes already present:
 | PATCH `/api/households/[id]/active-plan` | OCC write/clear active plan, sync to week history, premium gate. | Event routes under `/week-plans/{weekStartDate}/events`. | required | RLS event append | partial | Event vocabulary now covers request update, assign/unassign, lock/unlock, move, skip/unskip, servings, and clear. Remaining gap: web compatibility adapter and premium gate. |
 | GET `/api/households/[id]/active-week` | Read household active week pointer. | `GET /households/{householdId}/active-week`. | required | RLS active membership | migrated | Implemented as a small CRUD pointer resource, not an event stream. |
 | PATCH `/api/households/[id]/active-week` | Set/clear active week with OCC. | `PUT /households/{householdId}/active-week`; `DELETE /households/{householdId}/active-week`. | required | RLS active membership | partial | New backend omits MealPlanner's `expectedUpdatedAt` OCC shape; event/projection writes carry ordering elsewhere. |
-| GET `/api/households/[id]/weeks` | List week history with filters/pagination. | TBD `/households/{householdId}/week-plans`. | required | RLS week projections | missing | Move in week history slice. |
-| GET `/api/households/[id]/weeks/[weekStartDate]` | Read week history/detail. | Raw/summarized week-plan projection route. | required | RLS week projection | partial | Backend can read projection but not MealPlanner history status/source metadata. |
-| PATCH `/api/households/[id]/weeks/[weekStartDate]` | Upsert draft/finalized week with OCC, source, timezone. | Event routes plus projection metadata TBD. | required | RLS event append/projection | missing | Requires full event vocabulary and projection metadata. |
-| POST `/api/households/[id]/weeks/[weekStartDate]/finalize` | Finalize week, premium gate. | TBD `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`. | required | RLS week projection | missing | Add finalization event or status transition. |
+| GET `/api/households/[id]/weeks` | List week history with filters/pagination. | `GET /households/{householdId}/week-plans`. | required | RLS week history table | migrated | Returns planned days, request, replacements, skipped days, source/status/timezone/updated metadata. Free-tier cutoff remains web/billing policy work. |
+| GET `/api/households/[id]/weeks/[weekStartDate]` | Read week history/detail. | `GET /households/{householdId}/week-plans/{weekStartDate}/history`. | required | RLS week history table | migrated | Returns `{ week }` with status/source/timezone/state metadata or `null`. |
+| PATCH `/api/households/[id]/weeks/[weekStartDate]` | Upsert draft/finalized week with OCC, source, timezone. | `PATCH /households/{householdId}/week-plans/{weekStartDate}/history`. | required | RLS week history table | migrated | Supports `expectedUpdatedAt`, status/source, timezone, state, ISO week number/year, and stale conflict response. Premium gate remains billing slice. |
+| POST `/api/households/[id]/weeks/[weekStartDate]/finalize` | Finalize week, premium gate. | `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`. | required | RLS week history table | partial | Finalizes existing persisted week metadata. Premium gate remains billing slice. |
 
 ### Shopping List
 
@@ -165,9 +169,9 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Week-history parity, or recipe fork-lineage/premium publish parity:
-   - week history unblocks active-week rollover and web strangler confidence
+1. Recipe fork-lineage/premium publish parity, or meal feedback/saved plans:
    - fork-lineage/premium publish closes the remaining custom recipe gaps
+   - meal feedback/saved plans unblock recommendation and template flows
 
 This order keeps the first phase focused on backend contract stability before
 iOS feature parity work begins.
@@ -186,3 +190,4 @@ iOS feature parity work begins.
 - 2026-06-10: Week-plan event vocabulary expanded beyond `week_started`/`meal_assigned`: planning request update, unassign, lock/unlock, move, skip/unskip, servings change, and clear. Projection remains the read path.
 - 2026-06-10: Shopping-state compatibility added as `GET/PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state`, with checked items, pantry stock, clear semantics, stale-write conflicts, OpenAPI updates, and iOS client regeneration.
 - 2026-06-10: Recipe community/saved parity added: `GET /recipes/public`, `GET /recipes/saved`, `POST/DELETE /recipes/{recipeId}/save`, plus `user_saved_recipes` RLS table and iOS client regeneration.
+- 2026-06-10: Week-history parity added: `GET /households/{householdId}/week-plans`, `GET/PATCH /households/{householdId}/week-plans/{weekStartDate}/history`, and `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`, backed by `household_week_plans` RLS table.

@@ -1,9 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { withRls } from './rls.js'
-import { households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -54,6 +54,15 @@ const PlanningRequestSchema = z.object({
   }),
   selectedDays: z.array(PlanningDaySelectionSchema),
 })
+
+const WeekHistoryStatusSchema = z.enum(['draft', 'finalized', 'archived'])
+const WeekHistorySourceSchema = z.enum(['generated', 'copied_from_previous', 'template_applied', 'manual'])
+const WeekHistoryStateSchema = z.object({
+  lockedDays: z.array(dayOfWeek).default([]),
+  skippedDays: z.array(dayOfWeek).default([]),
+  replacements: z.record(z.string(), z.unknown()).default({}),
+  request: PlanningRequestSchema,
+}).openapi('WeekHistoryState')
 
 // Minimal lifecycle marker — this slice proves the append/fold/read mechanism,
 // not WeekStarted's eventual real shape (the design doc lists ~15 event types;
@@ -158,6 +167,11 @@ const ParamsSchema = z.object({
   householdId: z.string().uuid(),
   weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
 })
+const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
+const WeekHistoryQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+})
 
 const WeekPlanSummaryRecipeSchema = z.object({
   id: z.string().uuid(),
@@ -182,6 +196,66 @@ const WeekPlanSummarySchema = z.object({
   updatedAt: z.string().nullable(),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
+
+const WeekHistoryPlanSchema = z.object({
+  householdId: z.string().uuid(),
+  weekStartDate: z.string(),
+  weekNumber: z.number().int(),
+  weekYear: z.number().int(),
+  timezone: z.string(),
+  state: WeekHistoryStateSchema,
+  status: WeekHistoryStatusSchema,
+  source: WeekHistorySourceSchema,
+  updatedBy: z.string().uuid(),
+  updatedAt: z.string(),
+}).openapi('WeekHistoryPlan')
+
+const WeekHistoryListItemSchema = z.object({
+  weekStartDate: z.string(),
+  weekNumber: z.number().int(),
+  weekYear: z.number().int(),
+  timezone: z.string(),
+  status: WeekHistoryStatusSchema,
+  source: WeekHistorySourceSchema,
+  updatedAt: z.string(),
+  updatedBy: z.string().uuid(),
+  plannedDays: z.array(dayOfWeek),
+  request: PlanningRequestSchema,
+  replacements: z.record(z.string(), z.unknown()),
+  skippedDays: z.array(dayOfWeek),
+}).openapi('WeekHistoryListItem')
+
+const WeekHistoryDetailSchema = z.object({
+  week: WeekHistoryPlanSchema.nullable(),
+}).openapi('WeekHistoryDetail')
+
+const UpsertWeekHistoryPlanSchema = z.object({
+  expectedUpdatedAt: z.string().nullable().optional(),
+  timezone: z.string().min(1),
+  state: WeekHistoryStateSchema,
+  status: WeekHistoryStatusSchema.default('draft'),
+  source: WeekHistorySourceSchema.default('manual'),
+}).openapi('UpsertWeekHistoryPlan')
+
+const UpsertWeekHistoryPlanResponseSchema = z.object({
+  ok: z.literal(true),
+  weekStartDate: z.string(),
+  weekNumber: z.number().int(),
+  weekYear: z.number().int(),
+  updatedAt: z.string(),
+}).openapi('UpsertWeekHistoryPlanResponse')
+
+const FinalizeWeekHistoryPlanResponseSchema = z.object({
+  ok: z.literal(true),
+  weekStartDate: z.string(),
+  status: z.literal('finalized'),
+  updatedAt: z.string().nullable(),
+}).openapi('FinalizeWeekHistoryPlanResponse')
+
+const StaleWeekHistoryPlanResponseSchema = z.object({
+  error: z.literal('STALE_WEEK_PLAN_STATE'),
+  updatedAt: z.string().nullable(),
+}).openapi('StaleWeekHistoryPlanResponse')
 
 // --- Projection fold --------------------------------------------------------
 //
@@ -331,12 +405,102 @@ const getWeekPlanSummaryRoute = createRoute({
   },
 })
 
+const listWeekHistoryPlansRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/week-plans',
+  operationId: 'listWeekHistoryPlans',
+  summary: "List a household's persisted week plans",
+  security: [{ bearerAuth: [] }],
+  request: { params: HouseholdParamsSchema, query: WeekHistoryQuerySchema },
+  responses: {
+    200: {
+      description: 'Week plans ordered by week start date descending',
+      content: { 'application/json': { schema: z.array(WeekHistoryListItemSchema) } },
+    },
+    400: { description: 'Invalid range' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const getWeekHistoryPlanRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/history',
+  operationId: 'getWeekHistoryPlan',
+  summary: 'Get persisted week-plan history metadata and state',
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'The persisted week plan, or null when absent',
+      content: { 'application/json': { schema: WeekHistoryDetailSchema } },
+    },
+    400: { description: 'Invalid week start date' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const upsertWeekHistoryPlanRoute = createRoute({
+  method: 'patch',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/history',
+  operationId: 'upsertWeekHistoryPlan',
+  summary: 'Persist or update week-plan history state',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ParamsSchema,
+    body: { content: { 'application/json': { schema: UpsertWeekHistoryPlanSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Week history plan persisted',
+      content: { 'application/json': { schema: UpsertWeekHistoryPlanResponseSchema } },
+    },
+    400: { description: 'Invalid request' },
+    409: {
+      description: 'The supplied expectedUpdatedAt value is stale',
+      content: { 'application/json': { schema: StaleWeekHistoryPlanResponseSchema } },
+    },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const finalizeWeekHistoryPlanRoute = createRoute({
+  method: 'post',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/finalize',
+  operationId: 'finalizeWeekHistoryPlan',
+  summary: 'Finalize a persisted week plan',
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'Week plan finalized',
+      content: { 'application/json': { schema: FinalizeWeekHistoryPlanResponseSchema } },
+    },
+    400: { description: 'Invalid week start date' },
+    404: { description: 'Week plan not found' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
 const orderedDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
 
 function addDays(yyyyMmDd: string, offset: number) {
   const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
   date.setUTCDate(date.getUTCDate() + offset)
   return date.toISOString().slice(0, 10)
+}
+
+function isMonday(yyyyMmDd: string) {
+  return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
+}
+
+function getIsoWeekIdentity(yyyyMmDd: string) {
+  const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
+  const day = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() + 4 - day)
+  const weekYear = date.getUTCFullYear()
+  const yearStart = new Date(Date.UTC(weekYear, 0, 1))
+  const weekNumber = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+  return { weekNumber, weekYear }
 }
 
 function readProjectionState(state: unknown): TWeekPlanProjectionState {
@@ -348,6 +512,152 @@ function readProjectionState(state: unknown): TWeekPlanProjectionState {
     lockedDays: Array.isArray(candidate?.lockedDays) ? candidate.lockedDays : [],
     skippedDays: Array.isArray(candidate?.skippedDays) ? candidate.skippedDays : [],
   }
+}
+
+function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {
+  return {
+    householdId: row.householdId,
+    weekStartDate: row.weekStartDate,
+    weekNumber: row.weekNumber,
+    weekYear: row.weekYear,
+    timezone: row.timezone,
+    state: row.state as z.infer<typeof WeekHistoryStateSchema>,
+    status: row.status,
+    source: row.source,
+    updatedBy: row.updatedBy,
+    updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
+function toWeekHistoryListItem(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryListItemSchema> {
+  const plan = toWeekHistoryPlanResponse(row)
+  return {
+    weekStartDate: plan.weekStartDate,
+    weekNumber: plan.weekNumber,
+    weekYear: plan.weekYear,
+    timezone: plan.timezone,
+    status: plan.status,
+    source: plan.source,
+    updatedAt: plan.updatedAt,
+    updatedBy: plan.updatedBy,
+    plannedDays: plan.state.request.selectedDays.map((day) => day.day),
+    request: plan.state.request,
+    replacements: plan.state.replacements,
+    skippedDays: plan.state.skippedDays,
+  }
+}
+
+export async function listWeekHistoryPlans(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  range: { from?: string; to?: string },
+) {
+  return withRls(db, accessToken, async (tx) => {
+    const conditions = [eq(householdWeekPlans.householdId, householdId)]
+    if (range.from) conditions.push(gte(householdWeekPlans.weekStartDate, range.from))
+    if (range.to) conditions.push(lte(householdWeekPlans.weekStartDate, range.to))
+
+    const rows = await tx
+      .select()
+      .from(householdWeekPlans)
+      .where(and(...conditions))
+      .orderBy(desc(householdWeekPlans.weekStartDate))
+
+    return rows.map(toWeekHistoryListItem)
+  })
+}
+
+export async function getWeekHistoryPlan(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(householdWeekPlans)
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    return row ? toWeekHistoryPlanResponse(row) : null
+  })
+}
+
+type TUpsertWeekHistoryPlanResult =
+  | { outcome: 'saved'; plan: z.infer<typeof WeekHistoryPlanSchema> }
+  | { outcome: 'stale'; updatedAt: string | null }
+
+export async function upsertWeekHistoryPlan(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string,
+  weekStartDate: string,
+  input: z.infer<typeof UpsertWeekHistoryPlanSchema>,
+): Promise<TUpsertWeekHistoryPlanResult> {
+  return withRls(db, accessToken, async (tx) => {
+    const [existing] = await tx
+      .select({ updatedAt: householdWeekPlans.updatedAt })
+      .from(householdWeekPlans)
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    const currentUpdatedAt = existing?.updatedAt.toISOString() ?? null
+    if (input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== currentUpdatedAt) {
+      return { outcome: 'stale', updatedAt: currentUpdatedAt }
+    }
+
+    const iso = getIsoWeekIdentity(weekStartDate)
+    const now = new Date()
+    const [row] = await tx
+      .insert(householdWeekPlans)
+      .values({
+        householdId,
+        weekStartDate,
+        weekNumber: iso.weekNumber,
+        weekYear: iso.weekYear,
+        timezone: input.timezone,
+        state: input.state,
+        status: input.status,
+        source: input.source,
+        updatedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [householdWeekPlans.householdId, householdWeekPlans.weekStartDate],
+        set: {
+          weekNumber: iso.weekNumber,
+          weekYear: iso.weekYear,
+          timezone: input.timezone,
+          state: input.state,
+          status: input.status,
+          source: input.source,
+          updatedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!row) throw new Error('Upsert did not return the persisted week history plan')
+    return { outcome: 'saved', plan: toWeekHistoryPlanResponse(row) }
+  })
+}
+
+export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [existing] = await tx
+      .select({ householdId: householdWeekPlans.householdId })
+      .from(householdWeekPlans)
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    if (!existing) return null
+
+    const [row] = await tx
+      .update(householdWeekPlans)
+      .set({ status: 'finalized', updatedBy: userId, updatedAt: new Date() })
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .returning()
+
+    return row ? toWeekHistoryPlanResponse(row) : null
+  })
 }
 
 export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
@@ -483,6 +793,60 @@ export function buildWeekPlanRoutes(db: Db) {
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
     return c.json(summary, 200)
+  })
+
+  app.openapi(listWeekHistoryPlansRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId } = c.req.valid('param')
+    const { from, to } = c.req.valid('query')
+
+    if ((from && !isMonday(from)) || (to && !isMonday(to))) return c.json({ error: 'INVALID_WEEK_RANGE' } as never, 400)
+
+    const plans = await listWeekHistoryPlans(db, accessToken, householdId, { from, to })
+    return c.json(plans, 200)
+  })
+
+  app.openapi(getWeekHistoryPlanRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, weekStartDate } = c.req.valid('param')
+
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+
+    const week = await getWeekHistoryPlan(db, accessToken, householdId, weekStartDate)
+    return c.json({ week }, 200)
+  })
+
+  app.openapi(upsertWeekHistoryPlanRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const body = c.req.valid('json')
+
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+
+    const result = await upsertWeekHistoryPlan(db, accessToken, user.id, householdId, weekStartDate, body)
+    if (result.outcome === 'stale') return c.json({ error: 'STALE_WEEK_PLAN_STATE', updatedAt: result.updatedAt }, 409)
+
+    return c.json({
+      ok: true,
+      weekStartDate: result.plan.weekStartDate,
+      weekNumber: result.plan.weekNumber,
+      weekYear: result.plan.weekYear,
+      updatedAt: result.plan.updatedAt,
+    }, 200)
+  })
+
+  app.openapi(finalizeWeekHistoryPlanRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+
+    const plan = await finalizeWeekHistoryPlan(db, accessToken, user.id, householdId, weekStartDate)
+    if (!plan) return c.json({ error: 'WEEK_PLAN_NOT_FOUND' } as never, 404)
+
+    return c.json({ ok: true, weekStartDate, status: 'finalized', updatedAt: plan.updatedAt }, 200)
   })
 
   return app

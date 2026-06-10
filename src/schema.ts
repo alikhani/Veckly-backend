@@ -93,6 +93,26 @@ export const weekPlanProjections = pgTable('week_plan_projections', {
   uniqueIndex('week_plan_projections_household_week_idx').on(table.householdId, table.weekStartDate),
 ])
 
+export const householdWeekPlanStatus = pgEnum('household_week_plan_status', ['draft', 'finalized', 'archived'])
+export const householdWeekPlanSource = pgEnum('household_week_plan_source', ['generated', 'copied_from_previous', 'template_applied', 'manual'])
+
+export const householdWeekPlans = pgTable('household_week_plans', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  weekNumber: integer('week_number').notNull(),
+  weekYear: integer('week_year').notNull(),
+  timezone: text('timezone').notNull(),
+  state: jsonb('state').notNull(),
+  status: householdWeekPlanStatus('status').notNull(),
+  source: householdWeekPlanSource('source').notNull(),
+  updatedBy: uuid('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('household_week_plans_household_week_idx').on(table.householdId, table.weekStartDate),
+  index('household_week_plans_household_week_number_idx').on(table.householdId, table.weekYear, table.weekNumber),
+  index('household_week_plans_updated_idx').on(table.updatedAt),
+])
+
 export const shoppingListEventType = pgEnum('shopping_list_event_type', [
   'list_started',
   'item_checked',

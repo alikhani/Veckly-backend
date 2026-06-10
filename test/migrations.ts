@@ -29,8 +29,8 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
     select enumlabel as exists
     from pg_enum
-    where enumtypid = 'public.week_plan_event_type'::regtype
-      and enumlabel = 'week_plan_cleared'
+    where enumtypid = 'public.shopping_list_event_type'::regtype
+      and enumlabel = 'shopping_list_cleared'
   `)
   if (latestMarker?.exists) return
 

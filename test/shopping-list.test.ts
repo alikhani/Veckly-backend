@@ -4,7 +4,14 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
 import { households, householdMemberships, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from '../src/schema.js'
-import { foldEventIntoProjection, emptyProjectionState, getShoppingListSummary, type TShoppingListProjectionState } from '../src/shopping-list.js'
+import {
+  foldEventIntoProjection,
+  emptyProjectionState,
+  getShoppingListState,
+  getShoppingListSummary,
+  replaceShoppingListState,
+  type TShoppingListProjectionState,
+} from '../src/shopping-list.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -65,7 +72,12 @@ describeWithDb('Shopping-list event log + projection', () => {
 
   async function appendAsUser(
     userId: string,
-    args: { householdId: string; sequenceNumber: number; eventType: 'list_started' | 'item_checked'; payload: Record<string, unknown> },
+    args: {
+      householdId: string
+      sequenceNumber: number
+      eventType: 'list_started' | 'item_checked' | 'shopping_state_replaced' | 'shopping_list_cleared'
+      payload: Record<string, unknown>
+    },
   ) {
     return asUser(userId, async (tx) => {
       const [event] = await tx
@@ -88,7 +100,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdBId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: {} },
+        state: { listStarted: true, checkedItems: {}, pantryStock: {} },
       })
 
       const rows = await asUser(userA, (tx) =>
@@ -109,7 +121,12 @@ describeWithDb('Shopping-list event log + projection', () => {
   })
 
   describe('(b) append + projection-update is genuinely atomic', () => {
-    async function appendViaWritePath(args: { householdId: string; sequenceNumber: number; eventType: 'list_started' | 'item_checked'; payload: Record<string, unknown> }) {
+    async function appendViaWritePath(args: {
+      householdId: string
+      sequenceNumber: number
+      eventType: 'list_started' | 'item_checked' | 'shopping_state_replaced' | 'shopping_list_cleared'
+      payload: Record<string, unknown>
+    }) {
       // Mirrors appendShoppingListEvent's shape without importing the route's
       // private helper — runs the same insert-then-fold sequence against one
       // transaction so atomicity can be exercised and broken deliberately.
@@ -160,7 +177,7 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(event).toBeDefined()
       expect(projection).toBeDefined()
-      expect(projection!.state).toEqual({ listStarted: true, checkedItems: { milk: true } })
+      expect(projection!.state).toEqual({ listStarted: true, checkedItems: { milk: true }, pantryStock: {} })
     })
 
     it('rolls back the event insert if the projection step fails — never one without the other', async () => {
@@ -205,7 +222,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       // ...but seed the projection directly (bypassing the write path) with a
       // deliberately contradictory state. If the read path ever replayed the
       // log, this assertion would be impossible to satisfy.
-      const seededState: TShoppingListProjectionState = { listStarted: true, checkedItems: { bread: false } }
+      const seededState: TShoppingListProjectionState = { listStarted: true, checkedItems: { bread: false }, pantryStock: {} }
       await db.insert(shoppingListProjections).values({ householdId: householdAId, weekStartDate, state: seededState })
 
       const [projection] = await asUser(userA, (tx) =>
@@ -222,7 +239,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdAId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: {} },
+        state: { listStarted: true, checkedItems: {}, pantryStock: {} },
       })
 
       const queries: string[] = []
@@ -260,7 +277,114 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
   })
 
-  describe('(d) iOS summary read model', () => {
+  describe('(d) shared shopping state compatibility', () => {
+    it('replaces checklist and pantry state through the projection-backed write path', async () => {
+      const result = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 } },
+      })
+
+      expect(result.outcome).toBe('updated')
+
+      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(state.state).toEqual({
+        checkedItems: ['rice:g', 'tomatoes:can'],
+        pantryStock: { 'rice:g': 100 },
+      })
+      expect(state.updatedAt).toEqual(result.updatedAt)
+
+      const [event] = await db.select().from(shoppingListEvents).where(eq(shoppingListEvents.householdId, householdAId))
+      expect(event!.eventType).toBe('shopping_state_replaced')
+      expect(event!.payload).toEqual({ state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 } } })
+    })
+
+    it('returns null state when no projection exists or after the state is cleared', async () => {
+      const missing = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(missing).toEqual({ state: null, updatedAt: null })
+
+      const created = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        state: { checkedItems: ['rice:g'], pantryStock: { 'rice:g': 100 } },
+      })
+      expect(created.outcome).toBe('updated')
+
+      const cleared = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        expectedUpdatedAt: created.updatedAt,
+        state: null,
+      })
+      expect(cleared).toEqual({ outcome: 'updated', updatedAt: null })
+
+      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(state).toEqual({ state: null, updatedAt: null })
+
+      const replacedAfterClear = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        expectedUpdatedAt: null,
+        state: { checkedItems: ['pasta:g'], pantryStock: {} },
+      })
+      expect(replacedAfterClear.outcome).toBe('updated')
+
+      const events = await db
+        .select({ eventType: shoppingListEvents.eventType, sequenceNumber: shoppingListEvents.sequenceNumber })
+        .from(shoppingListEvents)
+        .where(eq(shoppingListEvents.householdId, householdAId))
+        .orderBy(shoppingListEvents.sequenceNumber)
+
+      expect(events).toEqual([
+        { sequenceNumber: 1, eventType: 'shopping_state_replaced' },
+        { sequenceNumber: 2, eventType: 'shopping_list_cleared' },
+        { sequenceNumber: 3, eventType: 'shopping_state_replaced' },
+      ])
+    })
+
+    it('returns stale conflict details when expectedUpdatedAt does not match the projection', async () => {
+      const created = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        state: { checkedItems: ['rice:g'], pantryStock: {} },
+      })
+      expect(created.outcome).toBe('updated')
+
+      const stale = await replaceShoppingListState(db, fakeAccessToken(userA), {
+        householdId: householdAId,
+        weekStartDate,
+        causedBy: userCausedBy(userA),
+        expectedUpdatedAt: '2026-04-06T04:00:00.000Z',
+        state: { checkedItems: ['pasta:g'], pantryStock: { 'pasta:g': 250 } },
+      })
+
+      expect(stale).toEqual({ outcome: 'stale', updatedAt: created.updatedAt })
+
+      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(state.state).toEqual({ checkedItems: ['rice:g'], pantryStock: {} })
+    })
+
+    it('returns 401 from the state route when no bearer token is supplied', async () => {
+      const app = buildApp(db)
+
+      const getResponse = await app.request(`/households/${householdAId}/shopping-lists/${weekStartDate}/state`)
+      expect(getResponse.status).toBe(401)
+
+      const patchResponse = await app.request(`/households/${householdAId}/shopping-lists/${weekStartDate}/state`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: { checkedItems: [], pantryStock: {} } }),
+      })
+      expect(patchResponse.status).toBe(401)
+    })
+  })
+
+  describe('(e) iOS summary read model', () => {
     const baseRecipe = {
       title: 'Monday Pasta',
       description: 'Fast family pasta',
@@ -306,7 +430,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdAId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true } },
+        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true }, pantryStock: {} },
       })
 
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)

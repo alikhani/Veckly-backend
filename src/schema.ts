@@ -93,7 +93,12 @@ export const weekPlanProjections = pgTable('week_plan_projections', {
   uniqueIndex('week_plan_projections_household_week_idx').on(table.householdId, table.weekStartDate),
 ])
 
-export const shoppingListEventType = pgEnum('shopping_list_event_type', ['list_started', 'item_checked'])
+export const shoppingListEventType = pgEnum('shopping_list_event_type', [
+  'list_started',
+  'item_checked',
+  'shopping_state_replaced',
+  'shopping_list_cleared',
+])
 
 export const shoppingListEvents = pgTable('shopping_list_events', {
   id: uuid('id').primaryKey().defaultRandom(),

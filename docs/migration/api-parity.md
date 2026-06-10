@@ -35,6 +35,8 @@ Public OpenAPI routes:
 | POST | `/households/{householdId}/shopping-lists/{weekStartDate}/events` | `appendShoppingListEvent` | Event model proof slice. |
 | GET | `/households/{householdId}/shopping-lists/{weekStartDate}` | `getShoppingList` | Raw projection read. |
 | GET | `/households/{householdId}/shopping-lists/{weekStartDate}/summary` | `getShoppingListSummary` | iOS-friendly grouped read model. |
+| GET | `/households/{householdId}/shopping-lists/{weekStartDate}/state` | `getShoppingListState` | Shared checklist and pantry state. |
+| PATCH | `/households/{householdId}/shopping-lists/{weekStartDate}/state` | `updateShoppingListState` | Replace/clear shared checklist and pantry state with OCC. |
 | GET | `/households/{householdId}/recipes` | `listRecipes` | Household recipes CRUD foundation. |
 | POST | `/households/{householdId}/recipes` | `createRecipe` | Household recipes CRUD foundation. |
 | GET | `/households/{householdId}/recipes/{recipeId}` | `getRecipe` | Household recipes CRUD foundation. |
@@ -107,8 +109,8 @@ Internal strangle routes already present:
 
 | MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
 |---|---|---|---|---|---|---|
-| GET `/api/households/[id]/shopping-state` | Read checked items and pantry stock with OCC timestamp. | `GET /households/{householdId}/shopping-lists/{weekStartDate}` and `/summary`. | required | RLS projection | partial | Backend has event/projection and grouped summary, but no pantry stock or old OCC shape. |
-| PATCH `/api/households/[id]/shopping-state` | Write/clear checked items and pantry stock with OCC. | `POST /households/{householdId}/shopping-lists/{weekStartDate}/events`. | required | RLS event append | partial | Backend only supports `list_started` and `item_checked`. Need pantry/manual/bulk semantics if retained. |
+| GET `/api/households/[id]/shopping-state` | Read checked items and pantry stock with OCC timestamp. | `GET /households/{householdId}/shopping-lists/{weekStartDate}/state`. | required | RLS projection | migrated | Backend returns `{ state, updatedAt }` with `state: null` when unset/cleared. Web adapter must supply active `weekStartDate`. |
+| PATCH `/api/households/[id]/shopping-state` | Write/clear checked items and pantry stock with OCC. | `PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state`. | required | RLS event append + projection | migrated | Supports replace, clear via `state: null`, pantry stock, and stale `expectedUpdatedAt` conflict response. Manual items remain local-only per ADR 0038 unless product changes. |
 
 ### Saved Plans and Meal Feedback
 
@@ -159,8 +161,9 @@ Internal strangle routes already present:
 
 Recommended next slice after this inventory:
 
-1. Shopping list compatibility:
-   - add events for pantry/manual/bulk behavior if retained
+1. Recipes/public-community parity, or week-history parity:
+   - recipes unblock iOS library/detail/edit flows
+   - week history unblocks active-week rollover and web strangler confidence
 
 This order keeps the first phase focused on backend contract stability before
 iOS feature parity work begins.
@@ -177,3 +180,4 @@ iOS feature parity work begins.
 - 2026-06-10: Public household member routes added to OpenAPI: list members, update role, remove member. Response intentionally omits email until a user profile contract exists.
 - 2026-06-10: Active week pointer added as `GET/PUT/DELETE /households/{householdId}/active-week`, backed by `household_active_weeks` with active-membership RLS.
 - 2026-06-10: Week-plan event vocabulary expanded beyond `week_started`/`meal_assigned`: planning request update, unassign, lock/unlock, move, skip/unskip, servings change, and clear. Projection remains the read path.
+- 2026-06-10: Shopping-state compatibility added as `GET/PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state`, with checked items, pantry stock, clear semantics, stale-write conflicts, OpenAPI updates, and iOS client regeneration.

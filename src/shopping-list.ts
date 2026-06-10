@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { withRls } from './rls.js'
@@ -36,9 +36,25 @@ const ItemCheckedPayloadSchema = z.object({
   checked: z.boolean(),
 })
 
+const ShoppingStatePayloadSchema = z.object({
+  checkedItems: z.array(z.string().min(1)),
+  pantryStock: z.record(z.string(), z.number().finite()),
+}).openapi('ShoppingStatePayload')
+
+const ShoppingStateReplacedPayloadSchema = z.object({
+  eventType: z.literal('shopping_state_replaced'),
+  state: ShoppingStatePayloadSchema,
+})
+
+const ShoppingListClearedPayloadSchema = z.object({
+  eventType: z.literal('shopping_list_cleared'),
+})
+
 const ShoppingListEventPayloadSchema = z.discriminatedUnion('eventType', [
   ListStartedPayloadSchema,
   ItemCheckedPayloadSchema,
+  ShoppingStateReplacedPayloadSchema,
+  ShoppingListClearedPayloadSchema,
 ])
 
 const AppendShoppingListEventRequestSchema = z.object({
@@ -52,7 +68,7 @@ const ShoppingListEventSchema = z.object({
   sequenceNumber: z.number().int(),
   occurredAt: z.string(),
   causedBy: CausedBySchema,
-  eventType: z.enum(['list_started', 'item_checked']),
+  eventType: z.enum(['list_started', 'item_checked', 'shopping_state_replaced', 'shopping_list_cleared']),
   payload: z.record(z.string(), z.unknown()),
 }).openapi('ShoppingListEvent')
 
@@ -88,6 +104,26 @@ const ShoppingListSummarySchema = z.object({
   groups: z.array(ShoppingListSummaryGroupSchema),
 }).openapi('ShoppingListSummary')
 
+const ShoppingListStateResponseSchema = z.object({
+  state: ShoppingStatePayloadSchema.nullable(),
+  updatedAt: z.string().nullable(),
+}).openapi('ShoppingListStateResponse')
+
+const UpdateShoppingListStateRequestSchema = z.object({
+  expectedUpdatedAt: z.string().nullable().optional(),
+  state: ShoppingStatePayloadSchema.nullable(),
+}).openapi('UpdateShoppingListStateRequest')
+
+const UpdateShoppingListStateResponseSchema = z.object({
+  ok: z.literal(true),
+  updatedAt: z.string().nullable(),
+}).openapi('UpdateShoppingListStateResponse')
+
+const StaleShoppingListStateResponseSchema = z.object({
+  error: z.literal('STALE_SHOPPING_STATE'),
+  updatedAt: z.string().nullable(),
+}).openapi('StaleShoppingListStateResponse')
+
 // --- Projection fold --------------------------------------------------------
 //
 // Minimal shape needed to prove `item_checked` folds correctly — same
@@ -97,9 +133,21 @@ const ShoppingListSummarySchema = z.object({
 type TShoppingListProjectionState = {
   listStarted: boolean
   checkedItems: Record<string, boolean>
+  pantryStock: Record<string, number>
 }
 
-const emptyProjectionState = (): TShoppingListProjectionState => ({ listStarted: false, checkedItems: {} })
+const emptyProjectionState = (): TShoppingListProjectionState => ({ listStarted: false, checkedItems: {}, pantryStock: {} })
+
+function checkedItemsArrayToMap(checkedItems: string[]) {
+  return Object.fromEntries([...new Set(checkedItems)].map((itemKey) => [itemKey, true]))
+}
+
+function checkedItemsMapToArray(checkedItems: Record<string, boolean>) {
+  return Object.entries(checkedItems)
+    .filter(([, checked]) => checked)
+    .map(([itemKey]) => itemKey)
+    .sort((left, right) => left.localeCompare(right))
+}
 
 function foldEventIntoProjection(
   state: TShoppingListProjectionState,
@@ -110,6 +158,14 @@ function foldEventIntoProjection(
       return { ...state, listStarted: true }
     case 'item_checked':
       return { ...state, checkedItems: { ...state.checkedItems, [payload.itemKey]: payload.checked } }
+    case 'shopping_state_replaced':
+      return {
+        listStarted: true,
+        checkedItems: checkedItemsArrayToMap(payload.state.checkedItems),
+        pantryStock: payload.state.pantryStock,
+      }
+    case 'shopping_list_cleared':
+      return emptyProjectionState()
   }
 }
 
@@ -175,6 +231,46 @@ const getShoppingListSummaryRoute = createRoute({
   },
 })
 
+const getShoppingListStateRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/shopping-lists/{weekStartDate}/state',
+  operationId: 'getShoppingListState',
+  summary: "Read a household shopping list's shared checklist and pantry state",
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'The shared shopping state, or null when unset',
+      content: { 'application/json': { schema: ShoppingListStateResponseSchema } },
+    },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
+const updateShoppingListStateRoute = createRoute({
+  method: 'patch',
+  path: '/households/{householdId}/shopping-lists/{weekStartDate}/state',
+  operationId: 'updateShoppingListState',
+  summary: "Replace or clear a household shopping list's shared checklist and pantry state",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ParamsSchema,
+    body: { content: { 'application/json': { schema: UpdateShoppingListStateRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'State was replaced or cleared',
+      content: { 'application/json': { schema: UpdateShoppingListStateResponseSchema } },
+    },
+    400: { description: 'Invalid request body' },
+    409: {
+      description: 'The supplied expectedUpdatedAt value is stale',
+      content: { 'application/json': { schema: StaleShoppingListStateResponseSchema } },
+    },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
 const weekDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
 
 type TRecipeIngredient = {
@@ -201,11 +297,107 @@ function buildItemKey(ingredient: TRecipeIngredient) {
 }
 
 function readShoppingProjectionState(state: unknown): TShoppingListProjectionState {
-  const candidate = state as Partial<TShoppingListProjectionState> | null | undefined
+  const candidate = state as (Partial<TShoppingListProjectionState> & { checkedItems?: unknown; pantryStock?: unknown }) | null | undefined
+  const checkedItems = Array.isArray(candidate?.checkedItems)
+    ? checkedItemsArrayToMap(candidate.checkedItems.filter((item): item is string => typeof item === 'string'))
+    : candidate?.checkedItems && typeof candidate.checkedItems === 'object'
+      ? candidate.checkedItems as Record<string, boolean>
+      : {}
+  const pantryStock = candidate?.pantryStock && typeof candidate.pantryStock === 'object'
+    ? Object.fromEntries(
+      Object.entries(candidate.pantryStock as Record<string, unknown>)
+        .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])),
+    )
+    : {}
+
   return {
     listStarted: candidate?.listStarted === true,
-    checkedItems: candidate?.checkedItems && typeof candidate.checkedItems === 'object' ? candidate.checkedItems : {},
+    checkedItems,
+    pantryStock,
   }
+}
+
+function toShoppingStatePayload(state: TShoppingListProjectionState): z.infer<typeof ShoppingStatePayloadSchema> | null {
+  if (!state.listStarted && Object.keys(state.checkedItems).length === 0 && Object.keys(state.pantryStock).length === 0) return null
+  return { checkedItems: checkedItemsMapToArray(state.checkedItems), pantryStock: state.pantryStock }
+}
+
+async function getShoppingListState(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  const projection = await getStreamProjection(db, accessToken, shoppingListProjections, { householdId, weekStartDate })
+  if (!projection) return { state: null, updatedAt: null }
+
+  const state = readShoppingProjectionState(projection.state)
+  const payload = toShoppingStatePayload(state)
+  return {
+    state: payload,
+    updatedAt: payload ? projection.updatedAt.toISOString() : null,
+  }
+}
+
+type TUpdateShoppingListStateResult =
+  | { outcome: 'updated'; updatedAt: string | null }
+  | { outcome: 'stale'; updatedAt: string | null }
+
+async function replaceShoppingListState(
+  db: Db,
+  accessToken: string,
+  args: {
+    householdId: string
+    weekStartDate: string
+    causedBy: z.infer<typeof CausedBySchema>
+    expectedUpdatedAt?: string | null
+    state: z.infer<typeof ShoppingStatePayloadSchema> | null
+  },
+): Promise<TUpdateShoppingListStateResult> {
+  return withRls(db, accessToken, async (tx) => {
+    const [existingProjection] = await tx
+      .select({ state: shoppingListProjections.state, updatedAt: shoppingListProjections.updatedAt })
+      .from(shoppingListProjections)
+      .where(and(eq(shoppingListProjections.householdId, args.householdId), eq(shoppingListProjections.weekStartDate, args.weekStartDate)))
+      .limit(1)
+
+    const currentState = readShoppingProjectionState(existingProjection?.state)
+    const currentUpdatedAt = toShoppingStatePayload(currentState) ? existingProjection?.updatedAt.toISOString() ?? null : null
+    if (args.expectedUpdatedAt !== undefined && currentUpdatedAt !== args.expectedUpdatedAt) {
+      return { outcome: 'stale', updatedAt: currentUpdatedAt }
+    }
+
+    const [latest] = await tx
+      .select({ sequenceNumber: shoppingListEvents.sequenceNumber })
+      .from(shoppingListEvents)
+      .where(and(eq(shoppingListEvents.householdId, args.householdId), eq(shoppingListEvents.weekStartDate, args.weekStartDate)))
+      .orderBy(desc(shoppingListEvents.sequenceNumber))
+      .limit(1)
+
+    const payload: z.infer<typeof ShoppingListEventPayloadSchema> = args.state === null
+      ? { eventType: 'shopping_list_cleared' }
+      : { eventType: 'shopping_state_replaced', state: args.state }
+    const { eventType, ...payloadFields } = payload
+    const nextSequenceNumber = (latest?.sequenceNumber ?? 0) + 1
+
+    await tx.insert(shoppingListEvents).values({
+      householdId: args.householdId,
+      weekStartDate: args.weekStartDate,
+      sequenceNumber: nextSequenceNumber,
+      causedBy: args.causedBy,
+      eventType,
+      payload: payloadFields,
+    })
+
+    const nextState = foldEventIntoProjection(currentState, payload)
+    const now = new Date()
+    const [projection] = await tx
+      .insert(shoppingListProjections)
+      .values({ householdId: args.householdId, weekStartDate: args.weekStartDate, state: nextState, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [shoppingListProjections.householdId, shoppingListProjections.weekStartDate],
+        set: { state: nextState, updatedAt: now },
+      })
+      .returning({ updatedAt: shoppingListProjections.updatedAt })
+
+    if (!projection) throw new Error('Upsert did not return the shopping list projection')
+    return { outcome: 'updated', updatedAt: args.state === null ? null : projection.updatedAt.toISOString() }
+  })
 }
 
 export async function getShoppingListSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
@@ -312,7 +504,7 @@ export function buildShoppingListRoutes(db: Db) {
         sequenceNumber: event.sequenceNumber,
         occurredAt: event.occurredAt.toISOString(),
         causedBy: event.causedBy as z.infer<typeof CausedBySchema>,
-        eventType: event.eventType as 'list_started' | 'item_checked',
+        eventType: event.eventType as 'list_started' | 'item_checked' | 'shopping_state_replaced' | 'shopping_list_cleared',
         payload: event.payload as Record<string, unknown>,
       },
       201,
@@ -350,11 +542,35 @@ export function buildShoppingListRoutes(db: Db) {
     return c.json(summary, 200)
   })
 
+  app.openapi(getShoppingListStateRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const state = await getShoppingListState(db, accessToken, householdId, weekStartDate)
+    return c.json(state, 200)
+  })
+
+  app.openapi(updateShoppingListStateRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const body = c.req.valid('json')
+    const result = await replaceShoppingListState(db, accessToken, {
+      householdId,
+      weekStartDate,
+      causedBy: { source: 'user', userId: user.id },
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      state: body.state,
+    })
+
+    if (result.outcome === 'stale') return c.json({ error: 'STALE_SHOPPING_STATE', updatedAt: result.updatedAt }, 409)
+    return c.json({ ok: true, updatedAt: result.updatedAt }, 200)
+  })
+
   return app
 }
 
 // Exported for tests that need to seed projection rows directly (bypassing
 // appendShoppingListEvent) to prove the read path reflects the projection,
 // never a replay of the log — same rationale as week-plan's exports.
-export { foldEventIntoProjection, emptyProjectionState }
+export { foldEventIntoProjection, emptyProjectionState, getShoppingListState, replaceShoppingListState }
 export type { TShoppingListProjectionState }

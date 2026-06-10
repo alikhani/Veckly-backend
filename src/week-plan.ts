@@ -133,6 +133,7 @@ function foldEventIntoProjection(
 const appendWeekPlanEventRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/week-plans/{weekStartDate}/events',
+  operationId: 'appendWeekPlanEvent',
   summary: 'Append an event to a household week plan',
   security: [{ bearerAuth: [] }],
   request: {
@@ -151,6 +152,7 @@ const appendWeekPlanEventRoute = createRoute({
 const getWeekPlanRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/week-plans/{weekStartDate}',
+  operationId: 'getWeekPlan',
   summary: "Read a household week plan's current state",
   security: [{ bearerAuth: [] }],
   request: { params: ParamsSchema },
@@ -167,6 +169,7 @@ const getWeekPlanRoute = createRoute({
 const getWeekPlanSummaryRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/week-plans/{weekStartDate}/summary',
+  operationId: 'getWeekPlanSummary',
   summary: "Read a household week plan as an iOS-friendly hydrated summary",
   security: [{ bearerAuth: [] }],
   request: { params: ParamsSchema },

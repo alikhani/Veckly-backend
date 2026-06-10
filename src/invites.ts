@@ -217,6 +217,7 @@ export async function revokeInviteByToken(db: Db, accessToken: string, household
 const createInviteRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/invites',
+  operationId: 'createHouseholdInvite',
   summary: 'Invite someone to join this household',
   security: [{ bearerAuth: [] }],
   request: {
@@ -232,6 +233,7 @@ const createInviteRoute = createRoute({
 const listInvitesRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/invites',
+  operationId: 'listHouseholdInvites',
   summary: "List a household's open (pending) invites",
   security: [{ bearerAuth: [] }],
   request: { params: HouseholdParamsSchema },
@@ -244,6 +246,7 @@ const listInvitesRoute = createRoute({
 const revokeInviteRoute = createRoute({
   method: 'delete',
   path: '/households/{householdId}/invites/{inviteId}',
+  operationId: 'revokeHouseholdInvite',
   summary: 'Revoke a pending invite',
   security: [{ bearerAuth: [] }],
   request: { params: InviteIdParamsSchema },
@@ -256,6 +259,7 @@ const revokeInviteRoute = createRoute({
 const getInviteLandingRoute = createRoute({
   method: 'get',
   path: '/invites/{token}',
+  operationId: 'getInviteLanding',
   summary: 'Preview an invite before deciding whether to accept it',
   security: [{ bearerAuth: [] }],
   request: { params: TokenParamsSchema },
@@ -269,6 +273,7 @@ const getInviteLandingRoute = createRoute({
 const acceptInviteRoute = createRoute({
   method: 'post',
   path: '/invites/{token}/accept',
+  operationId: 'acceptInvite',
   summary: 'Accept an invite, joining its household as a member',
   security: [{ bearerAuth: [] }],
   request: { params: TokenParamsSchema },

@@ -19,6 +19,7 @@ const MyHouseholdsResponseSchema = z.object({
 const getMyHouseholds = createRoute({
   method: 'get',
   path: '/households/me',
+  operationId: 'getMyHouseholds',
   summary: "List the households the authenticated user belongs to",
   security: [{ bearerAuth: [] }],
   responses: {
@@ -37,7 +38,8 @@ const RenameHouseholdResponseSchema = z.object({
 
 const renameHouseholdRoute = createRoute({
   method: 'patch',
-  path: '/households/:id',
+  path: '/households/{id}',
+  operationId: 'renameHousehold',
   summary: 'Rename a household (owner only)',
   security: [{ bearerAuth: [] }],
   request: {
@@ -62,6 +64,7 @@ const renameHouseholdRoute = createRoute({
 const bootstrapMyHousehold = createRoute({
   method: 'post',
   path: '/households/me/bootstrap',
+  operationId: 'bootstrapMyHousehold',
   summary: 'Ensure the authenticated user has a household, creating "My household" if they have none',
   security: [{ bearerAuth: [] }],
   responses: {

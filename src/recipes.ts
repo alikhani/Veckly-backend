@@ -214,6 +214,7 @@ export async function updateRecipe(
 const listRecipesRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/recipes',
+  operationId: 'listRecipes',
   summary: "List a household's recipes",
   security: [{ bearerAuth: [] }],
   request: { params: HouseholdParamsSchema, query: ListQuerySchema },
@@ -226,6 +227,7 @@ const listRecipesRoute = createRoute({
 const getRecipeRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/recipes/{recipeId}',
+  operationId: 'getRecipe',
   summary: 'Get a single recipe',
   security: [{ bearerAuth: [] }],
   request: { params: RecipeParamsSchema },
@@ -239,6 +241,7 @@ const getRecipeRoute = createRoute({
 const createRecipeRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/recipes',
+  operationId: 'createRecipe',
   summary: 'Create a recipe',
   security: [{ bearerAuth: [] }],
   request: {
@@ -254,6 +257,7 @@ const createRecipeRoute = createRoute({
 const updateRecipeRoute = createRoute({
   method: 'patch',
   path: '/households/{householdId}/recipes/{recipeId}',
+  operationId: 'updateRecipe',
   summary: 'Update a recipe (also used to archive via isArchived: true)',
   security: [{ bearerAuth: [] }],
   request: {

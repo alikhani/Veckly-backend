@@ -125,6 +125,7 @@ function foldEventIntoProjection(
 const appendShoppingListEventRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/shopping-lists/{weekStartDate}/events',
+  operationId: 'appendShoppingListEvent',
   summary: 'Append an event to a household shopping list',
   security: [{ bearerAuth: [] }],
   request: {
@@ -143,6 +144,7 @@ const appendShoppingListEventRoute = createRoute({
 const getShoppingListRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/shopping-lists/{weekStartDate}',
+  operationId: 'getShoppingList',
   summary: "Read a household shopping list's current state",
   security: [{ bearerAuth: [] }],
   request: { params: ParamsSchema },
@@ -159,6 +161,7 @@ const getShoppingListRoute = createRoute({
 const getShoppingListSummaryRoute = createRoute({
   method: 'get',
   path: '/households/{householdId}/shopping-lists/{weekStartDate}/summary',
+  operationId: 'getShoppingListSummary',
   summary: "Read a household shopping list as an iOS-friendly grouped summary",
   security: [{ bearerAuth: [] }],
   request: { params: ParamsSchema },

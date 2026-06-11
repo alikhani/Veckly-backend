@@ -146,7 +146,7 @@ Internal strangle routes already present:
 | DELETE `/api/recipes/[id]/save` | Remove saved/bookmarked recipe. | `DELETE /recipes/{recipeId}/save`. | required | user scoped | migrated | Idempotent unsave for current user. |
 | POST `/api/recipes/[id]/translate` | AI translate and cache recipe translation. | TBD `/recipes/{id}/translate`. | required | recipe visibility/RLS | missing | Move with AI/translation slice. |
 | POST `/api/recipes/fill-in` | AI fill-in title-only recipe details. | `POST /recipes/fill-in` plus `POST /internal/recipes/fill-in`. | required | user scoped | migrated | Backend owns Claude call, schema validation, and 10s user rate limit; MealPlanner can proxy while keeping the old response envelope. |
-| POST `/api/recipes/import-from-url` | Fetch URL, structured-data extraction, AI fallback, SSRF guard/rate limit. | TBD `/recipes/import-from-url`. | required | user scoped | missing | Move with URL import slice. |
+| POST `/api/recipes/import-from-url` | Fetch URL, structured-data extraction, AI fallback, SSRF guard/rate limit. | `POST /recipes/import-from-url` plus `POST /internal/recipes/import-from-url`. | required | user scoped | migrated | Backend owns URL validation/SSRF guard, fetch limits, schema.org parsing, AI fallback, and 15s user rate limit. |
 | POST `/api/recipes/recommend` | AI recommendations, including prep context. | TBD `/recipes/recommend`. | required | household scoped | missing | Move after feedback/history/profile parity. |
 
 ### Meal Prep
@@ -195,4 +195,5 @@ iOS feature parity work begins.
 - 2026-06-11: Meal feedback gained internal strangle routes at `GET/PUT /internal/meal-feedback` so MealPlanner can keep its user-scoped `/api/meal-feedback` contract while writes land in the backend household-scoped table.
 - 2026-06-11: Custom recipes gained internal strangle routes at `/internal/custom-recipes`; MealPlanner can keep its API envelopes while adapting to the backend recipes model. Fork lineage remains a follow-up rather than a blocker.
 - 2026-06-11: Recipe fill-in migrated as `POST /recipes/fill-in` plus `POST /internal/recipes/fill-in`, returning the same raw validated AI recipe shape MealPlanner already consumes.
+- 2026-06-11: Recipe URL import migrated as `POST /recipes/import-from-url` plus `POST /internal/recipes/import-from-url`; backend owns fetch safety, schema.org parsing, AI fallback, and rate limiting.
 - 2026-06-11: Saved plans migrated as `GET/POST/PATCH/DELETE /saved-plans`, plus internal web-strangler routes under `/internal/saved-plans`; persistence is user-scoped with RLS.

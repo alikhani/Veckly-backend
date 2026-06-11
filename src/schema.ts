@@ -206,3 +206,13 @@ export const mealFeedback = pgTable('meal_feedback', {
   index('meal_feedback_household_updated_idx').on(table.householdId, table.updatedAt),
   index('meal_feedback_user_updated_idx').on(table.userId, table.updatedAt),
 ])
+
+export const savedPlans = pgTable('saved_plans', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  label: text('label').notNull(),
+  stateJson: text('state_json').notNull(),
+}, (table) => [
+  index('saved_plans_user_created_idx').on(table.userId, table.createdAt),
+])

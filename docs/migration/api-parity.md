@@ -124,10 +124,10 @@ Internal strangle routes already present:
 
 | MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
 |---|---|---|---|---|---|---|
-| GET `/api/saved-plans` | List user's saved plan templates. | TBD `/households/{householdId}/saved-plans` or recipes/templates module. | required | user or household scoped | missing | Decide if templates are household-owned in new backend. |
-| POST `/api/saved-plans` | Save current plan as template. | TBD. | required | user or household scoped | missing | Move after week-plan projection shape stabilizes. |
-| PATCH `/api/saved-plans/[id]` | Rename/update saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
-| DELETE `/api/saved-plans/[id]` | Delete saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
+| GET `/api/saved-plans` | List user's saved plan templates. | Public: `GET /saved-plans`; internal: `GET /internal/saved-plans`. | required | user scoped RLS | migrated | Backend returns the MealPlanner `{ id, createdAt, label, state }[]` shape; web can proxy via internal route. |
+| POST `/api/saved-plans` | Save current plan as template. | Public: `POST /saved-plans`; internal: `POST /internal/saved-plans`. | required | user scoped RLS | migrated | Premium limit remains in MealPlanner until billing moves. Backend owns persistence. |
+| PATCH `/api/saved-plans/[id]` | Rename/update saved plan. | Public: `PATCH /saved-plans/{id}`; internal: `PATCH /internal/saved-plans/{id}`. | required | user scoped RLS | migrated | Internal route preserves `{ ok: true }` for web compatibility. |
+| DELETE `/api/saved-plans/[id]` | Delete saved plan. | Public: `DELETE /saved-plans/{id}`; internal: `DELETE /internal/saved-plans/{id}`. | required | user scoped RLS | migrated | Delete is idempotent for caller-owned rows. |
 | GET `/api/meal-feedback` | Read persisted meal feedback. | `GET /households/{householdId}/meal-feedback`. | required | user + active household membership RLS | migrated | Returns `{ feedback, items }`; `feedback` preserves MealPlanner's keyed shape for current user's votes in the household. |
 | PUT `/api/meal-feedback` | Upsert/remove meal feedback. | `PUT /households/{householdId}/meal-feedback`. | required | user + active household membership RLS | migrated | Body keeps `{ mealId, feedback }`; `feedback: null` removes the vote. |
 
@@ -192,3 +192,4 @@ iOS feature parity work begins.
 - 2026-06-10: Recipe community/saved parity added: `GET /recipes/public`, `GET /recipes/saved`, `POST/DELETE /recipes/{recipeId}/save`, plus `user_saved_recipes` RLS table and iOS client regeneration.
 - 2026-06-10: Week-history parity added: `GET /households/{householdId}/week-plans`, `GET/PATCH /households/{householdId}/week-plans/{weekStartDate}/history`, and `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`, backed by `household_week_plans` RLS table.
 - 2026-06-11: Meal feedback migrated as `GET/PUT /households/{householdId}/meal-feedback`, backed by user-owned, household-scoped `meal_feedback` rows with active-membership RLS.
+- 2026-06-11: Saved plans migrated as `GET/POST/PATCH/DELETE /saved-plans`, plus internal web-strangler routes under `/internal/saved-plans`; persistence is user-scoped with RLS.

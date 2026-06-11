@@ -7,6 +7,7 @@ import { buildWeekPlanRoutes } from './week-plan.js'
 import { buildShoppingListRoutes } from './shopping-list.js'
 import { buildRecipesRoutes } from './recipes.js'
 import { buildMealFeedbackRoutes } from './meal-feedback.js'
+import { buildInternalSavedPlansRoutes, buildSavedPlansRoutes } from './saved-plans.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -17,11 +18,13 @@ export function buildApp(db: Db) {
   app.route('/', buildHouseholdProfileRoutes(db))
   app.route('/', buildInternalHouseholdsRoutes(db))
   app.route('/', buildInternalInvitesRoutes(db))
+  app.route('/', buildInternalSavedPlansRoutes(db))
   app.route('/', buildInvitesRoutes(db))
   app.route('/', buildWeekPlanRoutes(db))
   app.route('/', buildShoppingListRoutes(db))
   app.route('/', buildRecipesRoutes(db))
   app.route('/', buildMealFeedbackRoutes(db))
+  app.route('/', buildSavedPlansRoutes(db))
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',

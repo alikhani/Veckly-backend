@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, ilike, inArray, not } from 'drizzle-orm'
-import { requireAuth, type AuthedUser } from './auth.js'
+import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { bootstrapHousehold } from './households.js'
 import { withRls } from './rls.js'
 import { householdMemberships, recipes, userSavedRecipes } from './schema.js'
 import type { Db } from './db.js'
@@ -175,6 +176,13 @@ export async function getRecipe(
       .select()
       .from(recipes)
       .where(and(eq(recipes.id, recipeId), eq(recipes.householdId, householdId)))
+    return recipe ? toRecipeResponse(recipe) : null
+  })
+}
+
+export async function getReadableRecipeById(db: Db, accessToken: string, recipeId: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const [recipe] = await tx.select().from(recipes).where(eq(recipes.id, recipeId)).limit(1)
     return recipe ? toRecipeResponse(recipe) : null
   })
 }
@@ -471,6 +479,139 @@ export function buildRecipesRoutes(db: Db) {
     const user = c.get('user')
     const { recipeId } = c.req.valid('param')
     await unsaveRecipe(db, accessToken, user.id, recipeId)
+    return c.json({ ok: true }, 200)
+  })
+
+  return app
+}
+
+function toMealPlannerListItem(recipe: ReturnType<typeof toRecipeResponse>) {
+  return {
+    id: recipe.id,
+    title: recipe.title,
+    servings: recipe.servings,
+    householdId: recipe.householdId,
+    tags: recipe.tags,
+    isArchived: recipe.isArchived,
+    isPublic: recipe.isPublic,
+    ingredients: recipe.ingredients,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    updatedAt: recipe.updatedAt,
+    forkedFromId: null,
+    rootRecipeId: null,
+    cuisine: recipe.cuisine,
+    proteinSource: recipe.proteinSource,
+    mealWeight: recipe.mealWeight,
+  }
+}
+
+function toMealPlannerDetail(recipe: ReturnType<typeof toRecipeResponse>) {
+  return {
+    ...toMealPlannerListItem(recipe),
+    cookTimeMinutes: recipe.cookTimeMinutes,
+    createdAt: recipe.createdAt,
+    description: recipe.description,
+    sourceUrl: recipe.sourceUrl,
+    steps: recipe.steps,
+  }
+}
+
+const InternalListRecipesQuerySchema = z.object({
+  householdId: z.string().uuid().optional(),
+  includeArchived: z.enum(['true', 'false']).optional(),
+  search: z.string().max(120).optional(),
+})
+
+const InternalCreateRecipeSchema = CreateRecipeSchema.extend({
+  householdId: z.string().uuid().nullable().optional(),
+})
+
+const InternalUpdateRecipeSchema = UpdateRecipeSchema.extend({
+  householdId: z.string().uuid().nullable().optional(),
+})
+
+function filterRecipesForMealPlannerSearch(
+  list: ReturnType<typeof toRecipeResponse>[],
+  search: string | undefined,
+) {
+  const normalized = search?.trim().toLowerCase()
+  if (!normalized) return list
+  return list.filter((recipe) => recipe.title.toLowerCase().includes(normalized))
+}
+
+async function resolveInternalHouseholdId(db: Db, accessToken: string, userId: string, householdId: string | null | undefined) {
+  if (householdId) return householdId
+  const { household } = await bootstrapHousehold(db, accessToken, userId)
+  return household.id
+}
+
+// Internal server-to-server routes used by MealPlanner during the strangle
+// phase. They intentionally preserve the existing MealPlanner response
+// envelopes while storing data in the new backend recipes model.
+export function buildInternalRecipesRoutes(db: Db) {
+  const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
+
+  app.use('/internal/*', requireInternalAuth)
+
+  app.get('/internal/custom-recipes', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const query = InternalListRecipesQuerySchema.safeParse({
+      householdId: c.req.query('householdId'),
+      includeArchived: c.req.query('includeArchived'),
+      search: c.req.query('search'),
+    })
+    if (!query.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
+
+    const householdId = await resolveInternalHouseholdId(db, accessToken, user.id, query.data.householdId)
+    const list = await listRecipes(db, accessToken, householdId, query.data.includeArchived === 'true')
+    const filtered = filterRecipesForMealPlannerSearch(list, query.data.search)
+    return c.json({ recipes: filtered.map(toMealPlannerListItem) }, 200)
+  })
+
+  app.post('/internal/custom-recipes', async (c) => {
+    const body = await c.req.json().catch(() => null)
+    const parsed = InternalCreateRecipeSchema.safeParse(body)
+    if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
+
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const householdId = await resolveInternalHouseholdId(db, accessToken, user.id, parsed.data.householdId)
+    const recipe = await createRecipe(db, accessToken, user.id, householdId, parsed.data)
+    return c.json({ recipe: { id: recipe.id } }, 201)
+  })
+
+  app.get('/internal/custom-recipes/:id', async (c) => {
+    const accessToken = c.get('accessToken')
+    const recipe = await getReadableRecipeById(db, accessToken, c.req.param('id'))
+    if (!recipe) return c.json({ error: 'NOT_FOUND' }, 404)
+    return c.json({ recipe: toMealPlannerDetail(recipe) }, 200)
+  })
+
+  app.patch('/internal/custom-recipes/:id', async (c) => {
+    const accessToken = c.get('accessToken')
+    const body = await c.req.json().catch(() => null)
+    const parsed = InternalUpdateRecipeSchema.safeParse(body)
+    if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
+
+    const existing = await getReadableRecipeById(db, accessToken, c.req.param('id'))
+    if (!existing) return c.json({ error: 'NOT_FOUND' }, 404)
+
+    const recipe = await updateRecipe(db, accessToken, parsed.data.householdId ?? existing.householdId, existing.id, parsed.data)
+    if (!recipe) return c.json({ error: 'NOT_FOUND' }, 404)
+    return c.json({ ok: true }, 200)
+  })
+
+  app.patch('/internal/custom-recipes/:id/archive', async (c) => {
+    const accessToken = c.get('accessToken')
+    const body = await c.req.json().catch(() => null)
+    if (typeof body?.isArchived !== 'boolean') return c.json({ error: 'INVALID_PAYLOAD' }, 400)
+
+    const existing = await getReadableRecipeById(db, accessToken, c.req.param('id'))
+    if (!existing) return c.json({ error: 'NOT_FOUND' }, 404)
+
+    const recipe = await updateRecipe(db, accessToken, existing.householdId, existing.id, { isArchived: body.isArchived })
+    if (!recipe) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true }, 200)
   })
 

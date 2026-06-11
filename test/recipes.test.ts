@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships, recipes, userSavedRecipes } from '../src/schema.js'
 import { createRecipe, listRecipes, getRecipe, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
@@ -266,6 +267,104 @@ describeWithDb('Recipes + RLS', () => {
       await updateRecipe(db, fakeAccessToken(userB), householdBId, publicOther.id, { isArchived: true })
 
       await expect(listSavedRecipes(db, fakeAccessToken(userA), userA)).resolves.toEqual([])
+    })
+  })
+
+  describe('(e) internal MealPlanner strangle routes', () => {
+    it('creates, lists, reads, updates, and archives with MealPlanner envelopes', async () => {
+      const previousInternalKey = process.env.VECKLY_INTERNAL_API_KEY
+      process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
+      try {
+        const app = buildApp(db)
+        const headers = {
+          Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
+          'Content-Type': 'application/json',
+          'X-User-Id': userA,
+        }
+
+        const createResponse = await app.request('/internal/custom-recipes', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title: 'Family tacos',
+            description: '',
+            servings: 4,
+            householdId: householdAId,
+            ingredients: [{ item: 'tortillas', amount: '8' }],
+            steps: [{ text: 'Warm tortillas.' }],
+            tags: ['quick'],
+            prepTimeMinutes: 10,
+            cookTimeMinutes: 15,
+            cuisine: 'mexican',
+            proteinSource: 'beef',
+            mealWeight: 'medium',
+            isPublic: false,
+          }),
+        })
+        expect(createResponse.status).toBe(201)
+        const created = await createResponse.json() as { recipe: { id: string } }
+        expect(created.recipe.id).toBeTruthy()
+
+        const listResponse = await app.request('/internal/custom-recipes?search=taco', { headers })
+        expect(listResponse.status).toBe(200)
+        await expect(listResponse.json()).resolves.toMatchObject({
+          recipes: [
+            {
+              id: created.recipe.id,
+              title: 'Family tacos',
+              householdId: householdAId,
+              ingredients: [{ item: 'tortillas', amount: '8' }],
+              tags: ['quick'],
+              forkedFromId: null,
+              rootRecipeId: null,
+            },
+          ],
+        })
+
+        const detailResponse = await app.request(`/internal/custom-recipes/${created.recipe.id}`, { headers })
+        expect(detailResponse.status).toBe(200)
+        await expect(detailResponse.json()).resolves.toMatchObject({
+          recipe: {
+            id: created.recipe.id,
+            title: 'Family tacos',
+            steps: [{ text: 'Warm tortillas.' }],
+            cookTimeMinutes: 15,
+            sourceUrl: null,
+          },
+        })
+
+        const updateResponse = await app.request(`/internal/custom-recipes/${created.recipe.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ title: 'Friday tacos', servings: 5 }),
+        })
+        expect(updateResponse.status).toBe(200)
+        await expect(updateResponse.json()).resolves.toEqual({ ok: true })
+
+        const archiveResponse = await app.request(`/internal/custom-recipes/${created.recipe.id}/archive`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ isArchived: true }),
+        })
+        expect(archiveResponse.status).toBe(200)
+        await expect(archiveResponse.json()).resolves.toEqual({ ok: true })
+
+        const activeListResponse = await app.request('/internal/custom-recipes', { headers })
+        expect(activeListResponse.status).toBe(200)
+        await expect(activeListResponse.json()).resolves.toEqual({ recipes: [] })
+
+        const archivedListResponse = await app.request('/internal/custom-recipes?includeArchived=true', { headers })
+        expect(archivedListResponse.status).toBe(200)
+        await expect(archivedListResponse.json()).resolves.toMatchObject({
+          recipes: [{ id: created.recipe.id, title: 'Friday tacos', isArchived: true }],
+        })
+      } finally {
+        if (previousInternalKey === undefined) {
+          delete process.env.VECKLY_INTERNAL_API_KEY
+        } else {
+          process.env.VECKLY_INTERNAL_API_KEY = previousInternalKey
+        }
+      }
     })
   })
 })

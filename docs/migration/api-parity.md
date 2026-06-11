@@ -192,4 +192,5 @@ iOS feature parity work begins.
 - 2026-06-10: Recipe community/saved parity added: `GET /recipes/public`, `GET /recipes/saved`, `POST/DELETE /recipes/{recipeId}/save`, plus `user_saved_recipes` RLS table and iOS client regeneration.
 - 2026-06-10: Week-history parity added: `GET /households/{householdId}/week-plans`, `GET/PATCH /households/{householdId}/week-plans/{weekStartDate}/history`, and `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`, backed by `household_week_plans` RLS table.
 - 2026-06-11: Meal feedback migrated as `GET/PUT /households/{householdId}/meal-feedback`, backed by user-owned, household-scoped `meal_feedback` rows with active-membership RLS.
+- 2026-06-11: Meal feedback gained internal strangle routes at `GET/PUT /internal/meal-feedback` so MealPlanner can keep its user-scoped `/api/meal-feedback` contract while writes land in the backend household-scoped table.
 - 2026-06-11: Saved plans migrated as `GET/POST/PATCH/DELETE /saved-plans`, plus internal web-strangler routes under `/internal/saved-plans`; persistence is user-scoped with RLS.

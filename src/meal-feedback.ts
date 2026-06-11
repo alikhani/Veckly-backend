@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq } from 'drizzle-orm'
-import { requireAuth, type AuthedUser } from './auth.js'
+import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { bootstrapHousehold } from './households.js'
 import { withRls } from './rls.js'
 import { mealFeedback } from './schema.js'
 import type { Db } from './db.js'
@@ -166,6 +167,43 @@ export function buildMealFeedbackRoutes(db: Db) {
       await upsertMealFeedback(db, accessToken, user.id, householdId, mealId, feedback)
     }
     return c.json({ ok: true }, 200)
+  })
+
+  return app
+}
+
+// Internal server-to-server routes for the MealPlanner strangle phase. These
+// keep MealPlanner's legacy user-scoped API shape while the backend stores
+// feedback in the user's bootstrapped household.
+export function buildInternalMealFeedbackRoutes(db: Db) {
+  const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
+
+  app.use('/internal/*', requireInternalAuth)
+
+  app.get('/internal/meal-feedback', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { household } = await bootstrapHousehold(db, accessToken, user.id)
+    const response = await listMealFeedback(db, accessToken, user.id, household.id)
+    return c.json(response.feedback)
+  })
+
+  app.put('/internal/meal-feedback', async (c) => {
+    const body = await c.req.json().catch(() => null)
+    const parsed = UpsertMealFeedbackSchema.safeParse(body)
+    if (!parsed.success) return c.json({ error: 'Invalid meal feedback payload.' }, 400)
+
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { household } = await bootstrapHousehold(db, accessToken, user.id)
+
+    if (parsed.data.feedback === null) {
+      await removeMealFeedback(db, accessToken, user.id, household.id, parsed.data.mealId)
+    } else {
+      await upsertMealFeedback(db, accessToken, user.id, household.id, parsed.data.mealId, parsed.data.feedback)
+    }
+
+    return c.json({ ok: true })
   })
 
   return app

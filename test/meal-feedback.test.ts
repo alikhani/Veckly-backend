@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships, mealFeedback } from '../src/schema.js'
 import { listMealFeedback, removeMealFeedback, upsertMealFeedback } from '../src/meal-feedback.js'
@@ -117,5 +118,50 @@ describeWithDb('Meal feedback + RLS', () => {
       .from(mealFeedback)
       .where(and(eq(mealFeedback.householdId, householdAId), eq(mealFeedback.mealId, 'impersonated-meal')))
     expect(rows).toEqual([])
+  })
+
+  it('internal strangle routes preserve MealPlanner response shapes', async () => {
+    const previousInternalKey = process.env.VECKLY_INTERNAL_API_KEY
+    process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
+    try {
+      const app = buildApp(db)
+      const headers = {
+        Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-User-Id': userA,
+      }
+
+      const upsertResponse = await app.request('/internal/meal-feedback', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ mealId: 'taco-rice-bowls', feedback: { vote: 'up', signal: 'family-approved' } }),
+      })
+      expect(upsertResponse.status).toBe(200)
+      await expect(upsertResponse.json()).resolves.toEqual({ ok: true })
+
+      const listResponse = await app.request('/internal/meal-feedback', { headers })
+      expect(listResponse.status).toBe(200)
+      await expect(listResponse.json()).resolves.toEqual({
+        'taco-rice-bowls': { vote: 'up', signal: 'family-approved' },
+      })
+
+      const removeResponse = await app.request('/internal/meal-feedback', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ mealId: 'taco-rice-bowls', feedback: null }),
+      })
+      expect(removeResponse.status).toBe(200)
+      await expect(removeResponse.json()).resolves.toEqual({ ok: true })
+
+      const emptyResponse = await app.request('/internal/meal-feedback', { headers })
+      expect(emptyResponse.status).toBe(200)
+      await expect(emptyResponse.json()).resolves.toEqual({})
+    } finally {
+      if (previousInternalKey === undefined) {
+        delete process.env.VECKLY_INTERNAL_API_KEY
+      } else {
+        process.env.VECKLY_INTERNAL_API_KEY = previousInternalKey
+      }
+    }
   })
 })

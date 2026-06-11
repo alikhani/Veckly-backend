@@ -6,6 +6,7 @@ import { buildInvitesRoutes, buildInternalInvitesRoutes } from './invites.js'
 import { buildWeekPlanRoutes } from './week-plan.js'
 import { buildShoppingListRoutes } from './shopping-list.js'
 import { buildInternalRecipesRoutes, buildRecipesRoutes } from './recipes.js'
+import { buildInternalRecipeFillInRoutes, buildRecipeFillInRoutes } from './recipe-fill-in.js'
 import { buildInternalMealFeedbackRoutes, buildMealFeedbackRoutes } from './meal-feedback.js'
 import { buildInternalSavedPlansRoutes, buildSavedPlansRoutes } from './saved-plans.js'
 import type { Db } from './db.js'
@@ -20,11 +21,13 @@ export function buildApp(db: Db) {
   app.route('/', buildInternalInvitesRoutes(db))
   app.route('/', buildInternalMealFeedbackRoutes(db))
   app.route('/', buildInternalRecipesRoutes(db))
+  app.route('/', buildInternalRecipeFillInRoutes())
   app.route('/', buildInternalSavedPlansRoutes(db))
   app.route('/', buildInvitesRoutes(db))
   app.route('/', buildWeekPlanRoutes(db))
   app.route('/', buildShoppingListRoutes(db))
   app.route('/', buildRecipesRoutes(db))
+  app.route('/', buildRecipeFillInRoutes())
   app.route('/', buildMealFeedbackRoutes(db))
   app.route('/', buildSavedPlansRoutes(db))
 

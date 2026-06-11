@@ -27,7 +27,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
   const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
-    select to_regclass('public.household_week_plans') as exists
+    select to_regclass('public.meal_feedback') as exists
   `)
   if (latestMarker?.exists) return
 
@@ -35,12 +35,15 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [profileMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_profiles') as exists`)
   const [activeWeekMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_active_weeks') as exists`)
   const [savedRecipesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.user_saved_recipes') as exists`)
+  const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const alreadyHasBaseMigrations = Boolean(baseMarker?.exists)
   const alreadyHasProfilesMigration = Boolean(profileMarker?.exists)
   const alreadyHasActiveWeekMigration = Boolean(activeWeekMarker?.exists)
   const alreadyHasSavedRecipesMigration = Boolean(savedRecipesMarker?.exists)
+  const alreadyHasWeekPlansMigration = Boolean(weekPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasWeekPlansMigration && file < '0020_') continue
     if (alreadyHasSavedRecipesMigration && file < '0019_') continue
     if (alreadyHasActiveWeekMigration && file < '0016_') continue
     if (alreadyHasProfilesMigration && file < '0015_') continue
@@ -76,6 +79,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, update on "shopping_list_projections" to authenticated;
     grant select, insert, update on "recipes" to authenticated;
     grant select, insert, delete on "user_saved_recipes" to authenticated;
+    grant select, insert, update, delete on "meal_feedback" to authenticated;
     grant select, insert, update on "household_profiles" to authenticated;
     grant select, insert, update, delete on "household_active_weeks" to authenticated;
   `))

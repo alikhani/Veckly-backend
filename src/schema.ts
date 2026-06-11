@@ -183,3 +183,26 @@ export const userSavedRecipes = pgTable('user_saved_recipes', {
   primaryKey({ columns: [table.userId, table.recipeId], name: 'user_saved_recipes_pk' }),
   index('user_saved_recipes_user_saved_at_idx').on(table.userId, table.savedAt),
 ])
+
+export const mealFeedbackVote = pgEnum('meal_feedback_vote', ['up', 'down'])
+export const mealFeedbackSignal = pgEnum('meal_feedback_signal', [
+  'easy-weeknight',
+  'family-approved',
+  'good-leftovers',
+  'too-much-effort',
+  'family-pushback',
+  'poor-leftovers',
+])
+
+export const mealFeedback = pgTable('meal_feedback', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull(),
+  mealId: text('meal_id').notNull(),
+  vote: mealFeedbackVote('vote').notNull(),
+  signal: mealFeedbackSignal('signal'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.userId, table.mealId], name: 'meal_feedback_pk' }),
+  index('meal_feedback_household_updated_idx').on(table.householdId, table.updatedAt),
+  index('meal_feedback_user_updated_idx').on(table.userId, table.updatedAt),
+])

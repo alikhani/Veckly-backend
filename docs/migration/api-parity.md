@@ -128,8 +128,8 @@ Internal strangle routes already present:
 | POST `/api/saved-plans` | Save current plan as template. | TBD. | required | user or household scoped | missing | Move after week-plan projection shape stabilizes. |
 | PATCH `/api/saved-plans/[id]` | Rename/update saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
 | DELETE `/api/saved-plans/[id]` | Delete saved plan. | TBD. | required | user or household scoped | missing | Move with saved plans slice. |
-| GET `/api/meal-feedback` | Read persisted meal feedback. | TBD `/households/{householdId}/meal-feedback`. | required | user/household scoped | missing | Needed for recommendations and personalization. |
-| PUT `/api/meal-feedback` | Upsert/remove meal feedback. | TBD. | required | user/household scoped | missing | Must preserve feedback effects on generation. |
+| GET `/api/meal-feedback` | Read persisted meal feedback. | `GET /households/{householdId}/meal-feedback`. | required | user + active household membership RLS | migrated | Returns `{ feedback, items }`; `feedback` preserves MealPlanner's keyed shape for current user's votes in the household. |
+| PUT `/api/meal-feedback` | Upsert/remove meal feedback. | `PUT /households/{householdId}/meal-feedback`. | required | user + active household membership RLS | migrated | Body keeps `{ mealId, feedback }`; `feedback: null` removes the vote. |
 
 ### Recipes
 
@@ -191,3 +191,4 @@ iOS feature parity work begins.
 - 2026-06-10: Shopping-state compatibility added as `GET/PATCH /households/{householdId}/shopping-lists/{weekStartDate}/state`, with checked items, pantry stock, clear semantics, stale-write conflicts, OpenAPI updates, and iOS client regeneration.
 - 2026-06-10: Recipe community/saved parity added: `GET /recipes/public`, `GET /recipes/saved`, `POST/DELETE /recipes/{recipeId}/save`, plus `user_saved_recipes` RLS table and iOS client regeneration.
 - 2026-06-10: Week-history parity added: `GET /households/{householdId}/week-plans`, `GET/PATCH /households/{householdId}/week-plans/{weekStartDate}/history`, and `POST /households/{householdId}/week-plans/{weekStartDate}/finalize`, backed by `household_week_plans` RLS table.
+- 2026-06-11: Meal feedback migrated as `GET/PUT /households/{householdId}/meal-feedback`, backed by user-owned, household-scoped `meal_feedback` rows with active-membership RLS.

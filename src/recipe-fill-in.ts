@@ -44,7 +44,7 @@ Rules:
 
 const FillInIngredientSchema = z.object({
   name: z.string().min(1).max(120),
-  amount: z.number().positive(),
+  amount: z.number().min(0.001),
   unit: z.string().min(1).max(20),
   category: z.enum(['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other']).optional(),
 }).openapi('RecipeFillInIngredient')

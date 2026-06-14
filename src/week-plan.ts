@@ -1,9 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { withRls } from './rls.js'
-import { householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdProfiles, householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -463,6 +463,33 @@ const upsertWeekHistoryPlanRoute = createRoute({
   },
 })
 
+const GenerateWeekPlanRequestSchema = z.object({
+  regenerate: z.boolean().default(false),
+}).openapi('GenerateWeekPlanRequest')
+
+const GenerateWeekPlanResponseSchema = z.object({
+  ok: z.literal(true),
+}).openapi('GenerateWeekPlanResponse')
+
+const generateWeekPlanRoute = createRoute({
+  method: 'post',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/generate',
+  operationId: 'generateWeekPlan',
+  summary: 'Generate meals for a week from household profile and available recipes',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ParamsSchema,
+    body: { content: { 'application/json': { schema: GenerateWeekPlanRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Week plan generated',
+      content: { 'application/json': { schema: GenerateWeekPlanResponseSchema } },
+    },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
 const finalizeWeekHistoryPlanRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/week-plans/{weekStartDate}/finalize',
@@ -726,6 +753,77 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
   })
 }
 
+async function doGenerateWeekPlan(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string,
+  weekStartDate: string,
+  regenerate: boolean,
+): Promise<{ ok: true }> {
+  const [profileRows, projection, poolRecipes] = await Promise.all([
+    withRls(db, accessToken, (tx) =>
+      tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
+        .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
+    ),
+    getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
+    withRls(db, accessToken, (tx) =>
+      tx.select({ id: recipes.id, title: recipes.title })
+        .from(recipes)
+        .where(and(eq(recipes.isArchived, false), or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true))))
+    ),
+  ])
+
+  const profile = profileRows[0] ?? null
+  const selectedDayNames: z.infer<typeof dayOfWeek>[] = profile
+    ? (profile.selectedDays as Array<{ day: string }>).map((d) => d.day as z.infer<typeof dayOfWeek>)
+    : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+  const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
+
+  const projState = readProjectionState(projection?.state)
+  const daysToFill = selectedDayNames.filter((day) => {
+    if (projState.lockedDays.includes(day)) return false
+    return regenerate ? true : !projState.meals[day]
+  })
+
+  if (daysToFill.length === 0 || poolRecipes.length === 0) return { ok: true }
+
+  const filtered = avoidIngredients.length > 0
+    ? poolRecipes.filter((r) => !avoidIngredients.some((a) => r.title.toLowerCase().includes(a.toLowerCase())))
+    : poolRecipes
+  const candidates = filtered.length > 0 ? filtered : poolRecipes
+
+  const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
+  const shuffled = [...candidates].sort(() => Math.random() - 0.5)
+  const preferred = shuffled.filter((r) => !alreadyUsed.has(r.id))
+  const pool = preferred.length >= daysToFill.length ? preferred : shuffled
+
+  const causedBy = { source: 'algorithm' as const, algorithmVersion: '1.0', triggeredByUserId: userId }
+
+  if (!projState.weekStarted) {
+    await appendStreamEvent(
+      db, accessToken,
+      { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy, payload: { eventType: 'week_started' } },
+    )
+  }
+
+  for (let i = 0; i < daysToFill.length; i++) {
+    const day = daysToFill[i]
+    const recipe = pool[i % pool.length]
+    if (!day || !recipe) continue
+    await appendStreamEvent(
+      db, accessToken,
+      { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy, payload: { eventType: 'meal_assigned', dayOfWeek: day, recipeRef: recipe.id } },
+    )
+  }
+
+  return { ok: true }
+}
+
 export function buildWeekPlanRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
@@ -734,6 +832,15 @@ export function buildWeekPlanRoutes(db: Db) {
   // and so must this one (it doesn't inherit the registration when mounted
   // into the parent app via `.route('/', ...)`).
   app.use('/households/*', requireAuth)
+
+  app.openapi(generateWeekPlanRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const { regenerate } = c.req.valid('json')
+    const result = await doGenerateWeekPlan(db, accessToken, user.id, householdId, weekStartDate, regenerate)
+    return c.json(result, 200)
+  })
 
   app.openapi(appendWeekPlanEventRoute, async (c) => {
     const accessToken = c.get('accessToken')

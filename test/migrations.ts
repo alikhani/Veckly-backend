@@ -27,7 +27,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
   const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
-    select to_regclass('public.saved_plans') as exists
+    select to_regclass('public.household_prep_batches') as exists
   `)
   if (latestMarker?.exists) return
 
@@ -86,5 +86,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, update, delete on "saved_plans" to authenticated;
     grant select, insert, update on "household_profiles" to authenticated;
     grant select, insert, update, delete on "household_active_weeks" to authenticated;
+    grant select, insert, delete on "household_prep_batches" to authenticated;
+    grant select, insert, delete on "household_prep_batch_assignments" to authenticated;
   `))
 }

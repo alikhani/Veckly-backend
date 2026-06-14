@@ -216,3 +216,23 @@ export const savedPlans = pgTable('saved_plans', {
 }, (table) => [
   index('saved_plans_user_created_idx').on(table.userId, table.createdAt),
 ])
+
+export const householdPrepBatches = pgTable('household_prep_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  recipeId: uuid('recipe_id').references(() => recipes.id, { onDelete: 'set null' }),
+  customRecipeId: uuid('custom_recipe_id'),
+  cookDate: date('cook_date', { mode: 'string' }).notNull(),
+  totalPortions: integer('total_portions').notNull(),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('household_prep_batches_household_cook_date_idx').on(table.householdId, table.cookDate),
+])
+
+export const householdPrepBatchAssignments = pgTable('household_prep_batch_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  batchId: uuid('batch_id').notNull().references(() => householdPrepBatches.id, { onDelete: 'cascade' }),
+  date: date('date', { mode: 'string' }).notNull(),
+  mealType: text('meal_type').notNull(),
+})

@@ -153,9 +153,9 @@ Internal strangle routes already present:
 
 | MealPlanner route | Behavior | Target backend route | Auth | Household/RLS | Status | Test coverage / next action |
 |---|---|---|---|---|---|---|
-| GET `/api/households/[id]/prep-batches` | List prep batches for a date window. | TBD `/households/{householdId}/prep-batches`. | required | household scoped | missing | Move after week/shopping base. |
-| POST `/api/households/[id]/prep-batches` | Create prep batch with covered days/meals. | TBD `/households/{householdId}/prep-batches`. | required | household scoped | missing | Move with meal prep slice. |
-| DELETE `/api/households/[id]/prep-batches/[batchId]` | Delete prep batch. | TBD `/households/{householdId}/prep-batches/{batchId}`. | required | household scoped | missing | Move with meal prep slice. |
+| GET `/api/households/[id]/prep-batches` | List prep batches for a date window. | `GET /households/{householdId}/prep-batches?from=&to=`. | required | RLS household membership | migrated | Implemented in `src/prep-batches.ts`; RLS-backed; tests in `test/prep-batches.test.ts`. |
+| POST `/api/households/[id]/prep-batches` | Create prep batch with covered days/meals. | `POST /households/{householdId}/prep-batches`. | required | RLS household membership | migrated | Validates recipeId XOR customRecipeId; inserts batch + assignments atomically via withRls. |
+| DELETE `/api/households/[id]/prep-batches/[batchId]` | Delete prep batch. | `DELETE /households/{householdId}/prep-batches/{batchId}`. | required | RLS household membership | migrated | Returns 404 for non-member or wrong-household batch. |
 
 ### Billing, Premium, and Subscribe
 
@@ -198,3 +198,4 @@ iOS feature parity work begins.
 - 2026-06-11: Recipe URL import migrated as `POST /recipes/import-from-url` plus `POST /internal/recipes/import-from-url`; backend owns fetch safety, schema.org parsing, AI fallback, and rate limiting.
 - 2026-06-11: AI recommendations migrated as `POST /recipes/recommend` plus `POST /internal/recipes/recommend`; backend owns prompt/schema/rate-limit/filtering, with MealPlanner retaining the premium gate until billing/tier moves.
 - 2026-06-11: Saved plans migrated as `GET/POST/PATCH/DELETE /saved-plans`, plus internal web-strangler routes under `/internal/saved-plans`; persistence is user-scoped with RLS.
+- 2026-06-14: Meal prep migrated as `GET/POST /households/{householdId}/prep-batches` and `DELETE /households/{householdId}/prep-batches/{batchId}`; `household_prep_batches` and `household_prep_batch_assignments` tables with RLS; migration `0022_prep_batches.sql`; tests in `test/prep-batches.test.ts`. All non-billing MealPlanner routes now have `migrated` status — Phase 2 domain parity is complete.

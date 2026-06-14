@@ -1,8 +1,8 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { eq } from 'drizzle-orm'
-import { requireAuth, type AuthedUser } from './auth.js'
+import { and, desc, eq } from 'drizzle-orm'
+import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
-import { householdProfiles } from './schema.js'
+import { householdMemberships, householdProfiles } from './schema.js'
 import type { Db } from './db.js'
 
 const PrioritySchema = z.enum(['quick', 'budget', 'child-friendly', 'meal-prep', 'varied'])
@@ -139,6 +139,49 @@ const upsertHouseholdProfileRoute = createRoute({
     401: { description: 'Missing or invalid session' },
   },
 })
+
+async function resolveUserHousehold(db: Db, accessToken: string, userId: string): Promise<string | null> {
+  return withRls(db, accessToken, async (tx) => {
+    const [row] = await tx
+      .select({ householdId: householdMemberships.householdId })
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.userId, userId), eq(householdMemberships.status, 'active')))
+      .orderBy(desc(householdMemberships.joinedAt))
+      .limit(1)
+    return row?.householdId ?? null
+  })
+}
+
+export function buildInternalHouseholdProfileRoutes(db: Db) {
+  const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
+  app.use('/internal/*', requireInternalAuth)
+
+  app.get('/internal/household-profile', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const householdId = await resolveUserHousehold(db, accessToken, user.id)
+    if (!householdId) return c.json(null, 200)
+    const profile = await getHouseholdProfile(db, accessToken, householdId)
+    return c.json(profile, 200)
+  })
+
+  app.put('/internal/household-profile', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => null)
+    if (!body) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
+    const householdId = await resolveUserHousehold(db, accessToken, user.id)
+    if (!householdId) return c.json({ error: 'NO_HOUSEHOLD' }, 404)
+    try {
+      await upsertHouseholdProfile(db, accessToken, user.id, householdId, body)
+      return c.json({ ok: true }, 200)
+    } catch {
+      return c.json({ error: 'UPSERT_FAILED' }, 500)
+    }
+  })
+
+  return app
+}
 
 export function buildHouseholdProfileRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()

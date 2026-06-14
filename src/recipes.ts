@@ -615,5 +615,36 @@ export function buildInternalRecipesRoutes(db: Db) {
     return c.json({ ok: true }, 200)
   })
 
+  app.get('/internal/recipes/public', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const q = c.req.query('q')?.trim() ?? ''
+    if (!q || q.length > 120) return c.json({ recipes: [] }, 200)
+    const list = await listPublicRecipes(db, accessToken, user.id, q)
+    return c.json({ recipes: list }, 200)
+  })
+
+  app.get('/internal/recipes/saved', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const list = await listSavedRecipes(db, accessToken, user.id)
+    return c.json({ recipes: list }, 200)
+  })
+
+  app.post('/internal/recipes/:id/save', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const result = await saveRecipe(db, accessToken, user.id, c.req.param('id'))
+    if (result === 'not_found') return c.json({ error: 'NOT_FOUND' }, 404)
+    return c.json({ ok: true }, 201)
+  })
+
+  app.delete('/internal/recipes/:id/save', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    await unsaveRecipe(db, accessToken, user.id, c.req.param('id'))
+    return c.json({ ok: true }, 200)
+  })
+
   return app
 }

@@ -331,6 +331,29 @@ export function buildInternalInvitesRoutes(db: Db) {
     return c.body(null, 204)
   })
 
+  // Adapter bridging MealPlanner's POST /api/household-invites/accept { token }
+  // contract to the backend's acceptInvite(token) logic.
+  app.post('/internal/household-invites/accept', async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({}))
+    const token = typeof body.token === 'string' ? body.token.trim() : ''
+    if (!token) return c.json({ error: 'INVALID_TOKEN' }, 400)
+
+    const result = await acceptInvite(db, accessToken, user.id, token)
+    switch (result.outcome) {
+      case 'accepted':
+      case 'already_member':
+        return c.json({ ok: true, householdId: result.householdId }, 200)
+      case 'not_found':
+        return c.json({ error: 'INVITE_NOT_FOUND' }, 404)
+      case 'expired':
+        return c.json({ error: 'INVITE_EXPIRED' }, 410)
+      case 'not_acceptable':
+        return c.json({ error: 'ACCEPT_INVITE_FAILED' }, 500)
+    }
+  })
+
   return app
 }
 

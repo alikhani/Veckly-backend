@@ -142,7 +142,7 @@ export const shoppingListProjections = pgTable('shopping_list_projections', {
   uniqueIndex('shopping_list_projections_household_week_idx').on(table.householdId, table.weekStartDate),
 ])
 
-export const recipeSource = pgEnum('recipe_source', ['user_created', 'url_import', 'ai_generated'])
+export const recipeSource = pgEnum('recipe_source', ['user_created', 'url_import', 'ai_generated', 'builtin'])
 
 // ingredients: TRecipeIngredient[] — { item: string, amount?: string, unit?: string, category?: string }
 // steps:       TRecipeStep[]       — { text: string }
@@ -152,7 +152,7 @@ export const recipeSource = pgEnum('recipe_source', ['user_created', 'url_import
 // and JSONB lets a single query return a fully hydrated recipe without joins.
 export const recipes = pgTable('recipes', {
   id: uuid('id').primaryKey().defaultRandom(),
-  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  householdId: uuid('household_id').references(() => households.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
   servings: integer('servings').notNull().default(4),

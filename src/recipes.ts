@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq, ilike, inArray, not } from 'drizzle-orm'
+import { and, desc, eq, ilike, inArray, isNotNull, not, or } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { withRls } from './rls.js'
@@ -21,7 +21,7 @@ const RecipeStepSchema = z.object({
 
 const RecipeSchema = z.object({
   id: z.string().uuid(),
-  householdId: z.string().uuid(),
+  householdId: z.string().uuid().nullable(),
   title: z.string(),
   description: z.string(),
   servings: z.number().int(),
@@ -34,10 +34,10 @@ const RecipeSchema = z.object({
   proteinSource: z.string().nullable(),
   mealWeight: z.string().nullable(),
   sourceUrl: z.string().nullable(),
-  source: z.enum(['user_created', 'url_import', 'ai_generated']),
+  source: z.enum(['user_created', 'url_import', 'ai_generated', 'builtin']),
   isPublic: z.boolean(),
   isArchived: z.boolean(),
-  createdBy: z.string().uuid(),
+  createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 }).openapi('Recipe')
@@ -105,7 +105,7 @@ function toRecipeResponse(row: typeof recipes.$inferSelect) {
     source: row.source,
     isPublic: row.isPublic,
     isArchived: row.isArchived,
-    createdBy: row.createdBy,
+    createdBy: row.createdBy ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }
@@ -238,12 +238,15 @@ export async function listPublicRecipes(
     const householdIds = membershipRows.map((row) => row.householdId)
 
     const conditions = [
-      eq(recipes.source, 'user_created' as const),
       eq(recipes.isPublic, true),
       eq(recipes.isArchived, false),
       ilike(recipes.title, `%${normalizedSearch}%`),
     ]
-    if (householdIds.length > 0) conditions.push(not(inArray(recipes.householdId, householdIds)))
+    // Exclude the user's own household recipes (they appear in the household list already).
+    // Builtin recipes have null household_id and are always included.
+    if (householdIds.length > 0) {
+      conditions.push(or(not(isNotNull(recipes.householdId)), not(inArray(recipes.householdId, householdIds)))!)
+    }
 
     const rows = await tx
       .select()
@@ -597,7 +600,9 @@ export function buildInternalRecipesRoutes(db: Db) {
     const existing = await getReadableRecipeById(db, accessToken, c.req.param('id'))
     if (!existing) return c.json({ error: 'NOT_FOUND' }, 404)
 
-    const recipe = await updateRecipe(db, accessToken, parsed.data.householdId ?? existing.householdId, existing.id, parsed.data)
+    const householdId = parsed.data.householdId ?? existing.householdId
+    if (!householdId) return c.json({ error: 'NOT_FOUND' }, 404)
+    const recipe = await updateRecipe(db, accessToken, householdId, existing.id, parsed.data)
     if (!recipe) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true }, 200)
   })
@@ -609,6 +614,7 @@ export function buildInternalRecipesRoutes(db: Db) {
 
     const existing = await getReadableRecipeById(db, accessToken, c.req.param('id'))
     if (!existing) return c.json({ error: 'NOT_FOUND' }, 404)
+    if (!existing.householdId) return c.json({ error: 'NOT_FOUND' }, 404)
 
     const recipe = await updateRecipe(db, accessToken, existing.householdId, existing.id, { isArchived: body.isArchived })
     if (!recipe) return c.json({ error: 'NOT_FOUND' }, 404)

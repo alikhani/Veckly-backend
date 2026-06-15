@@ -6,6 +6,11 @@ import { withRls } from './rls.js'
 import { households, householdMemberships } from './schema.js'
 import type { Db } from './db.js'
 
+function parseHouseholdName(raw: unknown): string | null {
+  const name = typeof raw === 'string' ? raw.trim().replace(/\s+/g, ' ') : ''
+  return name.length >= 2 && name.length <= 60 ? name : null
+}
+
 const HouseholdSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -339,25 +344,21 @@ export function buildInternalHouseholdsRoutes(db: Db) {
 
   app.post('/internal/households', async (c) => {
     const body = await c.req.json().catch(() => null)
-    const rawName = typeof body?.name === 'string' ? (body.name as string).trim().replace(/\s+/g, ' ') : ''
-    if (!rawName || rawName.length < 2 || rawName.length > 60) {
-      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
-    }
+    const name = parseHouseholdName(body?.name)
+    if (!name) return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
     const accessToken = c.get('accessToken')
     const user = c.get('user')
-    const household = await createNamedHousehold(db, accessToken, user.id, rawName)
+    const household = await createNamedHousehold(db, accessToken, user.id, name)
     return c.json({ id: household.id, name: household.name, role: household.role }, 201)
   })
 
   app.patch('/internal/households/:id', async (c) => {
     const body = await c.req.json().catch(() => null)
-    const rawName = typeof body?.name === 'string' ? (body.name as string).trim().replace(/\s+/g, ' ') : ''
-    if (!rawName || rawName.length < 2 || rawName.length > 60) {
-      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
-    }
+    const name = parseHouseholdName(body?.name)
+    if (!name) return c.json({ error: 'INVALID_HOUSEHOLD_NAME' }, 400)
     const accessToken = c.get('accessToken')
     const householdId = c.req.param('id')
-    const result = await renameHousehold(db, accessToken, householdId, rawName)
+    const result = await renameHousehold(db, accessToken, householdId, name)
     if (!result) return c.json({ error: 'Household not found.' }, 404)
     return c.json({ id: result.id, name: result.name }, 200)
   })
@@ -435,10 +436,8 @@ export function buildHouseholdsRoutes(db: Db) {
     const { id: householdId } = c.req.valid('param')
     const { name: rawName } = c.req.valid('json')
 
-    const name = rawName.trim().replace(/\s+/g, ' ')
-    if (!name || name.length < 2 || name.length > 60) {
-      return c.json({ error: 'INVALID_HOUSEHOLD_NAME' } as never, 400)
-    }
+    const name = parseHouseholdName(rawName)
+    if (!name) return c.json({ error: 'INVALID_HOUSEHOLD_NAME' } as never, 400)
 
     // Check membership role before attempting the update so non-owner members
     // get a 403 rather than a silent 0-row update that would map to 404.

@@ -45,7 +45,7 @@ const CreatePrepBatchSchema = z.object({
 
 const listRoute = createRoute({
   method: 'get',
-  path: '/households/{householdId}/prep-batches',
+  path: '/households/{householdId}/prep_batches',
   security: [{ bearerAuth: [] }],
   request: {
     params: HouseholdParamsSchema,
@@ -64,7 +64,7 @@ const listRoute = createRoute({
 
 const createRoute_ = createRoute({
   method: 'post',
-  path: '/households/{householdId}/prep-batches',
+  path: '/households/{householdId}/prep_batches',
   security: [{ bearerAuth: [] }],
   request: {
     params: HouseholdParamsSchema,
@@ -80,7 +80,7 @@ const createRoute_ = createRoute({
 
 const deleteRoute = createRoute({
   method: 'delete',
-  path: '/households/{householdId}/prep-batches/{batchId}',
+  path: '/households/{householdId}/prep_batches/{batchId}',
   security: [{ bearerAuth: [] }],
   request: { params: BatchParamsSchema },
   responses: {
@@ -93,8 +93,8 @@ const deleteRoute = createRoute({
 export function buildPrepBatchesRoutes(db: Db) {
   const app = new OpenAPIHono<AppEnv>()
 
-  app.use('/households/:householdId/prep-batches', requireAuth)
-  app.use('/households/:householdId/prep-batches/:batchId', requireAuth)
+  app.use('/households/:householdId/prep_batches', requireAuth)
+  app.use('/households/:householdId/prep_batches/:batchId', requireAuth)
 
   app.openapi(listRoute, async (c) => {
     const user = c.get('user')

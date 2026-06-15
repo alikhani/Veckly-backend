@@ -1,0 +1,5630 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Veckly API",
+    "version": "0.0.1"
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Supabase access token"
+      }
+    },
+    "schemas": {
+      "HouseholdActiveWeek": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1
+          },
+          "updatedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "weekStartDate",
+          "timezone",
+          "updatedBy",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "SetHouseholdActiveWeek": {
+        "type": "object",
+        "properties": {
+          "weekStartDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "weekStartDate",
+          "timezone"
+        ]
+      },
+      "Household": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role"
+        ]
+      },
+      "MyHouseholdsResponse": {
+        "type": "object",
+        "properties": {
+          "households": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Household"
+            }
+          }
+        },
+        "required": [
+          "households"
+        ]
+      },
+      "RenameHouseholdResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "HouseholdMember": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "userId",
+          "role"
+        ]
+      },
+      "ListHouseholdMembersResponse": {
+        "type": "object",
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HouseholdMember"
+            }
+          }
+        },
+        "required": [
+          "members"
+        ]
+      },
+      "UpdateHouseholdMemberRoleRequest": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "HouseholdProfile": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "adults": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "quick",
+                "budget",
+                "child-friendly",
+                "meal-prep",
+                "varied"
+              ]
+            }
+          },
+          "avoidIngredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "selectedDays": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string",
+                  "enum": [
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday"
+                  ]
+                },
+                "servingsOverride": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "occasion": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "guests",
+                    "treat"
+                  ]
+                },
+                "effortLevel": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "busy"
+                  ]
+                },
+                "leftoversIntent": {
+                  "type": "boolean"
+                },
+                "lateEvening": {
+                  "type": "boolean"
+                },
+                "cookingTolerance": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "relaxed"
+                  ]
+                }
+              },
+              "required": [
+                "day"
+              ]
+            },
+            "minItems": 1
+          },
+          "updatedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "adults",
+          "children",
+          "priorities",
+          "avoidIngredients",
+          "selectedDays",
+          "updatedBy",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UpsertHouseholdProfile": {
+        "type": "object",
+        "properties": {
+          "adults": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "quick",
+                "budget",
+                "child-friendly",
+                "meal-prep",
+                "varied"
+              ]
+            }
+          },
+          "avoidIngredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "selectedDays": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string",
+                  "enum": [
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday"
+                  ]
+                },
+                "servingsOverride": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "occasion": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "guests",
+                    "treat"
+                  ]
+                },
+                "effortLevel": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "busy"
+                  ]
+                },
+                "leftoversIntent": {
+                  "type": "boolean"
+                },
+                "lateEvening": {
+                  "type": "boolean"
+                },
+                "cookingTolerance": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "relaxed"
+                  ]
+                }
+              },
+              "required": [
+                "day"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "adults",
+          "children",
+          "priorities",
+          "avoidIngredients",
+          "selectedDays"
+        ]
+      },
+      "HouseholdInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "token": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "revoked",
+              "expired"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "token",
+          "email",
+          "status",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
+      "CreateHouseholdInviteRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "HouseholdInviteListResponse": {
+        "type": "object",
+        "properties": {
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HouseholdInvite"
+            }
+          }
+        },
+        "required": [
+          "invites"
+        ]
+      },
+      "HouseholdInviteLanding": {
+        "type": "object",
+        "properties": {
+          "householdName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "revoked",
+              "expired"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdName",
+          "status",
+          "expiresAt"
+        ]
+      },
+      "GenerateWeekPlanResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "GenerateWeekPlanRequest": {
+        "type": "object",
+        "properties": {
+          "regenerate": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "CausedBy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "userId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "source",
+              "userId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "algorithm"
+                ]
+              },
+              "algorithmVersion": {
+                "type": "string"
+              },
+              "triggeredByUserId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "source",
+              "algorithmVersion",
+              "triggeredByUserId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "reason"
+            ]
+          }
+        ]
+      },
+      "WeekPlanEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "sequenceNumber": {
+            "type": "integer"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "causedBy": {
+            "$ref": "#/components/schemas/CausedBy"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "week_started",
+              "planning_request_updated",
+              "meal_assigned",
+              "meal_unassigned",
+              "meal_locked",
+              "meal_unlocked",
+              "meal_moved",
+              "day_skipped",
+              "day_unskipped",
+              "servings_changed",
+              "week_plan_cleared"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "weekStartDate",
+          "sequenceNumber",
+          "occurredAt",
+          "causedBy",
+          "eventType",
+          "payload"
+        ]
+      },
+      "AppendWeekPlanEventRequest": {
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "causedBy": {
+                "$ref": "#/components/schemas/CausedBy"
+              }
+            },
+            "required": [
+              "causedBy"
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "week_started"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "planning_request_updated"
+                    ]
+                  },
+                  "request": {
+                    "type": "object",
+                    "properties": {
+                      "household": {
+                        "type": "object",
+                        "properties": {
+                          "adults": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "children": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "priorities": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "quick",
+                                "budget",
+                                "child-friendly",
+                                "meal-prep",
+                                "varied"
+                              ]
+                            }
+                          },
+                          "avoidIngredients": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "adults",
+                          "children",
+                          "priorities",
+                          "avoidIngredients"
+                        ]
+                      },
+                      "selectedDays": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "day": {
+                              "type": "string",
+                              "enum": [
+                                "monday",
+                                "tuesday",
+                                "wednesday",
+                                "thursday",
+                                "friday",
+                                "saturday",
+                                "sunday"
+                              ]
+                            },
+                            "servingsOverride": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "occasion": {
+                              "type": "string",
+                              "enum": [
+                                "standard",
+                                "guests",
+                                "treat"
+                              ]
+                            },
+                            "effortLevel": {
+                              "type": "string",
+                              "enum": [
+                                "standard",
+                                "busy"
+                              ]
+                            },
+                            "leftoversIntent": {
+                              "type": "boolean"
+                            },
+                            "lateEvening": {
+                              "type": "boolean"
+                            },
+                            "cookingTolerance": {
+                              "type": "string",
+                              "enum": [
+                                "standard",
+                                "relaxed"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "day"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "household",
+                      "selectedDays"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "request"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "meal_assigned"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  },
+                  "recipeRef": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek",
+                  "recipeRef"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "meal_unassigned"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "meal_locked"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "meal_unlocked"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "meal_moved"
+                    ]
+                  },
+                  "fromDayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  },
+                  "toDayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "fromDayOfWeek",
+                  "toDayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "day_skipped"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "day_unskipped"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "servings_changed"
+                    ]
+                  },
+                  "dayOfWeek": {
+                    "type": "string",
+                    "enum": [
+                      "monday",
+                      "tuesday",
+                      "wednesday",
+                      "thursday",
+                      "friday",
+                      "saturday",
+                      "sunday"
+                    ]
+                  },
+                  "servings": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "dayOfWeek",
+                  "servings"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "week_plan_cleared"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "WeekPlanProjection": {
+        "type": "object",
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "weekStartDate",
+          "state",
+          "updatedAt"
+        ]
+      },
+      "WeekPlanSummaryRecipe": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer"
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cookTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "servings",
+          "prepTimeMinutes",
+          "cookTimeMinutes",
+          "tags"
+        ]
+      },
+      "WeekPlanSummaryDay": {
+        "type": "object",
+        "properties": {
+          "dayOfWeek": {
+            "type": "string",
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          },
+          "date": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "planned",
+              "skipped"
+            ]
+          },
+          "recipe": {
+            "$ref": "#/components/schemas/WeekPlanSummaryRecipe"
+          }
+        },
+        "required": [
+          "dayOfWeek",
+          "date",
+          "state",
+          "recipe"
+        ]
+      },
+      "WeekPlanSummary": {
+        "type": "object",
+        "properties": {
+          "household": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WeekPlanSummaryDay"
+            }
+          }
+        },
+        "required": [
+          "household",
+          "weekStartDate",
+          "updatedAt",
+          "days"
+        ]
+      },
+      "WeekHistoryListItem": {
+        "type": "object",
+        "properties": {
+          "weekStartDate": {
+            "type": "string"
+          },
+          "weekNumber": {
+            "type": "integer"
+          },
+          "weekYear": {
+            "type": "integer"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "finalized",
+              "archived"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "copied_from_previous",
+              "template_applied",
+              "manual"
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "updatedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "plannedDays": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ]
+            }
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "household": {
+                "type": "object",
+                "properties": {
+                  "adults": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "children": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "priorities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "quick",
+                        "budget",
+                        "child-friendly",
+                        "meal-prep",
+                        "varied"
+                      ]
+                    }
+                  },
+                  "avoidIngredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "adults",
+                  "children",
+                  "priorities",
+                  "avoidIngredients"
+                ]
+              },
+              "selectedDays": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "day": {
+                      "type": "string",
+                      "enum": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday"
+                      ]
+                    },
+                    "servingsOverride": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "occasion": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "guests",
+                        "treat"
+                      ]
+                    },
+                    "effortLevel": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "busy"
+                      ]
+                    },
+                    "leftoversIntent": {
+                      "type": "boolean"
+                    },
+                    "lateEvening": {
+                      "type": "boolean"
+                    },
+                    "cookingTolerance": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "relaxed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "day"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "household",
+              "selectedDays"
+            ]
+          },
+          "replacements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "skippedDays": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ]
+            }
+          }
+        },
+        "required": [
+          "weekStartDate",
+          "weekNumber",
+          "weekYear",
+          "timezone",
+          "status",
+          "source",
+          "updatedAt",
+          "updatedBy",
+          "plannedDays",
+          "request",
+          "replacements",
+          "skippedDays"
+        ]
+      },
+      "WeekHistoryState": {
+        "type": "object",
+        "properties": {
+          "lockedDays": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ]
+            },
+            "default": []
+          },
+          "skippedDays": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ]
+            },
+            "default": []
+          },
+          "replacements": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "household": {
+                "type": "object",
+                "properties": {
+                  "adults": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "children": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "priorities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "quick",
+                        "budget",
+                        "child-friendly",
+                        "meal-prep",
+                        "varied"
+                      ]
+                    }
+                  },
+                  "avoidIngredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "adults",
+                  "children",
+                  "priorities",
+                  "avoidIngredients"
+                ]
+              },
+              "selectedDays": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "day": {
+                      "type": "string",
+                      "enum": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday"
+                      ]
+                    },
+                    "servingsOverride": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "occasion": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "guests",
+                        "treat"
+                      ]
+                    },
+                    "effortLevel": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "busy"
+                      ]
+                    },
+                    "leftoversIntent": {
+                      "type": "boolean"
+                    },
+                    "lateEvening": {
+                      "type": "boolean"
+                    },
+                    "cookingTolerance": {
+                      "type": "string",
+                      "enum": [
+                        "standard",
+                        "relaxed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "day"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "household",
+              "selectedDays"
+            ]
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "WeekHistoryPlan": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "weekNumber": {
+            "type": "integer"
+          },
+          "weekYear": {
+            "type": "integer"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/WeekHistoryState"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "finalized",
+              "archived"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "copied_from_previous",
+              "template_applied",
+              "manual"
+            ]
+          },
+          "updatedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "weekStartDate",
+          "weekNumber",
+          "weekYear",
+          "timezone",
+          "state",
+          "status",
+          "source",
+          "updatedBy",
+          "updatedAt"
+        ]
+      },
+      "WeekHistoryDetail": {
+        "type": "object",
+        "properties": {
+          "week": {
+            "$ref": "#/components/schemas/WeekHistoryPlan"
+          }
+        },
+        "required": [
+          "week"
+        ]
+      },
+      "UpsertWeekHistoryPlanResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "weekNumber": {
+            "type": "integer"
+          },
+          "weekYear": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "weekStartDate",
+          "weekNumber",
+          "weekYear",
+          "updatedAt"
+        ]
+      },
+      "StaleWeekHistoryPlanResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "STALE_WEEK_PLAN_STATE"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "updatedAt"
+        ]
+      },
+      "UpsertWeekHistoryPlan": {
+        "type": "object",
+        "properties": {
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "$ref": "#/components/schemas/WeekHistoryState"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "finalized",
+              "archived"
+            ],
+            "default": "draft"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "copied_from_previous",
+              "template_applied",
+              "manual"
+            ],
+            "default": "manual"
+          }
+        },
+        "required": [
+          "timezone",
+          "state"
+        ]
+      },
+      "FinalizeWeekHistoryPlanResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "finalized"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "weekStartDate",
+          "status",
+          "updatedAt"
+        ]
+      },
+      "ShoppingListCausedBy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "userId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "source",
+              "userId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "algorithm"
+                ]
+              },
+              "algorithmVersion": {
+                "type": "string"
+              },
+              "triggeredByUserId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "source",
+              "algorithmVersion",
+              "triggeredByUserId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "reason"
+            ]
+          }
+        ]
+      },
+      "ShoppingListEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "sequenceNumber": {
+            "type": "integer"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "causedBy": {
+            "$ref": "#/components/schemas/ShoppingListCausedBy"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "list_started",
+              "item_checked",
+              "shopping_state_replaced",
+              "shopping_list_cleared"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "weekStartDate",
+          "sequenceNumber",
+          "occurredAt",
+          "causedBy",
+          "eventType",
+          "payload"
+        ]
+      },
+      "ShoppingStatePayload": {
+        "type": "object",
+        "properties": {
+          "checkedItems": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "pantryStock": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "checkedItems",
+          "pantryStock"
+        ]
+      },
+      "AppendShoppingListEventRequest": {
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "causedBy": {
+                "$ref": "#/components/schemas/ShoppingListCausedBy"
+              }
+            },
+            "required": [
+              "causedBy"
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "list_started"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "item_checked"
+                    ]
+                  },
+                  "itemKey": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "checked": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "itemKey",
+                  "checked"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "shopping_state_replaced"
+                    ]
+                  },
+                  "state": {
+                    "$ref": "#/components/schemas/ShoppingStatePayload"
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "state"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "shopping_list_cleared"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "ShoppingListProjection": {
+        "type": "object",
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "weekStartDate",
+          "state",
+          "updatedAt"
+        ]
+      },
+      "ShoppingListSummaryItem": {
+        "type": "object",
+        "properties": {
+          "itemKey": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "itemKey",
+          "label",
+          "amount",
+          "unit",
+          "checked"
+        ]
+      },
+      "ShoppingListSummaryGroup": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShoppingListSummaryItem"
+            }
+          }
+        },
+        "required": [
+          "category",
+          "items"
+        ]
+      },
+      "ShoppingListSummary": {
+        "type": "object",
+        "properties": {
+          "household": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShoppingListSummaryGroup"
+            }
+          }
+        },
+        "required": [
+          "household",
+          "weekStartDate",
+          "updatedAt",
+          "groups"
+        ]
+      },
+      "ShoppingListStateResponse": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShoppingStatePayload"
+              },
+              {}
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "updatedAt"
+        ]
+      },
+      "UpdateShoppingListStateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "updatedAt"
+        ]
+      },
+      "StaleShoppingListStateResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "STALE_SHOPPING_STATE"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "updatedAt"
+        ]
+      },
+      "UpdateShoppingListStateRequest": {
+        "type": "object",
+        "properties": {
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShoppingStatePayload"
+              },
+              {}
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "RecipeIngredient": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string",
+            "minLength": 1
+          },
+          "amount": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item"
+        ]
+      },
+      "RecipeStep": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "Recipe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeIngredient"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeStep"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cookTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cuisine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proteinSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mealWeight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user_created",
+              "url_import",
+              "ai_generated"
+            ]
+          },
+          "isPublic": {
+            "type": "boolean"
+          },
+          "isArchived": {
+            "type": "boolean"
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "title",
+          "description",
+          "servings",
+          "ingredients",
+          "steps",
+          "tags",
+          "prepTimeMinutes",
+          "cookTimeMinutes",
+          "cuisine",
+          "proteinSource",
+          "mealWeight",
+          "sourceUrl",
+          "source",
+          "isPublic",
+          "isArchived",
+          "createdBy",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "CreateRecipe": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "default": ""
+          },
+          "servings": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 4
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeIngredient"
+            },
+            "default": []
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeStep"
+            },
+            "default": []
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "cookTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "cuisine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proteinSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mealWeight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user_created",
+              "url_import",
+              "ai_generated"
+            ],
+            "default": "user_created"
+          },
+          "isPublic": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "UpdateRecipe": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeIngredient"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeStep"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "cookTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "cuisine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proteinSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mealWeight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "isPublic": {
+            "type": "boolean"
+          },
+          "isArchived": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RecipesEnvelope": {
+        "type": "object",
+        "properties": {
+          "recipes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recipe"
+            }
+          }
+        },
+        "required": [
+          "recipes"
+        ]
+      },
+      "OkResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "RecipeFillInIngredient": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0.001
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "produce",
+              "dairy",
+              "protein",
+              "pantry",
+              "frozen",
+              "other"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "unit"
+        ]
+      },
+      "RecipeFillInResult": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "prepTimeMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "easy",
+              "medium",
+              "hard"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 30
+            },
+            "maxItems": 20
+          },
+          "cuisine": {
+            "type": "string",
+            "enum": [
+              "italian",
+              "asian",
+              "nordic",
+              "mexican",
+              "middle-eastern",
+              "comfort"
+            ]
+          },
+          "proteinSource": {
+            "type": "string",
+            "enum": [
+              "chicken",
+              "beef",
+              "pork",
+              "lamb",
+              "fish",
+              "seafood",
+              "vegetarian",
+              "legumes",
+              "mixed"
+            ]
+          },
+          "mealWeight": {
+            "type": "string",
+            "enum": [
+              "light",
+              "medium",
+              "hearty"
+            ]
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeFillInIngredient"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "title",
+          "prepTimeMinutes",
+          "ingredients",
+          "steps"
+        ]
+      },
+      "RecipeFillInEnvelope": {
+        "type": "object",
+        "properties": {
+          "recipe": {
+            "$ref": "#/components/schemas/RecipeFillInResult"
+          }
+        },
+        "required": [
+          "recipe"
+        ]
+      },
+      "RecipeFillInRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "householdProfile": {
+            "type": "object",
+            "properties": {
+              "adults": {
+                "type": "number"
+              },
+              "children": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "adults",
+              "children"
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "ImportedRecipeIngredient": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "amount",
+          "category",
+          "name",
+          "unit"
+        ]
+      },
+      "ImportedRecipe": {
+        "type": "object",
+        "properties": {
+          "cuisine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportedRecipeIngredient"
+            }
+          },
+          "mealWeight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "proteinSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cuisine",
+          "ingredients",
+          "mealWeight",
+          "prepTimeMinutes",
+          "proteinSource",
+          "sourceUrl",
+          "tags",
+          "title"
+        ]
+      },
+      "RecipeImportEnvelope": {
+        "type": "object",
+        "properties": {
+          "recipe": {
+            "$ref": "#/components/schemas/ImportedRecipe"
+          }
+        },
+        "required": [
+          "recipe"
+        ]
+      },
+      "RecipeImportRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "MealRecommendation": {
+        "type": "object",
+        "properties": {
+          "mealId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "mealId",
+          "reason"
+        ]
+      },
+      "MealRecommendationsResponse": {
+        "type": "object",
+        "properties": {
+          "recommendations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MealRecommendation"
+            },
+            "maxItems": 15
+          }
+        },
+        "required": [
+          "recommendations"
+        ]
+      },
+      "MealRecommendationsRequest": {
+        "type": "object",
+        "properties": {
+          "householdProfile": {
+            "type": "object",
+            "properties": {
+              "adults": {
+                "type": "number"
+              },
+              "children": {
+                "type": "number"
+              },
+              "priorities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "avoidIngredients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "adults",
+              "children",
+              "priorities",
+              "avoidIngredients"
+            ]
+          },
+          "feedbackSummary": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mealId": {
+                  "type": "string"
+                },
+                "mealTitle": {
+                  "type": "string"
+                },
+                "vote": {
+                  "type": "string",
+                  "enum": [
+                    "up",
+                    "down"
+                  ]
+                },
+                "signal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mealId",
+                "mealTitle",
+                "vote"
+              ]
+            }
+          },
+          "candidateMeals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title"
+              ]
+            },
+            "minItems": 1
+          },
+          "recentMealIds": {
+            "type": "object",
+            "properties": {
+              "lastWeek": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "twoWeeksAgo": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "lastWeek",
+              "twoWeeksAgo"
+            ]
+          },
+          "prepContext": {
+            "type": "object",
+            "properties": {
+              "isCookDay": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "isCookDay"
+            ]
+          }
+        },
+        "required": [
+          "householdProfile",
+          "feedbackSummary",
+          "candidateMeals"
+        ]
+      },
+      "MealFeedbackVote": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down"
+        ]
+      },
+      "MealFeedbackSignal": {
+        "type": "string",
+        "enum": [
+          "easy-weeknight",
+          "family-approved",
+          "good-leftovers",
+          "too-much-effort",
+          "family-pushback",
+          "poor-leftovers"
+        ]
+      },
+      "MealFeedbackEntry": {
+        "type": "object",
+        "properties": {
+          "vote": {
+            "$ref": "#/components/schemas/MealFeedbackVote"
+          },
+          "signal": {
+            "$ref": "#/components/schemas/MealFeedbackSignal"
+          }
+        },
+        "required": [
+          "vote"
+        ]
+      },
+      "MealFeedbackState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/MealFeedbackEntry"
+        }
+      },
+      "MealFeedbackRecord": {
+        "type": "object",
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mealId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/MealFeedbackEntry"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "userId",
+          "mealId",
+          "feedback",
+          "updatedAt"
+        ]
+      },
+      "ListMealFeedbackResponse": {
+        "type": "object",
+        "properties": {
+          "feedback": {
+            "$ref": "#/components/schemas/MealFeedbackState"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MealFeedbackRecord"
+            }
+          }
+        },
+        "required": [
+          "feedback",
+          "items"
+        ]
+      },
+      "UpsertMealFeedback": {
+        "type": "object",
+        "properties": {
+          "mealId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "feedback": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MealFeedbackEntry"
+              },
+              {}
+            ]
+          }
+        },
+        "required": [
+          "mealId",
+          "feedback"
+        ]
+      },
+      "SavedPlan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "label",
+          "state"
+        ]
+      },
+      "UpsertSavedPlan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "label",
+          "state"
+        ]
+      },
+      "RenameSavedPlan": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "label"
+        ]
+      },
+      "PrepBatchAssignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "mealType": {
+            "type": "string",
+            "enum": [
+              "lunch",
+              "dinner"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "batchId",
+          "date",
+          "mealType"
+        ]
+      },
+      "PrepBatch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "customRecipeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "cookDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "totalPortions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrepBatchAssignment"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "recipeId",
+          "customRecipeId",
+          "cookDate",
+          "totalPortions",
+          "createdBy",
+          "createdAt",
+          "assignments"
+        ]
+      },
+      "CreatePrepBatch": {
+        "type": "object",
+        "properties": {
+          "recipeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customRecipeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cookDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "totalPortions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "mealType": {
+                  "type": "string",
+                  "enum": [
+                    "lunch",
+                    "dinner"
+                  ]
+                }
+              },
+              "required": [
+                "date",
+                "mealType"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "cookDate",
+          "totalPortions",
+          "assignments"
+        ]
+      },
+      "PrepBatchOkResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/households/{householdId}/active-week": {
+      "get": {
+        "operationId": "getHouseholdActiveWeek",
+        "summary": "Read a household's active week pointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active week pointer, or null when unset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "activeWeek": {
+                      "$ref": "#/components/schemas/HouseholdActiveWeek"
+                    }
+                  },
+                  "required": [
+                    "activeWeek"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setHouseholdActiveWeek",
+        "summary": "Set a household's active week pointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHouseholdActiveWeek"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved active week pointer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdActiveWeek"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "clearHouseholdActiveWeek",
+        "summary": "Clear a household's active week pointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Active week cleared, or already unset"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/me": {
+      "get": {
+        "operationId": "getMyHouseholds",
+        "summary": "List the households the authenticated user belongs to",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Households the authenticated user has an active membership in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyHouseholdsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/me/bootstrap": {
+      "post": {
+        "operationId": "bootstrapMyHousehold",
+        "summary": "Ensure the authenticated user has a household, creating \"My household\" if they have none",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returned the household the user already belonged to — nothing created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Household"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created \"My household\" with the caller as owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Household"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{id}": {
+      "patch": {
+        "operationId": "renameHousehold",
+        "summary": "Rename a household (owner only)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Household renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameHouseholdResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid household name"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Caller is not the household owner"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/members": {
+      "get": {
+        "operationId": "listHouseholdMembers",
+        "summary": "List a household's active members",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active household members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListHouseholdMembersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/members/{userId}": {
+      "patch": {
+        "operationId": "updateHouseholdMemberRole",
+        "summary": "Update a household member's role",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateHouseholdMemberRoleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated household member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Member not found or caller cannot see this household"
+          },
+          "409": {
+            "description": "Cannot remove the last owner role"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeHouseholdMember",
+        "summary": "Remove a household member",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Member removed"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Member not found or caller cannot see this household"
+          },
+          "409": {
+            "description": "Cannot remove the last owner"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/profile": {
+      "get": {
+        "operationId": "getHouseholdProfile",
+        "summary": "Read a household's planning profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The household profile, or null when no profile has been saved yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/HouseholdProfile"
+                    }
+                  },
+                  "required": [
+                    "profile"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "put": {
+        "operationId": "upsertHouseholdProfile",
+        "summary": "Create or update a household's planning profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertHouseholdProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved household profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/invites": {
+      "post": {
+        "operationId": "createHouseholdInvite",
+        "summary": "Invite someone to join this household",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateHouseholdInviteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created invite, including its shareable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdInvite"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listHouseholdInvites",
+        "summary": "List a household's open (pending) invites",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open invites for this household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdInviteListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/invites/{inviteId}": {
+      "delete": {
+        "operationId": "revokeHouseholdInvite",
+        "summary": "Revoke a pending invite",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "inviteId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (or already not pending/visible — same observable outcome)"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/invites/{token}": {
+      "get": {
+        "operationId": "getInviteLanding",
+        "summary": "Preview an invite before deciding whether to accept it",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "token",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invite is visible to this token holder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdInviteLanding"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "No invite exists for this token"
+          }
+        }
+      }
+    },
+    "/invites/{token}/accept": {
+      "post": {
+        "operationId": "acceptInvite",
+        "summary": "Accept an invite, joining its household as a member",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "token",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Joined the household (or already a member — idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "householdId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "householdId"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "No invite exists for this token"
+          },
+          "409": {
+            "description": "Invite is no longer acceptable (revoked, expired, or already used by someone else)"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/generate": {
+      "post": {
+        "operationId": "generateWeekPlan",
+        "summary": "Generate meals for a week from household profile and available recipes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateWeekPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Week plan generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateWeekPlanResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/events": {
+      "post": {
+        "operationId": "appendWeekPlanEvent",
+        "summary": "Append an event to a household week plan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendWeekPlanEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The persisted event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekPlanEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}": {
+      "get": {
+        "operationId": "getWeekPlan",
+        "summary": "Read a household week plan's current state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current materialized projection for this week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekPlanProjection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "The week hasn't started yet — no projection exists"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/summary": {
+      "get": {
+        "operationId": "getWeekPlanSummary",
+        "summary": "Read a household week plan as an iOS-friendly hydrated summary",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current week plan summary. Missing projections return an empty week.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekPlanSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans": {
+      "get": {
+        "operationId": "listWeekHistoryPlans",
+        "summary": "List a household's persisted week plans",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Week plans ordered by week start date descending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WeekHistoryListItem"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid range"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/history": {
+      "get": {
+        "operationId": "getWeekHistoryPlan",
+        "summary": "Get persisted week-plan history metadata and state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The persisted week plan, or null when absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekHistoryDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week start date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "upsertWeekHistoryPlan",
+        "summary": "Persist or update week-plan history state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertWeekHistoryPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Week history plan persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpsertWeekHistoryPlanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "409": {
+            "description": "The supplied expectedUpdatedAt value is stale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleWeekHistoryPlanResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/finalize": {
+      "post": {
+        "operationId": "finalizeWeekHistoryPlan",
+        "summary": "Finalize a persisted week plan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Week plan finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeWeekHistoryPlanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week start date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Week plan not found"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/shopping-lists/{weekStartDate}/events": {
+      "post": {
+        "operationId": "appendShoppingListEvent",
+        "summary": "Append an event to a household shopping list",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendShoppingListEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The persisted event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingListEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/shopping-lists/{weekStartDate}": {
+      "get": {
+        "operationId": "getShoppingList",
+        "summary": "Read a household shopping list's current state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current materialized projection for this week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingListProjection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "The list hasn't started yet — no projection exists"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/shopping-lists/{weekStartDate}/summary": {
+      "get": {
+        "operationId": "getShoppingListSummary",
+        "summary": "Read a household shopping list as an iOS-friendly grouped summary",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current shopping list summary. Missing projections return an empty list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingListSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/shopping-lists/{weekStartDate}/state": {
+      "get": {
+        "operationId": "getShoppingListState",
+        "summary": "Read a household shopping list's shared checklist and pantry state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shared shopping state, or null when unset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingListStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateShoppingListState",
+        "summary": "Replace or clear a household shopping list's shared checklist and pantry state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShoppingListStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "State was replaced or cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateShoppingListStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "409": {
+            "description": "The supplied expectedUpdatedAt value is stale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleShoppingListStateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/recipes": {
+      "get": {
+        "operationId": "listRecipes",
+        "summary": "List a household's recipes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "includeArchived",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipes list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Recipe"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRecipe",
+        "summary": "Create a recipe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecipe"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/recipes/{recipeId}": {
+      "get": {
+        "operationId": "getRecipe",
+        "summary": "Get a single recipe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Recipe not found"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateRecipe",
+        "summary": "Update a recipe (also used to archive via isArchived: true)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRecipe"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Recipe not found or not in this household"
+          }
+        }
+      }
+    },
+    "/recipes/public": {
+      "get": {
+        "operationId": "listPublicRecipes",
+        "summary": "Search public community recipes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public recipes matching the search query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipesEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/recipes/saved": {
+      "get": {
+        "operationId": "listSavedRecipes",
+        "summary": "List the current user's saved recipes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved recipes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipesEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/recipes/{recipeId}/save": {
+      "post": {
+        "operationId": "saveRecipe",
+        "summary": "Save a readable recipe for the current user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Recipe saved, or already saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Recipe not found or not readable by caller"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "unsaveRecipe",
+        "summary": "Remove a recipe from the current user saved list",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe unsaved, or was not saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/recipes/fill-in": {
+      "post": {
+        "operationId": "fillInRecipe",
+        "summary": "Generate recipe details from a title",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeFillInRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated recipe details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeFillInEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "422": {
+            "description": "AI response did not match the recipe schema"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "500": {
+            "description": "AI provider unavailable"
+          }
+        }
+      }
+    },
+    "/recipes/import-from-url": {
+      "post": {
+        "operationId": "importRecipeFromUrl",
+        "summary": "Import recipe metadata from a URL",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Imported recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid URL"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "422": {
+            "description": "Could not parse recipe from fetched page"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "500": {
+            "description": "Could not fetch page"
+          }
+        }
+      }
+    },
+    "/recipes/recommend": {
+      "post": {
+        "operationId": "recommendMeals",
+        "summary": "Rank candidate meals for a household",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MealRecommendationsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recommended meals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MealRecommendationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "422": {
+            "description": "AI response did not match schema"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "500": {
+            "description": "AI provider unavailable"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/meal-feedback": {
+      "get": {
+        "operationId": "listMealFeedback",
+        "summary": "List the current user's meal feedback in a household",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Meal feedback keyed by meal id, plus ordered records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMealFeedbackResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "put": {
+        "operationId": "upsertMealFeedback",
+        "summary": "Upsert or remove meal feedback for the current user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertMealFeedback"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feedback saved or removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/saved-plans": {
+      "get": {
+        "operationId": "listSavedPlans",
+        "summary": "List the current user's saved week plan templates",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved plan templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedPlan"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "post": {
+        "operationId": "upsertSavedPlan",
+        "summary": "Create or replace a saved week plan template",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertSavedPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved plan persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPlan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/saved-plans/{id}": {
+      "patch": {
+        "operationId": "renameSavedPlan",
+        "summary": "Rename a saved week plan template",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameSavedPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved plan renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPlan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Saved plan not found"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSavedPlan",
+        "summary": "Delete a saved week plan template",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved plan deleted, or was already absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/prep_batches": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prep batches in date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "batches": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PrepBatch"
+                      }
+                    }
+                  },
+                  "required": [
+                    "batches"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePrepBatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Prep batch created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/prep_batches/{batchId}": {
+      "delete": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "batchId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prep batch deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepBatchOkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Prep batch not found or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

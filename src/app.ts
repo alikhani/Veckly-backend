@@ -17,9 +17,7 @@ import type { Db } from './db.js'
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
 
-  app.route('/', buildActiveWeekRoutes(db))
-  app.route('/', buildHouseholdsRoutes(db))
-  app.route('/', buildHouseholdProfileRoutes(db))
+  // Internal server-to-server routes (MealPlanner strangle path)
   app.route('/', buildInternalHouseholdsRoutes(db))
   app.route('/', buildInternalHouseholdProfileRoutes(db))
   app.route('/', buildInternalInvitesRoutes(db))
@@ -29,6 +27,11 @@ export function buildApp(db: Db) {
   app.route('/', buildInternalRecipeImportRoutes())
   app.route('/', buildInternalRecipeRecommendationRoutes())
   app.route('/', buildInternalSavedPlansRoutes(db))
+
+  // Public client-facing routes
+  app.route('/', buildActiveWeekRoutes(db))
+  app.route('/', buildHouseholdsRoutes(db))
+  app.route('/', buildHouseholdProfileRoutes(db))
   app.route('/', buildInvitesRoutes(db))
   app.route('/', buildWeekPlanRoutes(db))
   app.route('/', buildShoppingListRoutes(db))
@@ -52,6 +55,11 @@ export function buildApp(db: Db) {
   })
 
   app.get('/health', (c) => c.json({ status: 'ok' }))
+
+  app.onError((err, c) => {
+    console.error('Unhandled error', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  })
 
   return app
 }

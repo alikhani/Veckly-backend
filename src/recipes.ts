@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq, ilike, inArray, isNotNull, not, or } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, isNotNull, not, or } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { withRls } from './rls.js'
@@ -78,7 +78,10 @@ const UpdateRecipeSchema = z.object({
 
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
 const RecipeParamsSchema = z.object({ householdId: z.string().uuid(), recipeId: z.string().uuid() })
-const ListQuerySchema = z.object({ includeArchived: z.enum(['true', 'false']).optional() })
+const ListQuerySchema = z.object({
+  includeArchived: z.enum(['true', 'false']).optional(),
+  includePublic: z.enum(['true', 'false']).optional(),
+})
 const PublicRecipeQuerySchema = z.object({ q: z.string().max(120).optional() })
 const PublicRecipeParamsSchema = z.object({ recipeId: z.string().uuid() })
 const RecipesEnvelopeSchema = z.object({ recipes: z.array(RecipeSchema) }).openapi('RecipesEnvelope')
@@ -150,18 +153,29 @@ export async function listRecipes(
   accessToken: string,
   householdId: string,
   includeArchived: boolean,
+  includePublic: boolean = false,
 ) {
   return withRls(db, accessToken, async (tx) => {
-    const conditions = [eq(recipes.householdId, householdId)]
-    if (!includeArchived) conditions.push(eq(recipes.isArchived, false))
+    const householdConditions = [eq(recipes.householdId, householdId)]
+    if (!includeArchived) householdConditions.push(eq(recipes.isArchived, false))
 
-    const rows = await tx
+    const householdRows = await tx
       .select()
       .from(recipes)
-      .where(and(...conditions))
+      .where(and(...householdConditions))
       .orderBy(desc(recipes.updatedAt))
 
-    return rows.map(toRecipeResponse)
+    if (!includePublic) return householdRows.map(toRecipeResponse)
+
+    const householdIds = new Set(householdRows.map((r) => r.id))
+    const publicRows = await tx
+      .select()
+      .from(recipes)
+      .where(and(eq(recipes.isPublic, true), eq(recipes.isArchived, false)))
+      .orderBy(asc(recipes.title))
+
+    const uniquePublic = publicRows.filter((r) => !householdIds.has(r.id))
+    return [...householdRows, ...uniquePublic].map(toRecipeResponse)
   })
 }
 
@@ -422,8 +436,8 @@ export function buildRecipesRoutes(db: Db) {
   app.openapi(listRecipesRoute, async (c) => {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
-    const { includeArchived } = c.req.valid('query')
-    const list = await listRecipes(db, accessToken, householdId, includeArchived === 'true')
+    const { includeArchived, includePublic } = c.req.valid('query')
+    const list = await listRecipes(db, accessToken, householdId, includeArchived === 'true', includePublic === 'true')
     return c.json(list, 200)
   })
 

@@ -110,6 +110,7 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    signal: AbortSignal.timeout(30_000),
     headers: {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
@@ -124,7 +125,10 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
     }),
   })
 
-  if (!response.ok) throw new Error(`Anthropic request failed: HTTP ${response.status}`)
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '(unreadable)')
+    throw new Error(`Anthropic request failed: HTTP ${response.status} — ${errBody}`)
+  }
   const body = await response.json() as { content?: Array<{ type: string; text?: string }> }
   const text = body.content?.find((part) => part.type === 'text')?.text
   if (!text) throw new Error('Anthropic response did not include text content')

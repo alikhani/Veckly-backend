@@ -105,8 +105,10 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
 
+  console.log('[fill-in] calling Anthropic, key prefix:', apiKey.slice(0, 10))
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    signal: AbortSignal.timeout(30_000),
     headers: {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
@@ -121,10 +123,15 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
     }),
   })
 
-  if (!response.ok) throw new Error(`Anthropic request failed: HTTP ${response.status}`)
+  console.log('[fill-in] Anthropic responded HTTP', response.status)
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '(unreadable)')
+    throw new Error(`Anthropic request failed: HTTP ${response.status} — ${errBody}`)
+  }
   const body = await response.json() as { content?: Array<{ type: string; text?: string }> }
   const text = body.content?.find((part) => part.type === 'text')?.text
   if (!text) throw new Error('Anthropic response did not include text content')
+  console.log('[fill-in] got text, length:', text.length)
   return text
 }
 

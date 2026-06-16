@@ -187,6 +187,7 @@ const WeekPlanSummaryDaySchema = z.object({
   dayOfWeek,
   date: z.string(),
   state: z.enum(['empty', 'planned', 'skipped']),
+  isLocked: z.boolean(),
   recipe: WeekPlanSummaryRecipeSchema.nullable(),
 }).openapi('WeekPlanSummaryDay')
 
@@ -738,6 +739,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           dayOfWeek,
           date: addDays(weekStartDate, index),
           state,
+          isLocked: projectionState.lockedDays.includes(dayOfWeek),
           recipe: recipe ? {
             id: recipe.id,
             title: recipe.title,

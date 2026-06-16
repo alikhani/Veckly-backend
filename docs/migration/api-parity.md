@@ -31,7 +31,7 @@ Public OpenAPI routes:
 | POST | `/invites/{token}/accept` | `acceptInvite` | Accept invite and join household. |
 | POST | `/households/{householdId}/week-plans/{weekStartDate}/events` | `appendWeekPlanEvent` | Event model proof slice. |
 | GET | `/households/{householdId}/week-plans/{weekStartDate}` | `getWeekPlan` | Raw projection read. |
-| GET | `/households/{householdId}/week-plans/{weekStartDate}/summary` | `getWeekPlanSummary` | iOS-friendly read model. |
+| GET | `/households/{householdId}/week-plans/{weekStartDate}/summary` | `getWeekPlanSummary` | iOS-friendly read model; each day includes `state`, optional `recipe`, and `isLocked`. |
 | GET | `/households/{householdId}/week-plans` | `listWeekHistoryPlans` | Persisted week history list/read model. |
 | GET | `/households/{householdId}/week-plans/{weekStartDate}/history` | `getWeekHistoryPlan` | Persisted week history detail. |
 | PATCH | `/households/{householdId}/week-plans/{weekStartDate}/history` | `upsertWeekHistoryPlan` | Persist/update week history state with OCC. |

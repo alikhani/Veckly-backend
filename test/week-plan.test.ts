@@ -547,6 +547,7 @@ describeWithDb('Week-plan event log + projection', () => {
         dayOfWeek: 'monday',
         date: '2026-06-08',
         state: 'planned',
+        isLocked: false,
         recipe: {
           id: recipe.id,
           title: 'Monday Pasta',
@@ -572,6 +573,24 @@ describeWithDb('Week-plan event log + projection', () => {
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
 
       expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
+    })
+
+    it('exposes locked days on the iOS summary read model', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: recipe.id } },
+        lockedDays: ['monday'],
+        skippedDays: ['wednesday'],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'planned', isLocked: true })
+      expect(summary?.days[1]).toMatchObject({ dayOfWeek: 'tuesday', state: 'empty', isLocked: false })
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', isLocked: false })
     })
 
     it('does not expose another household summary across RLS', async () => {

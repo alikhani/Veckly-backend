@@ -42,6 +42,20 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-06-16 — iOS week summary lock state
+
+`GET /households/{householdId}/week-plans/{weekStartDate}/summary` now returns
+`isLocked` on every `WeekPlanSummaryDay`. iOS uses this per-day read model as the
+source of truth for locked-day UI state, avoiding a second client-side `lockedDays`
+collection that can drift from the summary rows.
+
+The OpenAPI specs in `Veckly-backend/openapi.json` and
+`Veckly-ios/OpenAPI/veckly-openapi.json` include the new field.
+
+Deployed 2026-06-16:
+- Staging/preview: `https://veckly-backend-mrmllqbe3-nimaalikhani5s-projects.vercel.app`
+- Production: `https://veckly-backend.vercel.app`
+
 ### 2026-06-16 — DB client fix (critical)
 
 **Symptom:** iOS week view meal assignment failed with "We could not assign the meal" after a ~30 s delay. Vercel logs showed function timeout.

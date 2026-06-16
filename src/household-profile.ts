@@ -192,6 +192,7 @@ export function buildHouseholdProfileRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const profile = await getHouseholdProfile(db, accessToken, householdId)
+    c.header('Cache-Control', 'private, max-age=300')
     return c.json({ profile }, 200)
   })
 

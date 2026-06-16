@@ -467,6 +467,7 @@ export function buildHouseholdsRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const members = await listHouseholdMembers(db, accessToken, householdId)
+    c.header('Cache-Control', 'private, max-age=300')
     return c.json({ members }, 200)
   })
 

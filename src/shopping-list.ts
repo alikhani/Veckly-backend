@@ -539,6 +539,7 @@ export function buildShoppingListRoutes(db: Db) {
     const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate)
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
+    c.header('Cache-Control', 'private, max-age=60')
     return c.json(summary, 200)
   })
 

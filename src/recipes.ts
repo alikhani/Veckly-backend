@@ -438,6 +438,7 @@ export function buildRecipesRoutes(db: Db) {
     const { householdId } = c.req.valid('param')
     const { includeArchived, includePublic } = c.req.valid('query')
     const list = await listRecipes(db, accessToken, householdId, includeArchived === 'true', includePublic === 'true')
+    c.header('Cache-Control', 'private, max-age=300')
     return c.json(list, 200)
   })
 

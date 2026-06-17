@@ -21,12 +21,16 @@ const RawRecipeSchema = z.object({
   mealWeight: z.string().nullable(),
   prepTimeMinutes: z.number().int().nullable(),
   proteinSource: z.string().nullable(),
-  sourceUrl: z.string(),
+  sourceUrl: z.string().nullable(),
   tags: z.array(z.string()),
   title: z.string(),
 }).openapi('ImportedRecipe')
 
 const ImportBodySchema = z.object({ url: z.string() }).openapi('RecipeImportRequest')
+const TextImportBodySchema = z.object({
+  text: z.string(),
+  sourceUrl: z.string().optional(),
+}).openapi('RecipeTextImportRequest')
 const ImportEnvelopeSchema = z.object({ recipe: RawRecipeSchema }).openapi('RecipeImportEnvelope')
 const RecipeImportErrorSchema = z.object({
   error: z.enum([
@@ -60,10 +64,13 @@ type TRawRecipeIngredient = z.infer<typeof RawRecipeIngredientSchema>
 type TRawRecipe = z.infer<typeof RawRecipeSchema>
 type TPageFetcher = (url: string) => Promise<string>
 type TImportExtractor = (html: string, sourceUrl: string) => Promise<TRawRecipe>
+type TTextImportExtractor = (text: string, sourceUrl: string | null) => Promise<TRawRecipe>
 
 const importRateLimitHits = new Map<string, number>()
+const textImportRateLimitHits = new Map<string, number>()
 let pageFetcher: TPageFetcher = fetchRecipePage
 let aiExtractor: TImportExtractor = extractRecipeWithAi
+let textAiExtractor: TTextImportExtractor = extractRecipeFromTextWithAi
 
 export class FetchError extends Error {
   code: 'NETWORK_ERROR' | 'TIMEOUT' | 'TOO_LARGE'
@@ -77,16 +84,19 @@ export class FetchError extends Error {
 export function setRecipeImportDependenciesForTests(deps: {
   aiExtractor?: TImportExtractor
   pageFetcher?: TPageFetcher
+  textAiExtractor?: TTextImportExtractor
 } | null) {
   pageFetcher = deps?.pageFetcher ?? fetchRecipePage
   aiExtractor = deps?.aiExtractor ?? extractRecipeWithAi
+  textAiExtractor = deps?.textAiExtractor ?? extractRecipeFromTextWithAi
   importRateLimitHits.clear()
+  textImportRateLimitHits.clear()
 }
 
-function isRateLimited(userId: string, now = Date.now()) {
-  const previous = importRateLimitHits.get(userId)
+function isRateLimited(hits: Map<string, number>, userId: string, now = Date.now()) {
+  const previous = hits.get(userId)
   if (previous !== undefined && now - previous < 15_000) return true
-  importRateLimitHits.set(userId, now)
+  hits.set(userId, now)
   return false
 }
 
@@ -101,6 +111,11 @@ function validateUrl(raw: unknown): { url: string } | { error: 'INVALID_URL' } {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { error: 'INVALID_URL' }
   if (PRIVATE_IP_PATTERN.test(parsed.hostname)) return { error: 'INVALID_URL' }
   return { url: parsed.toString() }
+}
+
+function validateOptionalUrl(raw: unknown): { url: string | null } | { error: 'INVALID_URL' } {
+  if (raw === undefined || raw === null || raw === '') return { url: null }
+  return validateUrl(raw)
 }
 
 function parseRobotsText(text: string, origin: string): void {
@@ -256,6 +271,23 @@ JSON structure:
 
 Do NOT include cooking steps. Omit amounts and units when uncertain.`
 
+const TEXT_IMPORT_SYSTEM_PROMPT = `You are a recipe data extractor. Extract recipe data from pasted recipe text, a social caption, or notes.
+Return ONLY a single valid JSON object — no markdown, no explanation.
+
+JSON structure:
+{
+  "title": "<recipe title>",
+  "prepTimeMinutes": <integer or null>,
+  "tags": ["<tag>"],
+  "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
+  "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
+  "mealWeight": "light"|"medium"|"hearty"|null,
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "<category|null>" }]
+}
+
+Extract only when the text contains enough recipe detail to form a useful dinner draft.
+Do NOT invent ingredients. Do NOT include cooking steps. Omit amounts and units when uncertain.`
+
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -332,8 +364,38 @@ export async function extractRecipeWithAi(html: string, sourceUrl: string): Prom
   }
 }
 
+export async function extractRecipeFromTextWithAi(text: string, sourceUrl: string | null): Promise<TRawRecipe> {
+  const trimmedText = text.trim().slice(0, MAX_TEXT_LENGTH)
+  const raw = await generateStructuredJSON(
+    TEXT_IMPORT_SYSTEM_PROMPT,
+    `Source URL: ${sourceUrl ?? 'none'}\n\n${trimmedText}`
+  )
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('AI_PARSE_FAILED')
+  }
+
+  const result = ImportExtractionSchema.safeParse(parsed)
+  if (!result.success) throw new Error('AI_VALIDATION_FAILED')
+
+  const data = result.data
+  return {
+    title: data.title,
+    prepTimeMinutes: data.prepTimeMinutes ?? null,
+    ingredients: data.ingredients.map(toIngredient),
+    cuisine: data.cuisine ?? null,
+    proteinSource: data.proteinSource ?? null,
+    mealWeight: data.mealWeight ?? null,
+    tags: data.tags ?? [],
+    sourceUrl,
+  }
+}
+
 async function handleRecipeImport(userId: string, rawUrl: unknown) {
-  if (isRateLimited(userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+  if (isRateLimited(importRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   const validated = validateUrl(rawUrl)
   if ('error' in validated) return { body: { error: 'INVALID_URL' }, status: 400 as const }
@@ -350,6 +412,22 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
 
   try {
     return { body: { recipe: await aiExtractor(html, validated.url) }, status: 200 as const }
+  } catch {
+    return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
+  }
+}
+
+async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourceUrl: unknown) {
+  if (isRateLimited(textImportRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+  if (typeof rawText !== 'string' || rawText.trim().length < 20) {
+    return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
+  }
+
+  const sourceUrl = validateOptionalUrl(rawSourceUrl)
+  if ('error' in sourceUrl) return { body: { error: 'INVALID_URL' }, status: 400 as const }
+
+  try {
+    return { body: { recipe: await textAiExtractor(rawText, sourceUrl.url) }, status: 200 as const }
   } catch {
     return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }
@@ -374,6 +452,25 @@ const importRoute = createRoute({
   },
 })
 
+const textImportRoute = createRoute({
+  method: 'post',
+  path: '/recipes/import-from-text',
+  operationId: 'importRecipeFromText',
+  summary: 'Import recipe metadata from pasted text',
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: { content: { 'application/json': { schema: TextImportBodySchema } } },
+  },
+  responses: {
+    200: { description: 'Imported recipe', content: { 'application/json': { schema: ImportEnvelopeSchema } } },
+    400: { description: 'Invalid source URL', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    401: { description: 'Missing or invalid session' },
+    422: { description: 'Could not parse recipe from pasted text', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    500: { description: 'Could not import pasted text', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+  },
+})
+
 export function buildRecipeImportRoutes() {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
@@ -383,6 +480,13 @@ export function buildRecipeImportRoutes() {
     const user = c.get('user')
     const body = c.req.valid('json')
     const result = await handleRecipeImport(user.id, body.url)
+    return c.json(result.body as never, result.status)
+  })
+
+  app.openapi(textImportRoute, async (c) => {
+    const user = c.get('user')
+    const body = c.req.valid('json')
+    const result = await handleRecipeTextImport(user.id, body.text, body.sourceUrl)
     return c.json(result.body as never, result.status)
   })
 
@@ -398,6 +502,13 @@ export function buildInternalRecipeImportRoutes() {
     const user = c.get('user')
     const body = await c.req.json().catch(() => null) as { url?: unknown } | null
     const result = await handleRecipeImport(user.id, body?.url)
+    return c.json(result.body, result.status)
+  })
+
+  app.post('/internal/recipes/import-from-text', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => null) as { text?: unknown; sourceUrl?: unknown } | null
+    const result = await handleRecipeTextImport(user.id, body?.text, body?.sourceUrl)
     return c.json(result.body, result.status)
   })
 

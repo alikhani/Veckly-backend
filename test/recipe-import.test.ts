@@ -17,6 +17,11 @@ const MOCK_RECIPE = {
   tags: [],
   sourceUrl: VALID_URL,
 }
+const MOCK_TEXT_RECIPE = {
+  ...MOCK_RECIPE,
+  title: 'Pasta med tomatsås',
+  sourceUrl: null,
+}
 
 const SCHEMA_ORG_HTML = `<html><head>
 <script type="application/ld+json">
@@ -55,6 +60,19 @@ describeWithDb('Recipe URL import routes', () => {
   function request(body: unknown, userId = '11111111-1111-1111-1111-111111111111') {
     const app = buildApp(db)
     return app.request('/internal/recipes/import-from-url', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-User-Id': userId,
+      },
+      body: JSON.stringify(body),
+    })
+  }
+
+  function textRequest(body: unknown, userId = '22222222-2222-2222-2222-222222222222') {
+    const app = buildApp(db)
+    return app.request('/internal/recipes/import-from-text', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
@@ -154,5 +172,71 @@ describeWithDb('Recipe URL import routes', () => {
     })
 
     expect(response.status).toBe(401)
+  })
+
+  it('imports recipe data from pasted text', async () => {
+    setRecipeImportDependenciesForTests({
+      textAiExtractor: async (text, sourceUrl) => ({ ...MOCK_TEXT_RECIPE, title: text.includes('pasta') ? MOCK_TEXT_RECIPE.title : 'Draft', sourceUrl }),
+    })
+
+    const response = await textRequest({
+      text: 'Snabb pasta med tomatsås, vitlök, olivolja och parmesan. Koka pasta och rör ihop såsen.',
+    }, 'user-text-import')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      recipe: {
+        title: 'Pasta med tomatsås',
+        sourceUrl: null,
+      },
+    })
+  })
+
+  it('passes optional source URL through text imports', async () => {
+    setRecipeImportDependenciesForTests({
+      textAiExtractor: async (_text, sourceUrl) => ({ ...MOCK_TEXT_RECIPE, sourceUrl }),
+    })
+
+    const response = await textRequest({
+      text: 'Taco bowl med ris, bönor, majs, sallad, yoghurt och lime. Blanda i skålar och servera.',
+      sourceUrl: 'https://www.instagram.com/p/example',
+    }, 'user-text-source-url')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      recipe: { sourceUrl: 'https://www.instagram.com/p/example' },
+    })
+  })
+
+  it('rejects short text and invalid source URLs', async () => {
+    const shortText = await textRequest({ text: 'pasta' }, 'user-short-text')
+    const invalidSource = await textRequest({
+      text: 'Pasta med tomatsås, vitlök, olivolja och parmesan. Koka pasta och rör ihop såsen.',
+      sourceUrl: 'ftp://example.com/reel',
+    }, 'user-invalid-text-source')
+
+    expect(shortText.status).toBe(422)
+    await expect(shortText.json()).resolves.toEqual({ error: 'NO_RECIPE_FOUND' })
+    expect(invalidSource.status).toBe(400)
+    await expect(invalidSource.json()).resolves.toEqual({ error: 'INVALID_URL' })
+  })
+
+  it('rate-limits text imports separately from URL imports', async () => {
+    setRecipeImportDependenciesForTests({
+      pageFetcher: async () => SCHEMA_ORG_HTML,
+      textAiExtractor: async () => MOCK_TEXT_RECIPE,
+    })
+
+    await request({ url: VALID_URL }, 'user-separate-rate-limit')
+    const firstText = await textRequest({
+      text: 'Pasta med tomatsås, vitlök, olivolja och parmesan. Koka pasta och rör ihop såsen.',
+    }, 'user-separate-rate-limit')
+    const secondText = await textRequest({
+      text: 'Pasta med tomatsås, vitlök, olivolja och parmesan. Koka pasta och rör ihop såsen.',
+    }, 'user-separate-rate-limit')
+
+    expect(firstText.status).toBe(200)
+    expect(secondText.status).toBe(429)
+    await expect(secondText.json()).resolves.toEqual({ error: 'RATE_LIMITED' })
   })
 })

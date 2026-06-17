@@ -32,7 +32,7 @@ recipe without user correction.
 | 0 | Product and technical decision | Complete |
 | 1 | Split iOS sheet into Write / Import | Complete |
 | 2 | Harden ordinary URL import UX | Complete |
-| 3 | Text / caption draft import | Not started |
+| 3 | Text / caption draft import | In progress |
 | 4 | Backend social metadata extraction | Not started |
 | 5 | Social draft generation and warnings | Not started |
 | 6 | Persist optional import provenance | Deferred |
@@ -164,10 +164,22 @@ Social import is best-effort:
 
 ## Phase 3 - Text / Caption Draft Import
 
-**Status:** Not started
+**Status:** In progress (started 2026-06-17)
 
 This should come before platform-specific Instagram work. It covers the practical user
 case where a recipe exists as a caption, message, note, or copied social text.
+
+Implementation note, 2026-06-17:
+
+- Backend first slice exists as `POST /recipes/import-from-text` and
+  `POST /internal/recipes/import-from-text`.
+- The response mirrors URL import and allows `ImportedRecipe.sourceUrl` to be `null`
+  for pasted text without a source link.
+- Text import has a separate per-user rate limit from URL import.
+- iOS `RecipeFormSheet` import mode now splits into `Link` and `Text`; successful text
+  import switches back to `Write` with an editable draft.
+- No DB migration was added in this slice. Text-imported drafts save as `ai_generated`
+  through the existing recipe source enum.
 
 ### Backend
 

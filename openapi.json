@@ -2736,7 +2736,10 @@
             ]
           },
           "sourceUrl": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tags": {
             "type": "array",
@@ -2798,6 +2801,20 @@
         },
         "required": [
           "url"
+        ]
+      },
+      "RecipeTextImportRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
         ]
       },
       "MealRecommendation": {
@@ -5126,6 +5143,81 @@
           },
           "500": {
             "description": "Could not fetch page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recipes/import-from-text": {
+      "post": {
+        "operationId": "importRecipeFromText",
+        "summary": "Import recipe metadata from pasted text",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeTextImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Imported recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid source URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "422": {
+            "description": "Could not parse recipe from pasted text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Could not import pasted text",
             "content": {
               "application/json": {
                 "schema": {

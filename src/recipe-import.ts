@@ -63,9 +63,14 @@ const RecipeImportErrorSchema = z.object({
   ]),
 }).openapi('RecipeImportError')
 
+const VALID_INGREDIENT_CATEGORIES = new Set(['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other'])
+
 const ImportIngredientSchema = z.object({
-  amount: z.number().positive().nullable().optional(),
-  category: z.enum(['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other']).nullable().optional(),
+  // Accept any non-negative number — the AI occasionally returns 0 for trace amounts
+  amount: z.number().min(0).nullable().optional(),
+  // Accept any string — AI uses valid values like "protein" but also "fish", "condiment"
+  // etc. Unknown values are coerced to null in toIngredient() rather than failing here.
+  category: z.string().nullable().optional(),
   name: z.string().min(1).max(200),
   unit: z.string().max(20).nullable().optional(),
 })
@@ -479,7 +484,7 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "<category|null>" }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
 }
 
 Do NOT include cooking steps. Omit amounts and units when uncertain.`
@@ -495,7 +500,7 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "<category|null>" }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
 }
 
 Extract only when the text contains enough recipe detail to form a useful dinner draft.
@@ -513,7 +518,7 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "<category|null>" }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
 }
 
 Rules:
@@ -538,7 +543,7 @@ function toIngredient(i: z.infer<typeof ImportIngredientSchema>): TRawRecipeIngr
     name: i.name,
     amount: i.amount ?? null,
     unit: i.unit ?? null,
-    category: i.category ?? null,
+    category: i.category && VALID_INGREDIENT_CATEGORIES.has(i.category) ? i.category : null,
   }
 }
 
@@ -557,7 +562,8 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
 
   const text = message.content.find((b) => b.type === 'text')?.text
   if (!text) throw new Error('Anthropic response did not include text content')
-  return text
+  // Strip markdown code fences the model sometimes emits despite instructions
+  return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
 }
 
 export async function extractRecipeWithAi(html: string, sourceUrl: string): Promise<TRawRecipe> {

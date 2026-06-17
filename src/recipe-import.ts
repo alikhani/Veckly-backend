@@ -27,6 +27,7 @@ const RawRecipeSchema = z.object({
   prepTimeMinutes: z.number().int().nullable(),
   proteinSource: z.string().nullable(),
   sourceUrl: z.string().nullable(),
+  steps: z.array(z.string()).optional(),
   tags: z.array(z.string()),
   title: z.string(),
 }).openapi('ImportedRecipe')
@@ -81,6 +82,7 @@ const ImportExtractionSchema = z.object({
   mealWeight: z.enum(['light', 'medium', 'hearty']).nullable().optional(),
   prepTimeMinutes: z.number().int().min(1).max(600).nullable().optional(),
   proteinSource: z.enum(['chicken', 'beef', 'pork', 'lamb', 'fish', 'seafood', 'vegetarian', 'legumes', 'mixed']).nullable().optional(),
+  steps: z.array(z.string().min(1).max(1000)).max(30).optional(),
   tags: z.array(z.string().max(30)).max(20).optional(),
   title: z.string().min(1).max(120),
 })
@@ -484,10 +486,11 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }],
+  "steps": ["<step 1 as a complete actionable sentence>"]
 }
 
-Do NOT include cooking steps. Omit amounts and units when uncertain.`
+Omit amounts and units when uncertain. Return steps as an empty array [] if no steps are present.`
 
 const TEXT_IMPORT_SYSTEM_PROMPT = `You are a recipe data extractor. Extract recipe data from pasted recipe text, a social caption, or notes.
 Return ONLY a single valid JSON object — no markdown, no explanation.
@@ -500,11 +503,12 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }],
+  "steps": ["<step 1 as a complete actionable sentence>"]
 }
 
 Extract only when the text contains enough recipe detail to form a useful dinner draft.
-Do NOT invent ingredients. Do NOT include cooking steps. Omit amounts and units when uncertain.`
+Do NOT invent ingredients or steps. Extract steps when described — return [] if none are present. Omit amounts and units when uncertain.`
 
 const SOCIAL_DRAFT_SYSTEM_PROMPT = `You are a recipe data extractor working from a social media caption or video title.
 The source is a short text from a social platform — not a structured recipe page.
@@ -518,14 +522,16 @@ JSON structure:
   "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
   "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
   "mealWeight": "light"|"medium"|"hearty"|null,
-  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }]
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "produce"|"dairy"|"protein"|"pantry"|"frozen"|"other"|null }],
+  "steps": ["<step 1 as a complete actionable sentence>"]
 }
 
 Rules:
 - Infer only what is explicitly supported by the caption or title text.
 - Leave ingredient amounts and units as null when not stated — never invent quantities.
 - If ingredients can be named but amounts are unclear, include the ingredient with amount null.
-- Do NOT include cooking steps.
+- Extract cooking steps when they appear in the caption (e.g. after "Gör såhär:", numbered lists, or prose instructions). Normalise informal prose into complete actionable sentences. Return [] if no process is described.
+- Do NOT invent steps that are not in the text.
 - Produce a best-effort household recipe draft when enough text exists.
 - If the text is too thin to name even a title, still return the structure with a best-guess title and empty ingredients array.`
 
@@ -588,6 +594,7 @@ export async function extractRecipeWithAi(html: string, sourceUrl: string): Prom
     cuisine: data.cuisine ?? null,
     proteinSource: data.proteinSource ?? null,
     mealWeight: data.mealWeight ?? null,
+    steps: data.steps ?? [],
     tags: data.tags ?? [],
     sourceUrl,
   }
@@ -618,6 +625,7 @@ export async function extractRecipeFromTextWithAi(text: string, sourceUrl: strin
     cuisine: data.cuisine ?? null,
     proteinSource: data.proteinSource ?? null,
     mealWeight: data.mealWeight ?? null,
+    steps: data.steps ?? [],
     tags: data.tags ?? [],
     sourceUrl,
   }
@@ -650,6 +658,7 @@ export async function extractRecipeFromSocialWithAi(
     cuisine: data.cuisine ?? null,
     proteinSource: data.proteinSource ?? null,
     mealWeight: data.mealWeight ?? null,
+    steps: data.steps ?? [],
     tags: data.tags ?? [],
     sourceUrl: metadata.canonicalUrl,
   }

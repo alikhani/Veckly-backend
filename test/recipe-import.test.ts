@@ -131,7 +131,7 @@ describeWithDb('Recipe URL import routes', () => {
     await expect(response.json()).resolves.toEqual({ error: 'FETCH_FAILED' })
   })
 
-  it('returns parse failure when schema.org and AI both fail', async () => {
+  it('returns no-recipe-found when schema.org and AI both fail', async () => {
     setRecipeImportDependenciesForTests({
       pageFetcher: async () => '<html/>',
       aiExtractor: async () => {
@@ -142,7 +142,7 @@ describeWithDb('Recipe URL import routes', () => {
     const response = await request({ url: VALID_URL }, 'user-parse-fail')
 
     expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual({ error: 'PARSE_FAILED' })
+    await expect(response.json()).resolves.toEqual({ error: 'NO_RECIPE_FOUND' })
   })
 
   it('requires internal auth on the MealPlanner strangle route', async () => {

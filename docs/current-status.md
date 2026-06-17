@@ -42,6 +42,16 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-06-17 — Recipe URL import error contract
+
+`POST /recipes/import-from-url` now exposes stable `RecipeImportError` response
+bodies in OpenAPI for 400, 422, 429, and 500 responses. iOS maps those error
+codes to user-facing import messages instead of treating every URL import
+failure as a generic backend error.
+
+The OpenAPI specs in `Veckly-backend/openapi.json` and
+`Veckly-ios/OpenAPI/veckly-openapi.json` have been regenerated.
+
 ### 2026-06-17 — POST body hang fix (critical)
 
 **Symptom:** All POST routes with a JSON body returned 504 after exactly 30 s (Vercel `maxDuration`). POST routes without a declared body schema (e.g. `POST /households/me/bootstrap`) returned 200 normally. GET routes were unaffected.

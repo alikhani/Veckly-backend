@@ -28,6 +28,16 @@ const RawRecipeSchema = z.object({
 
 const ImportBodySchema = z.object({ url: z.string() }).openapi('RecipeImportRequest')
 const ImportEnvelopeSchema = z.object({ recipe: RawRecipeSchema }).openapi('RecipeImportEnvelope')
+const RecipeImportErrorSchema = z.object({
+  error: z.enum([
+    'INVALID_URL',
+    'UNSUPPORTED_URL',
+    'FETCH_FAILED',
+    'NO_RECIPE_FOUND',
+    'RATE_LIMITED',
+    'IMPORT_FAILED',
+  ]),
+}).openapi('RecipeImportError')
 
 const ImportIngredientSchema = z.object({
   amount: z.number().positive().nullable().optional(),
@@ -341,7 +351,7 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   try {
     return { body: { recipe: await aiExtractor(html, validated.url) }, status: 200 as const }
   } catch {
-    return { body: { error: 'PARSE_FAILED' }, status: 422 as const }
+    return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }
 }
 
@@ -356,11 +366,11 @@ const importRoute = createRoute({
   },
   responses: {
     200: { description: 'Imported recipe', content: { 'application/json': { schema: ImportEnvelopeSchema } } },
-    400: { description: 'Invalid URL' },
+    400: { description: 'Invalid URL', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     401: { description: 'Missing or invalid session' },
-    422: { description: 'Could not parse recipe from fetched page' },
-    429: { description: 'Rate limited' },
-    500: { description: 'Could not fetch page' },
+    422: { description: 'Could not parse recipe from fetched page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    500: { description: 'Could not fetch page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
   },
 })
 

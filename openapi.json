@@ -2770,6 +2770,25 @@
           "recipe"
         ]
       },
+      "RecipeImportError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "INVALID_URL",
+              "UNSUPPORTED_URL",
+              "FETCH_FAILED",
+              "NO_RECIPE_FOUND",
+              "RATE_LIMITED",
+              "IMPORT_FAILED"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "RecipeImportRequest": {
         "type": "object",
         "properties": {
@@ -5073,19 +5092,47 @@
             }
           },
           "400": {
-            "description": "Invalid URL"
+            "description": "Invalid URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
           },
           "422": {
-            "description": "Could not parse recipe from fetched page"
+            "description": "Could not parse recipe from fetched page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
           },
           "429": {
-            "description": "Rate limited"
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
           },
           "500": {
-            "description": "Could not fetch page"
+            "description": "Could not fetch page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
           }
         }
       }

@@ -18,8 +18,11 @@ recipe without user correction.
 - Backend already has `POST /recipes/import-from-url`.
 - Backend URL import already handles URL validation, SSRF protection, schema.org recipe
   parsing, AI fallback, user rate limiting, and returns an `ImportedRecipe`.
+- Backend URL import now exposes stable `RecipeImportError` response bodies in OpenAPI.
 - Recipes already persist `source_url` and `source = 'url_import'`.
 - iOS `RecipeFormSheet` now separates create mode into `Write` and `Import`.
+- iOS maps import error codes to specific user-facing copy and shows the source URL after
+  an import succeeds.
 - iOS `RecipeStore` already exposes `importFromURL(_:)`.
 
 ## Status Summary
@@ -28,7 +31,7 @@ recipe without user correction.
 |---|---|---|
 | 0 | Product and technical decision | Complete |
 | 1 | Split iOS sheet into Write / Import | Complete |
-| 2 | Harden ordinary URL import UX | Not started |
+| 2 | Harden ordinary URL import UX | Complete |
 | 3 | Text / caption draft import | Not started |
 | 4 | Backend social metadata extraction | Not started |
 | 5 | Social draft generation and warnings | Not started |
@@ -105,7 +108,7 @@ Social import is best-effort:
 
 ## Phase 2 - Harden Ordinary URL Import UX
 
-**Status:** Not started
+**Status:** Complete (2026-06-17)
 
 ### iOS
 

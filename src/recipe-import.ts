@@ -295,7 +295,11 @@ function validateOptionalUrl(raw: unknown): { url: string | null } | { error: 'I
   return validateUrl(raw)
 }
 
-function parseRobotsText(text: string, origin: string): void {
+export class RobotsBlockedError extends Error {
+  constructor() { super('ROBOTS_BLOCKED') }
+}
+
+export function parseRobotsText(text: string): void {
   let applies = false
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -303,8 +307,8 @@ function parseRobotsText(text: string, origin: string): void {
       const agent = trimmed.slice('user-agent:'.length).trim()
       applies = agent === '*' || /vecklybot|mealplannerbot/i.test(agent)
     }
-    if (applies && /^disallow:\s*\//i.test(trimmed)) {
-      console.warn(`[import-from-url] robots.txt Disallow: / on ${origin}`)
+    if (applies && /^disallow:\s*\/\s*$/i.test(trimmed)) {
+      throw new RobotsBlockedError()
     }
   }
 }
@@ -316,9 +320,10 @@ async function checkRobotsTxt(url: string): Promise<void> {
       headers: { 'User-Agent': 'VecklyBot/1.0' },
       signal: AbortSignal.timeout(ROBOTS_TIMEOUT_MS),
     })
-    if (res.ok) parseRobotsText(await res.text(), origin)
-  } catch {
-    // best-effort only
+    if (res.ok) parseRobotsText(await res.text())
+  } catch (err) {
+    if (err instanceof RobotsBlockedError) throw err
+    // other network/parse errors are best-effort — don't block the import
   }
 }
 
@@ -702,7 +707,7 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
     if ('error' in result) {
       const statusMap = {
         INVALID_URL: 400 as const,
-        FETCH_FAILED: 500 as const,
+        FETCH_FAILED: 502 as const,
         NO_RECIPE_FOUND: 422 as const,
       }
       return { body: { error: result.error }, status: statusMap[result.error] }
@@ -731,7 +736,10 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   let html: string
   try {
     html = await pageFetcher(validated.url)
-  } catch {
+  } catch (err) {
+    if (err instanceof RobotsBlockedError) {
+      return { body: { error: 'UNSUPPORTED_URL' }, status: 422 as const }
+    }
     return { body: { error: 'FETCH_FAILED' }, status: 500 as const }
   }
 
@@ -764,6 +772,36 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   }
 }
 
+function computeTextConfidenceAndWarnings(
+  text: string,
+  recipe: TRawRecipe,
+): { confidence: TImportConfidence; warnings: string[] } {
+  const warnings: string[] = []
+  const textLength = text.trim().length
+  const hasIngredients = recipe.ingredients.length > 0
+  const anyAmountsMissing = recipe.ingredients.some((i) => i.amount === null)
+
+  if (textLength < 100) {
+    warnings.push('Recipe details are based on very little text — review before saving.')
+  }
+  if (!hasIngredients) {
+    warnings.push('No ingredients could be identified from the text.')
+  } else if (anyAmountsMissing) {
+    warnings.push('Ingredient amounts may be incomplete.')
+  }
+
+  let confidence: TImportConfidence
+  if (warnings.length === 0) {
+    confidence = 'high'
+  } else if (!hasIngredients || textLength < 50) {
+    confidence = 'low'
+  } else {
+    confidence = 'medium'
+  }
+
+  return { confidence, warnings }
+}
+
 async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourceUrl: unknown) {
   if (isRateLimited(textImportRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
   if (typeof rawText !== 'string' || rawText.trim().length < 20) {
@@ -775,7 +813,8 @@ async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourc
 
   try {
     const recipe = await textAiExtractor(rawText, sourceUrl.url)
-    return { body: { recipe, warnings: [], confidence: 'high' as const }, status: 200 as const }
+    const { confidence, warnings } = computeTextConfidenceAndWarnings(rawText, recipe)
+    return { body: { recipe, warnings, confidence }, status: 200 as const }
   } catch {
     return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }
@@ -797,6 +836,7 @@ const importRoute = createRoute({
     422: { description: 'Could not parse recipe from fetched page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     500: { description: 'Could not fetch page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
+    502: { description: 'Upstream social platform unavailable', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
   },
 })
 

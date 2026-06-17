@@ -3,8 +3,10 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import {
   FetchError,
+  RobotsBlockedError,
   classifyUrlPlatform,
   fetchRecipePage,
+  parseRobotsText,
   resolveUrlSafely,
   setRecipeImportDependenciesForTests,
 } from '../src/recipe-import.js'
@@ -232,6 +234,36 @@ describeWithDb('Recipe URL import routes', () => {
     await expect(invalidSource.json()).resolves.toEqual({ error: 'INVALID_URL' })
   })
 
+  it('returns low confidence and a warning for short pasted text', async () => {
+    setRecipeImportDependenciesForTests({
+      textAiExtractor: async () => ({ ...MOCK_TEXT_RECIPE, ingredients: [] }),
+    })
+
+    const response = await textRequest({
+      text: 'Pasta bolognese. Cook and serve.',
+    }, 'user-text-low-confidence')
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { confidence: string; warnings: string[] }
+    expect(body.confidence).toBe('low')
+    expect(body.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('returns high confidence for long text with complete ingredients', async () => {
+    setRecipeImportDependenciesForTests({
+      textAiExtractor: async () => MOCK_TEXT_RECIPE,
+    })
+
+    const longText = 'Pasta bolognese: 400g spaghetti, 300g ground beef, 1 can tomatoes, 2 garlic cloves, 1 onion, olive oil, salt, pepper. Fry onion and garlic, add beef and brown, add tomatoes and simmer 20 min. Cook pasta al dente and serve with sauce.'
+
+    const response = await textRequest({ text: longText }, 'user-text-high-confidence')
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { confidence: string; warnings: string[] }
+    expect(body.confidence).toBe('high')
+    expect(body.warnings).toEqual([])
+  })
+
   it('rate-limits text imports separately from URL imports', async () => {
     setRecipeImportDependenciesForTests({
       pageFetcher: async () => SCHEMA_ORG_HTML,
@@ -263,6 +295,17 @@ describeWithDb('Recipe URL import routes', () => {
 
     expect(response.status).toBe(422)
     await expect(response.json()).resolves.toEqual({ error: 'UNSUPPORTED_SOCIAL_SOURCE' })
+  })
+
+  it('returns UNSUPPORTED_URL when robots.txt disallows crawling', async () => {
+    setRecipeImportDependenciesForTests({
+      pageFetcher: async () => { throw new RobotsBlockedError() },
+    })
+
+    const response = await request({ url: VALID_URL }, 'user-robots-blocked')
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual({ error: 'UNSUPPORTED_URL' })
   })
 
   it('handles TikTok oEmbed success and feeds caption to social AI extractor', async () => {
@@ -665,5 +708,35 @@ describe('fetchRecipePage SSRF redirect protection', () => {
     const err = await fetchRecipePage('https://example.com/recipe').catch((e) => e)
     expect(err).toBeInstanceOf(FetchError)
     expect((err as FetchError).code).toBe('NETWORK_ERROR')
+  })
+
+  it('throws RobotsBlockedError when robots.txt disallows VecklyBot', async () => {
+    const robotsTxt = 'User-agent: *\nDisallow: /'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(robotsTxt, { status: 200 })), // robots.txt
+    )
+    await expect(fetchRecipePage('https://example.com/recipe')).rejects.toThrow(RobotsBlockedError)
+  })
+})
+
+describe('parseRobotsText', () => {
+  it('throws when wildcard user-agent disallows root', () => {
+    expect(() => parseRobotsText('User-agent: *\nDisallow: /')).toThrow(RobotsBlockedError)
+  })
+
+  it('throws when VecklyBot is explicitly disallowed', () => {
+    expect(() => parseRobotsText('User-agent: VecklyBot\nDisallow: /')).toThrow(RobotsBlockedError)
+  })
+
+  it('does not throw when a different bot is disallowed', () => {
+    expect(() => parseRobotsText('User-agent: Googlebot\nDisallow: /')).not.toThrow()
+  })
+
+  it('does not throw for an empty robots.txt', () => {
+    expect(() => parseRobotsText('')).not.toThrow()
+  })
+
+  it('does not throw when disallow is for a subpath only', () => {
+    expect(() => parseRobotsText('User-agent: *\nDisallow: /private/')).not.toThrow()
   })
 })

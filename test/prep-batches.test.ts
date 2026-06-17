@@ -4,7 +4,6 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
 import { ensureAuthenticatedRoleGranted, ensureMigrationsApplied } from './migrations.js'
-import { fakeAccessToken } from './fake-access-token.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -25,6 +24,14 @@ describeWithDb('Prep batches + RLS', () => {
   beforeAll(async () => {
     await ensureMigrationsApplied(db, migrationsDir)
     await ensureAuthenticatedRoleGranted(db)
+    process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
+  })
+
+  afterAll(async () => {
+    await db.execute(sql`delete from "household_prep_batches"`)
+    await db.execute(sql`delete from "household_memberships"`)
+    await db.execute(sql`delete from "households"`)
+    delete process.env.VECKLY_INTERNAL_API_KEY
   })
 
   beforeEach(async () => {
@@ -43,24 +50,23 @@ describeWithDb('Prep batches + RLS', () => {
     ])
   })
 
-  afterAll(async () => {
-    await db.execute(sql`delete from "household_prep_batches"`)
-    await db.execute(sql`delete from "household_memberships"`)
-    await db.execute(sql`delete from "households"`)
-  })
-
   function authHeaders(userId: string) {
-    return { Authorization: `Bearer ${fakeAccessToken(userId)}` }
+    return {
+      Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
+      'X-User-Id': userId,
+    }
   }
 
   it('returns 401 for unauthenticated requests', async () => {
-    const res = await app.request(`/households/${householdAId}/prep-batches?from=2026-01-01&to=2026-01-07`)
+    const res = await app.request(
+      `/internal/households/${householdAId}/prep_batches?from=2026-01-01&to=2026-01-07`,
+    )
     expect(res.status).toBe(401)
   })
 
   it('returns 404 for a non-member', async () => {
     const res = await app.request(
-      `/households/${householdAId}/prep-batches?from=2026-01-01&to=2026-01-07`,
+      `/internal/households/${householdAId}/prep_batches?from=2026-01-01&to=2026-01-07`,
       { headers: authHeaders(userB) },
     )
     expect(res.status).toBe(404)
@@ -78,7 +84,7 @@ describeWithDb('Prep batches + RLS', () => {
       ],
     }
 
-    const res = await app.request(`/households/${householdAId}/prep-batches`, {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -95,7 +101,7 @@ describeWithDb('Prep batches + RLS', () => {
   })
 
   it('lists batches whose cookDate falls within the requested date range', async () => {
-    await app.request(`/households/${householdAId}/prep-batches`, {
+    await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -106,7 +112,7 @@ describeWithDb('Prep batches + RLS', () => {
       }),
     })
 
-    await app.request(`/households/${householdAId}/prep-batches`, {
+    await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -118,7 +124,7 @@ describeWithDb('Prep batches + RLS', () => {
     })
 
     const res = await app.request(
-      `/households/${householdAId}/prep-batches?from=2026-06-15&to=2026-06-21`,
+      `/internal/households/${householdAId}/prep_batches?from=2026-06-15&to=2026-06-21`,
       { headers: authHeaders(userA) },
     )
     expect(res.status).toBe(200)
@@ -127,7 +133,7 @@ describeWithDb('Prep batches + RLS', () => {
   })
 
   it('deletes a prep batch and returns 200', async () => {
-    const createRes = await app.request(`/households/${householdAId}/prep-batches`, {
+    const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -139,7 +145,7 @@ describeWithDb('Prep batches + RLS', () => {
     })
     const { id } = await createRes.json() as { id: string }
 
-    const deleteRes = await app.request(`/households/${householdAId}/prep-batches/${id}`, {
+    const deleteRes = await app.request(`/internal/households/${householdAId}/prep_batches/${id}`, {
       method: 'DELETE',
       headers: authHeaders(userA),
     })
@@ -148,7 +154,7 @@ describeWithDb('Prep batches + RLS', () => {
   })
 
   it('returns 404 when deleting a batch from another household', async () => {
-    const createRes = await app.request(`/households/${householdBId}/prep-batches`, {
+    const createRes = await app.request(`/internal/households/${householdBId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userB), 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -160,7 +166,7 @@ describeWithDb('Prep batches + RLS', () => {
     })
     const { id } = await createRes.json() as { id: string }
 
-    const deleteRes = await app.request(`/households/${householdAId}/prep-batches/${id}`, {
+    const deleteRes = await app.request(`/internal/households/${householdAId}/prep_batches/${id}`, {
       method: 'DELETE',
       headers: authHeaders(userA),
     })
@@ -168,7 +174,7 @@ describeWithDb('Prep batches + RLS', () => {
   })
 
   it('non-member cannot create a batch in another household', async () => {
-    const res = await app.request(`/households/${householdAId}/prep-batches`, {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
       headers: { ...authHeaders(userB), 'Content-Type': 'application/json' },
       body: JSON.stringify({

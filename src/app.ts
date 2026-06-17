@@ -11,7 +11,7 @@ import { buildInternalRecipeImportRoutes, buildRecipeImportRoutes } from './reci
 import { buildInternalRecipeRecommendationRoutes, buildRecipeRecommendationRoutes } from './recipe-recommendations.js'
 import { buildInternalMealFeedbackRoutes, buildMealFeedbackRoutes } from './meal-feedback.js'
 import { buildInternalSavedPlansRoutes, buildSavedPlansRoutes } from './saved-plans.js'
-import { buildPrepBatchesRoutes } from './prep-batches.js'
+import { buildInternalPrepBatchesRoutes, buildPrepBatchesRoutes } from './prep-batches.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -27,6 +27,7 @@ export function buildApp(db: Db) {
   app.route('/', buildInternalRecipeImportRoutes())
   app.route('/', buildInternalRecipeRecommendationRoutes())
   app.route('/', buildInternalSavedPlansRoutes(db))
+  app.route('/', buildInternalPrepBatchesRoutes(db))
 
   // Public client-facing routes
   app.route('/', buildActiveWeekRoutes(db))

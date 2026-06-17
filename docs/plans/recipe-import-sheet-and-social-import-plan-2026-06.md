@@ -34,7 +34,7 @@ recipe without user correction.
 | 2 | Harden ordinary URL import UX | Complete |
 | 3 | Text / caption draft import | Complete |
 | 4 | Backend social metadata extraction | Complete |
-| 5 | Social draft generation and warnings | Not started |
+| 5 | Social draft generation and warnings | Complete (2026-06-17) |
 | 6 | Persist optional import provenance | Deferred |
 | 7 | Instagram/Reels deeper integration | Deferred |
 
@@ -299,7 +299,7 @@ type TImportSourceMetadata = {
 
 ## Phase 5 - Social Draft Generation and Warnings
 
-**Status:** Not started
+**Status:** Complete (2026-06-17)
 
 ### Backend
 

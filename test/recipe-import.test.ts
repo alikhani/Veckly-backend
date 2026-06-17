@@ -111,7 +111,12 @@ describeWithDb('Recipe URL import routes', () => {
     const response = await request({ url: VALID_URL }, 'user-ai')
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ recipe: MOCK_RECIPE })
+    await expect(response.json()).resolves.toMatchObject({
+      recipe: MOCK_RECIPE,
+      confidence: 'high',
+      warnings: [],
+      source: { kind: 'web', url: VALID_URL },
+    })
   })
 
   it('rejects invalid and private URLs', async () => {
@@ -258,7 +263,7 @@ describeWithDb('Recipe URL import routes', () => {
     await expect(response.json()).resolves.toEqual({ error: 'UNSUPPORTED_SOCIAL_SOURCE' })
   })
 
-  it('handles TikTok oEmbed success and feeds caption to AI extractor', async () => {
+  it('handles TikTok oEmbed success and feeds caption to social AI extractor', async () => {
     const mockOEmbed = {
       title: 'Easy pasta recipe with 3 ingredients! #recipe #pasta',
       author_name: 'chefmaria',
@@ -269,10 +274,10 @@ describeWithDb('Recipe URL import routes', () => {
 
     setRecipeImportDependenciesForTests({
       tiktokOEmbedFetcher: async () => mockOEmbed,
-      textAiExtractor: async (text, sourceUrl) => ({
+      socialAiExtractor: async (metadata) => ({
         ...MOCK_RECIPE,
         title: 'Easy Pasta',
-        sourceUrl,
+        sourceUrl: metadata.canonicalUrl,
       }),
     })
 
@@ -282,9 +287,12 @@ describeWithDb('Recipe URL import routes', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json() as { recipe: typeof MOCK_RECIPE }
+    const body = await response.json() as { recipe: typeof MOCK_RECIPE; source: unknown; warnings: string[]; confidence: string }
     expect(body.recipe.title).toBe('Easy Pasta')
     expect(body.recipe.sourceUrl).toBe('https://www.tiktok.com/@chefmaria/video/123456')
+    expect(body.source).toMatchObject({ kind: 'tiktok', url: 'https://www.tiktok.com/@chefmaria/video/123456' })
+    expect(Array.isArray(body.warnings)).toBe(true)
+    expect(['high', 'medium', 'low']).toContain(body.confidence)
   })
 
   it('returns NO_RECIPE_FOUND when TikTok oEmbed fails', async () => {
@@ -301,6 +309,108 @@ describeWithDb('Recipe URL import routes', () => {
 
     expect(response.status).toBe(422)
     await expect(response.json()).resolves.toEqual({ error: 'NO_RECIPE_FOUND' })
+  })
+
+  // Phase 5 — social draft generation and warnings
+
+  it('TikTok with thin caption produces confidence:low and at least one warning', async () => {
+    const mockOEmbed = {
+      title: 'Pasta',
+      author_name: 'chef',
+      thumbnail_url: 'https://p16-sign.tiktokcdn.com/thumb.jpg',
+    }
+
+    setRecipeImportDependenciesForTests({
+      tiktokOEmbedFetcher: async () => mockOEmbed,
+      socialAiExtractor: async (metadata) => ({
+        title: metadata.title ?? 'Pasta',
+        prepTimeMinutes: null,
+        ingredients: [],
+        cuisine: null,
+        proteinSource: null,
+        mealWeight: null,
+        tags: [],
+        sourceUrl: metadata.canonicalUrl,
+      }),
+    })
+
+    const response = await request(
+      { url: 'https://www.tiktok.com/@chef/video/111' },
+      'user-tiktok-thin-caption',
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { confidence: string; warnings: string[]; source: unknown }
+    expect(body.confidence).toBe('low')
+    expect(body.warnings.length).toBeGreaterThan(0)
+    expect(body.source).toMatchObject({ kind: 'tiktok' })
+  })
+
+  it('TikTok with detailed caption produces source, warnings, and confidence fields', async () => {
+    const mockOEmbed = {
+      title: 'Spaghetti carbonara with guanciale, eggs, pecorino, and black pepper — no cream! Ready in 20 minutes. #pasta #italian',
+      author_name: 'pastamaster',
+      author_url: 'https://www.tiktok.com/@pastamaster',
+      thumbnail_url: 'https://p16-sign.tiktokcdn.com/thumb.jpg',
+    }
+
+    setRecipeImportDependenciesForTests({
+      tiktokOEmbedFetcher: async () => mockOEmbed,
+      socialAiExtractor: async (metadata) => ({
+        ...MOCK_RECIPE,
+        title: 'Spaghetti Carbonara',
+        ingredients: [
+          { name: 'spaghetti', amount: 400, unit: 'g', category: 'pantry' },
+          { name: 'guanciale', amount: 150, unit: 'g', category: 'protein' },
+          { name: 'eggs', amount: 4, unit: null, category: 'dairy' },
+        ],
+        sourceUrl: metadata.canonicalUrl,
+      }),
+    })
+
+    const response = await request(
+      { url: 'https://www.tiktok.com/@pastamaster/video/999' },
+      'user-tiktok-detailed',
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      recipe: { title: string; sourceUrl: string }
+      source: { kind: string; url: string; authorName?: string; thumbnailUrl?: string }
+      warnings: string[]
+      confidence: string
+    }
+    expect(body.recipe.title).toBe('Spaghetti Carbonara')
+    expect(body.source.kind).toBe('tiktok')
+    expect(body.source.authorName).toBe('pastamaster')
+    expect(body.source.thumbnailUrl).toBe('https://p16-sign.tiktokcdn.com/thumb.jpg')
+    expect(Array.isArray(body.warnings)).toBe(true)
+    expect(['high', 'medium', 'low']).toContain(body.confidence)
+  })
+
+  it('general web schema.org path returns confidence:high and empty warnings', async () => {
+    const response = await request({ url: VALID_URL }, 'user-web-schemaorg')
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { confidence: string; warnings: string[]; source: unknown }
+    expect(body.confidence).toBe('high')
+    expect(body.warnings).toEqual([])
+    expect(body.source).toMatchObject({ kind: 'web', url: VALID_URL })
+  })
+
+  it('general web AI fallback path returns confidence:high and empty warnings', async () => {
+    setRecipeImportDependenciesForTests({
+      pageFetcher: async () => '<html><body>Pasta recipe</body></html>',
+      aiExtractor: async () => MOCK_RECIPE,
+    })
+
+    const response = await request({ url: VALID_URL }, 'user-web-ai-fallback')
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { confidence: string; warnings: string[]; source: unknown }
+    expect(body.confidence).toBe('high')
+    expect(body.warnings).toEqual([])
+    expect(body.source).toMatchObject({ kind: 'web', url: VALID_URL })
   })
 })
 

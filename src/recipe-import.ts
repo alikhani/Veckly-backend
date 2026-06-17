@@ -35,7 +35,20 @@ const TextImportBodySchema = z.object({
   text: z.string(),
   sourceUrl: z.string().optional(),
 }).openapi('RecipeTextImportRequest')
-const ImportEnvelopeSchema = z.object({ recipe: RawRecipeSchema }).openapi('RecipeImportEnvelope')
+const ImportSourceSchema = z.object({
+  kind: z.enum(['web', 'tiktok', 'instagram']),
+  url: z.string(),
+  title: z.string().optional(),
+  authorName: z.string().optional(),
+  thumbnailUrl: z.string().optional(),
+}).openapi('ImportSource')
+
+const ImportEnvelopeSchema = z.object({
+  recipe: RawRecipeSchema,
+  source: ImportSourceSchema.optional(),
+  warnings: z.array(z.string()),
+  confidence: z.enum(['high', 'medium', 'low']),
+}).openapi('RecipeImportEnvelope')
 const RecipeImportErrorSchema = z.object({
   error: z.enum([
     'INVALID_URL',
@@ -71,6 +84,7 @@ type TRawRecipe = z.infer<typeof RawRecipeSchema>
 type TPageFetcher = (url: string) => Promise<string>
 type TImportExtractor = (html: string, sourceUrl: string) => Promise<TRawRecipe>
 type TTextImportExtractor = (text: string, sourceUrl: string | null) => Promise<TRawRecipe>
+type TSocialImportExtractor = (metadata: TImportSourceMetadata) => Promise<TRawRecipe>
 
 type TImportPlatform = 'web' | 'tiktok' | 'instagram'
 
@@ -100,6 +114,7 @@ const textImportRateLimitHits = new Map<string, number>()
 let pageFetcher: TPageFetcher = fetchRecipePage
 let aiExtractor: TImportExtractor = extractRecipeWithAi
 let textAiExtractor: TTextImportExtractor = extractRecipeFromTextWithAi
+let socialAiExtractor: TSocialImportExtractor = extractRecipeFromSocialWithAi
 let tiktokOEmbedFetcher: TOEmbedFetcher = fetchTikTokOEmbed
 
 export class FetchError extends Error {
@@ -115,11 +130,13 @@ export function setRecipeImportDependenciesForTests(deps: {
   aiExtractor?: TImportExtractor
   pageFetcher?: TPageFetcher
   textAiExtractor?: TTextImportExtractor
+  socialAiExtractor?: TSocialImportExtractor
   tiktokOEmbedFetcher?: TOEmbedFetcher
 } | null) {
   pageFetcher = deps?.pageFetcher ?? fetchRecipePage
   aiExtractor = deps?.aiExtractor ?? extractRecipeWithAi
   textAiExtractor = deps?.textAiExtractor ?? extractRecipeFromTextWithAi
+  socialAiExtractor = deps?.socialAiExtractor ?? extractRecipeFromSocialWithAi
   tiktokOEmbedFetcher = deps?.tiktokOEmbedFetcher ?? fetchTikTokOEmbed
   importRateLimitHits.clear()
   textImportRateLimitHits.clear()
@@ -448,6 +465,29 @@ JSON structure:
 Extract only when the text contains enough recipe detail to form a useful dinner draft.
 Do NOT invent ingredients. Do NOT include cooking steps. Omit amounts and units when uncertain.`
 
+const SOCIAL_DRAFT_SYSTEM_PROMPT = `You are a recipe data extractor working from a social media caption or video title.
+The source is a short text from a social platform — not a structured recipe page.
+Return ONLY a single valid JSON object — no markdown, no explanation.
+
+JSON structure:
+{
+  "title": "<recipe title>",
+  "prepTimeMinutes": <integer or null>,
+  "tags": ["<tag>"],
+  "cuisine": "italian"|"asian"|"nordic"|"mexican"|"middle-eastern"|"comfort"|null,
+  "proteinSource": "chicken"|"beef"|"pork"|"lamb"|"fish"|"seafood"|"vegetarian"|"legumes"|"mixed"|null,
+  "mealWeight": "light"|"medium"|"hearty"|null,
+  "ingredients": [{ "name": "<name>", "amount": <number|null>, "unit": "<unit|null>", "category": "<category|null>" }]
+}
+
+Rules:
+- Infer only what is explicitly supported by the caption or title text.
+- Leave ingredient amounts and units as null when not stated — never invent quantities.
+- If ingredients can be named but amounts are unclear, include the ingredient with amount null.
+- Do NOT include cooking steps.
+- Produce a best-effort household recipe draft when enough text exists.
+- If the text is too thin to name even a title, still return the structure with a best-guess title and empty ingredients array.`
+
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -554,6 +594,70 @@ export async function extractRecipeFromTextWithAi(text: string, sourceUrl: strin
   }
 }
 
+export async function extractRecipeFromSocialWithAi(
+  metadata: TImportSourceMetadata,
+): Promise<TRawRecipe> {
+  const captionText = (metadata.rawTextForDraft ?? metadata.title ?? '').slice(0, MAX_TEXT_LENGTH)
+  const raw = await generateStructuredJSON(
+    SOCIAL_DRAFT_SYSTEM_PROMPT,
+    `Source URL: ${metadata.canonicalUrl}\nAuthor: ${metadata.authorName ?? 'unknown'}\n\nCaption/title:\n${captionText}`
+  )
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('AI_PARSE_FAILED')
+  }
+
+  const result = ImportExtractionSchema.safeParse(parsed)
+  if (!result.success) throw new Error('AI_VALIDATION_FAILED')
+
+  const data = result.data
+  return {
+    title: data.title,
+    prepTimeMinutes: data.prepTimeMinutes ?? null,
+    ingredients: data.ingredients.map(toIngredient),
+    cuisine: data.cuisine ?? null,
+    proteinSource: data.proteinSource ?? null,
+    mealWeight: data.mealWeight ?? null,
+    tags: data.tags ?? [],
+    sourceUrl: metadata.canonicalUrl,
+  }
+}
+
+type TImportConfidence = 'high' | 'medium' | 'low'
+
+function computeTikTokConfidenceAndWarnings(
+  metadata: TImportSourceMetadata,
+  recipe: TRawRecipe,
+): { confidence: TImportConfidence; warnings: string[] } {
+  const warnings: string[] = []
+  const captionLength = (metadata.rawTextForDraft ?? metadata.title ?? '').length
+  const hasIngredients = recipe.ingredients.length > 0
+  const anyAmountsMissing = recipe.ingredients.some((i) => i.amount === null)
+
+  if (captionLength < 80) {
+    warnings.push('Recipe details are based on a short caption — review before saving.')
+  }
+  if (!hasIngredients) {
+    warnings.push('No ingredients could be identified from the caption.')
+  } else if (anyAmountsMissing) {
+    warnings.push('Ingredient amounts may be incomplete.')
+  }
+
+  let confidence: TImportConfidence
+  if (warnings.length === 0) {
+    confidence = 'high'
+  } else if (!hasIngredients || captionLength < 40) {
+    confidence = 'low'
+  } else {
+    confidence = 'medium'
+  }
+
+  return { confidence, warnings }
+}
+
 async function handleRecipeImport(userId: string, rawUrl: unknown) {
   if (isRateLimited(importRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
@@ -577,17 +681,26 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
       return { body: { error: result.error }, status: statusMap[result.error] }
     }
 
-    // Feed the caption/description text into the AI extraction path
-    const rawText = result.rawTextForDraft ?? result.title ?? ''
+    // Feed the social metadata into the social-specific AI extraction path
+    let recipe: TRawRecipe
     try {
-      const recipe = await textAiExtractor(rawText, result.canonicalUrl)
-      return { body: { recipe }, status: 200 as const }
+      recipe = await socialAiExtractor(result)
     } catch {
       return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
     }
+
+    const { confidence, warnings } = computeTikTokConfidenceAndWarnings(result, recipe)
+    const source = {
+      kind: 'tiktok' as const,
+      url: result.canonicalUrl,
+      title: result.title,
+      authorName: result.authorName,
+      thumbnailUrl: result.thumbnailUrl,
+    }
+    return { body: { recipe, source, warnings, confidence }, status: 200 as const }
   }
 
-  // General web path — unchanged
+  // General web path
   let html: string
   try {
     html = await pageFetcher(validated.url)
@@ -596,10 +709,29 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   }
 
   const schemaOrgResult = parseSchemaOrgRecipe(html, validated.url)
-  if (schemaOrgResult) return { body: { recipe: schemaOrgResult }, status: 200 as const }
+  if (schemaOrgResult) {
+    return {
+      body: {
+        recipe: schemaOrgResult,
+        source: { kind: 'web' as const, url: validated.url },
+        warnings: [],
+        confidence: 'high' as const,
+      },
+      status: 200 as const,
+    }
+  }
 
   try {
-    return { body: { recipe: await aiExtractor(html, validated.url) }, status: 200 as const }
+    const recipe = await aiExtractor(html, validated.url)
+    return {
+      body: {
+        recipe,
+        source: { kind: 'web' as const, url: validated.url },
+        warnings: [],
+        confidence: 'high' as const,
+      },
+      status: 200 as const,
+    }
   } catch {
     return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }
@@ -615,7 +747,8 @@ async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourc
   if ('error' in sourceUrl) return { body: { error: 'INVALID_URL' }, status: 400 as const }
 
   try {
-    return { body: { recipe: await textAiExtractor(rawText, sourceUrl.url) }, status: 200 as const }
+    const recipe = await textAiExtractor(rawText, sourceUrl.url)
+    return { body: { recipe, warnings: [], confidence: 'high' as const }, status: 200 as const }
   } catch {
     return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }

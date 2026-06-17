@@ -105,7 +105,6 @@ function parseAiJson(raw: string) {
 async function generateStructuredJSON(systemPrompt: string, userMessage: string) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
-  console.log('[fill-in] key prefix:', apiKey.slice(0, 14))
 
   const client = new Anthropic({ apiKey, timeout: 25_000, maxRetries: 0 })
   const message = await client.messages.create({
@@ -116,7 +115,6 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
     messages: [{ role: 'user', content: userMessage }],
   })
 
-  console.log('[fill-in] response received, stop_reason:', message.stop_reason)
   const text = message.content.find((b) => b.type === 'text')?.text
   if (!text) throw new Error('Anthropic response did not include text content')
   return text

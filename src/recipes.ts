@@ -82,7 +82,7 @@ const ListQuerySchema = z.object({
   includeArchived: z.enum(['true', 'false']).optional(),
   includePublic: z.enum(['true', 'false']).optional(),
 })
-const PublicRecipeQuerySchema = z.object({ q: z.string().max(120).optional() })
+const PublicRecipeQuerySchema = z.object({ q: z.string().min(2).max(120).optional() })
 const PublicRecipeParamsSchema = z.object({ recipeId: z.string().uuid() })
 const RecipesEnvelopeSchema = z.object({ recipes: z.array(RecipeSchema) }).openapi('RecipesEnvelope')
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse')
@@ -248,7 +248,7 @@ export async function listPublicRecipes(
     const membershipRows = await tx
       .select({ householdId: householdMemberships.householdId })
       .from(householdMemberships)
-      .where(eq(householdMemberships.userId, userId))
+      .where(and(eq(householdMemberships.userId, userId), eq(householdMemberships.status, 'active')))
     const householdIds = membershipRows.map((row) => row.householdId)
 
     const conditions = [

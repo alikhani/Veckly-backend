@@ -1,7 +1,7 @@
 # Recipe Import Sheet and Social Import Plan
 
 Created: 2026-06-17
-Status: planned
+Status: active (Phases 0–5 complete; Phases 6–7 deferred)
 
 ## Goal
 

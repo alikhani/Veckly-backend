@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
-import { setRecipeImportDependenciesForTests } from '../src/recipe-import.js'
+import {
+  classifyUrlPlatform,
+  resolveUrlSafely,
+  setRecipeImportDependenciesForTests,
+} from '../src/recipe-import.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
@@ -238,5 +242,254 @@ describeWithDb('Recipe URL import routes', () => {
     expect(firstText.status).toBe(200)
     expect(secondText.status).toBe(429)
     await expect(secondText.json()).resolves.toEqual({ error: 'RATE_LIMITED' })
+  })
+
+  it('returns UNSUPPORTED_SOCIAL_SOURCE for Instagram links', async () => {
+    const response = await request({ url: 'https://www.instagram.com/p/ABC123' }, 'user-instagram')
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual({ error: 'UNSUPPORTED_SOCIAL_SOURCE' })
+  })
+
+  it('returns UNSUPPORTED_SOCIAL_SOURCE for instagram.com subdomain', async () => {
+    const response = await request({ url: 'https://instagram.com/reel/XYZ789' }, 'user-instagram-bare')
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual({ error: 'UNSUPPORTED_SOCIAL_SOURCE' })
+  })
+
+  it('handles TikTok oEmbed success and feeds caption to AI extractor', async () => {
+    const mockOEmbed = {
+      title: 'Easy pasta recipe with 3 ingredients! #recipe #pasta',
+      author_name: 'chefmaria',
+      author_url: 'https://www.tiktok.com/@chefmaria',
+      thumbnail_url: 'https://p16-sign.tiktokcdn.com/thumb.jpg',
+      provider_name: 'TikTok',
+    }
+
+    setRecipeImportDependenciesForTests({
+      tiktokOEmbedFetcher: async () => mockOEmbed,
+      textAiExtractor: async (text, sourceUrl) => ({
+        ...MOCK_RECIPE,
+        title: 'Easy Pasta',
+        sourceUrl,
+      }),
+    })
+
+    const response = await request(
+      { url: 'https://www.tiktok.com/@chefmaria/video/123456' },
+      'user-tiktok-success',
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { recipe: typeof MOCK_RECIPE }
+    expect(body.recipe.title).toBe('Easy Pasta')
+    expect(body.recipe.sourceUrl).toBe('https://www.tiktok.com/@chefmaria/video/123456')
+  })
+
+  it('returns NO_RECIPE_FOUND when TikTok oEmbed fails', async () => {
+    setRecipeImportDependenciesForTests({
+      tiktokOEmbedFetcher: async () => {
+        throw new Error('TikTok oEmbed request failed: HTTP 404')
+      },
+    })
+
+    const response = await request(
+      { url: 'https://www.tiktok.com/@chefmaria/video/404' },
+      'user-tiktok-oembed-fail',
+    )
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual({ error: 'NO_RECIPE_FOUND' })
+  })
+})
+
+// ---- Unit tests for social classification and SSRF safety ----
+
+describe('classifyUrlPlatform', () => {
+  it('classifies tiktok.com as tiktok', () => {
+    expect(classifyUrlPlatform('https://www.tiktok.com/@user/video/123')).toBe('tiktok')
+  })
+
+  it('classifies vm.tiktok.com short links as tiktok', () => {
+    expect(classifyUrlPlatform('https://vm.tiktok.com/abc123')).toBe('tiktok')
+  })
+
+  it('classifies m.tiktok.com as tiktok', () => {
+    expect(classifyUrlPlatform('https://m.tiktok.com/@user/video/123')).toBe('tiktok')
+  })
+
+  it('classifies instagram.com as instagram', () => {
+    expect(classifyUrlPlatform('https://www.instagram.com/p/ABC')).toBe('instagram')
+  })
+
+  it('classifies bare instagram.com as instagram', () => {
+    expect(classifyUrlPlatform('https://instagram.com/reel/XYZ')).toBe('instagram')
+  })
+
+  it('classifies general recipe sites as web', () => {
+    expect(classifyUrlPlatform('https://www.ica.se/recept/kycklinggryta')).toBe('web')
+  })
+
+  it('classifies unknown URLs as web', () => {
+    expect(classifyUrlPlatform('https://example.com/recipe')).toBe('web')
+  })
+
+  it('returns web for malformed URLs', () => {
+    expect(classifyUrlPlatform('not-a-url')).toBe('web')
+  })
+})
+
+describe('resolveUrlSafely', () => {
+  it('returns the URL when there are no redirects', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, { status: 200 })
+    )
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://www.tiktok.com/@user/video/123')
+
+    expect('url' in result).toBe(true)
+    if ('url' in result) {
+      expect(result.url).toBe('https://www.tiktok.com/@user/video/123')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('follows a redirect and returns the resolved URL', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 301,
+          headers: { location: 'https://www.tiktok.com/@user/video/456' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(null, { status: 200 })
+      )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/shortcode')
+
+    expect('url' in result).toBe(true)
+    if ('url' in result) {
+      expect(result.url).toBe('https://www.tiktok.com/@user/video/456')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('blocks redirects to private IP addresses', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 301,
+        headers: { location: 'http://192.168.1.1/evil' },
+      })
+    )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/ssrf-attempt')
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('INVALID_URL')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('blocks redirects to localhost', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 301,
+        headers: { location: 'http://localhost/secret' },
+      })
+    )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/ssrf-localhost')
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('INVALID_URL')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('blocks redirects to 10.x.x.x private range', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 301,
+        headers: { location: 'http://10.0.0.1/internal' },
+      })
+    )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/ssrf-10x')
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('INVALID_URL')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('returns FETCH_FAILED after exceeding max redirect hops', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 301,
+        headers: { location: 'https://vm.tiktok.com/loop' },
+      })
+    )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/start', 3)
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('FETCH_FAILED')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('returns FETCH_FAILED when a redirect has no location header', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(null, { status: 302 })
+    )
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/nolocation')
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('FETCH_FAILED')
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('returns FETCH_FAILED when fetch throws a network error', async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error('network error'))
+
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await resolveUrlSafely('https://vm.tiktok.com/unreachable')
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toBe('FETCH_FAILED')
+    }
+
+    vi.unstubAllGlobals()
   })
 })

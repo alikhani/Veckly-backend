@@ -7,6 +7,10 @@ const MAX_CONTENT_BYTES = 500 * 1024
 const FETCH_TIMEOUT_MS = 8_000
 const ROBOTS_TIMEOUT_MS = 3_000
 const MAX_TEXT_LENGTH = 3_000
+const MAX_REDIRECT_HOPS = 5
+const TIKTOK_OEMBED_URL = 'https://www.tiktok.com/oembed'
+const TIKTOK_HOSTS = new Set(['tiktok.com', 'www.tiktok.com', 'vm.tiktok.com', 'm.tiktok.com'])
+const INSTAGRAM_HOSTS = new Set(['instagram.com', 'www.instagram.com'])
 
 const RawRecipeIngredientSchema = z.object({
   amount: z.number().nullable(),
@@ -40,6 +44,8 @@ const RecipeImportErrorSchema = z.object({
     'NO_RECIPE_FOUND',
     'RATE_LIMITED',
     'IMPORT_FAILED',
+    'UNSUPPORTED_SOCIAL_SOURCE',
+    'CAPTION_REQUIRED',
   ]),
 }).openapi('RecipeImportError')
 
@@ -66,11 +72,35 @@ type TPageFetcher = (url: string) => Promise<string>
 type TImportExtractor = (html: string, sourceUrl: string) => Promise<TRawRecipe>
 type TTextImportExtractor = (text: string, sourceUrl: string | null) => Promise<TRawRecipe>
 
+type TImportPlatform = 'web' | 'tiktok' | 'instagram'
+
+type TImportSourceMetadata = {
+  platform: TImportPlatform
+  canonicalUrl: string
+  title?: string
+  description?: string
+  authorName?: string
+  authorUrl?: string
+  thumbnailUrl?: string
+  rawTextForDraft?: string
+}
+
+type TTikTokOEmbed = {
+  title?: string
+  author_name?: string
+  author_url?: string
+  thumbnail_url?: string
+  provider_name?: string
+}
+
+type TOEmbedFetcher = (canonicalUrl: string) => Promise<TTikTokOEmbed>
+
 const importRateLimitHits = new Map<string, number>()
 const textImportRateLimitHits = new Map<string, number>()
 let pageFetcher: TPageFetcher = fetchRecipePage
 let aiExtractor: TImportExtractor = extractRecipeWithAi
 let textAiExtractor: TTextImportExtractor = extractRecipeFromTextWithAi
+let tiktokOEmbedFetcher: TOEmbedFetcher = fetchTikTokOEmbed
 
 export class FetchError extends Error {
   code: 'NETWORK_ERROR' | 'TIMEOUT' | 'TOO_LARGE'
@@ -85,10 +115,12 @@ export function setRecipeImportDependenciesForTests(deps: {
   aiExtractor?: TImportExtractor
   pageFetcher?: TPageFetcher
   textAiExtractor?: TTextImportExtractor
+  tiktokOEmbedFetcher?: TOEmbedFetcher
 } | null) {
   pageFetcher = deps?.pageFetcher ?? fetchRecipePage
   aiExtractor = deps?.aiExtractor ?? extractRecipeWithAi
   textAiExtractor = deps?.textAiExtractor ?? extractRecipeFromTextWithAi
+  tiktokOEmbedFetcher = deps?.tiktokOEmbedFetcher ?? fetchTikTokOEmbed
   importRateLimitHits.clear()
   textImportRateLimitHits.clear()
 }
@@ -98,6 +130,134 @@ function isRateLimited(hits: Map<string, number>, userId: string, now = Date.now
   if (previous !== undefined && now - previous < 15_000) return true
   hits.set(userId, now)
   return false
+}
+
+export function classifyUrlPlatform(url: string): TImportPlatform {
+  let hostname: string
+  try {
+    hostname = new URL(url).hostname.toLowerCase()
+  } catch {
+    return 'web'
+  }
+  if (TIKTOK_HOSTS.has(hostname)) return 'tiktok'
+  if (INSTAGRAM_HOSTS.has(hostname)) return 'instagram'
+  return 'web'
+}
+
+function isPrivateHost(hostname: string): boolean {
+  return PRIVATE_IP_PATTERN.test(hostname)
+}
+
+export async function resolveUrlSafely(
+  startUrl: string,
+  maxHops = MAX_REDIRECT_HOPS,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<{ url: string } | { error: 'INVALID_URL' | 'FETCH_FAILED' }> {
+  let current = startUrl
+  for (let hop = 0; hop <= maxHops; hop++) {
+    let parsed: URL
+    try {
+      parsed = new URL(current)
+    } catch {
+      return { error: 'INVALID_URL' }
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { error: 'INVALID_URL' }
+    if (isPrivateHost(parsed.hostname)) return { error: 'INVALID_URL' }
+
+    if (hop === maxHops) {
+      // We've already followed maxHops redirects without settling — treat as failure
+      return { error: 'FETCH_FAILED' }
+    }
+
+    let response: Response
+    try {
+      response = await fetch(current, {
+        method: 'HEAD',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { 'User-Agent': 'VecklyBot/1.0' },
+      })
+    } catch (err) {
+      return { error: 'FETCH_FAILED' }
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) return { error: 'FETCH_FAILED' }
+      // Resolve relative redirects against current URL
+      try {
+        current = new URL(location, current).toString()
+      } catch {
+        return { error: 'FETCH_FAILED' }
+      }
+      continue
+    }
+
+    // Non-redirect response — we've settled on the canonical URL
+    return { url: current }
+  }
+
+  return { error: 'FETCH_FAILED' }
+}
+
+export async function fetchTikTokOEmbed(canonicalUrl: string): Promise<TTikTokOEmbed> {
+  const endpoint = `${TIKTOK_OEMBED_URL}?url=${encodeURIComponent(canonicalUrl)}`
+  const response = await fetch(endpoint, {
+    headers: { 'User-Agent': 'VecklyBot/1.0' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    throw new Error(`TikTok oEmbed request failed: HTTP ${response.status}`)
+  }
+  return response.json() as Promise<TTikTokOEmbed>
+}
+
+export async function extractTikTokMetadata(
+  url: string,
+): Promise<TImportSourceMetadata | { error: 'INVALID_URL' | 'FETCH_FAILED' | 'NO_RECIPE_FOUND' }> {
+  // Resolve short links (vm.tiktok.com) safely through SSRF guards
+  const resolved = await resolveUrlSafely(url)
+  if ('error' in resolved) return resolved
+
+  const canonicalUrl = resolved.url
+
+  // After resolution, ensure the final host is still an allowed TikTok domain
+  let finalHostname: string
+  try {
+    finalHostname = new URL(canonicalUrl).hostname.toLowerCase()
+  } catch {
+    return { error: 'INVALID_URL' }
+  }
+
+  if (!TIKTOK_HOSTS.has(finalHostname)) {
+    // Redirect landed on a non-TikTok domain — refuse
+    return { error: 'FETCH_FAILED' }
+  }
+
+  let oembed: TTikTokOEmbed
+  try {
+    oembed = await tiktokOEmbedFetcher(canonicalUrl)
+  } catch {
+    return { error: 'NO_RECIPE_FOUND' }
+  }
+
+  const metadata: TImportSourceMetadata = {
+    platform: 'tiktok',
+    canonicalUrl,
+    title: typeof oembed.title === 'string' && oembed.title.trim() ? oembed.title.trim() : undefined,
+    authorName: typeof oembed.author_name === 'string' && oembed.author_name.trim() ? oembed.author_name.trim() : undefined,
+    authorUrl: typeof oembed.author_url === 'string' && oembed.author_url.trim() ? oembed.author_url.trim() : undefined,
+    thumbnailUrl: typeof oembed.thumbnail_url === 'string' && oembed.thumbnail_url.trim() ? oembed.thumbnail_url.trim() : undefined,
+  }
+
+  // rawTextForDraft is the caption/title text passed to the AI extraction path
+  const captionText = [oembed.title, oembed.author_name].filter(Boolean).join(' — ')
+  if (captionText.trim()) {
+    metadata.rawTextForDraft = captionText.trim()
+  }
+
+  return metadata
 }
 
 function validateUrl(raw: unknown): { url: string } | { error: 'INVALID_URL' } {
@@ -400,6 +560,34 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   const validated = validateUrl(rawUrl)
   if ('error' in validated) return { body: { error: 'INVALID_URL' }, status: 400 as const }
 
+  const platform = classifyUrlPlatform(validated.url)
+
+  if (platform === 'instagram') {
+    return { body: { error: 'UNSUPPORTED_SOCIAL_SOURCE' }, status: 422 as const }
+  }
+
+  if (platform === 'tiktok') {
+    const result = await extractTikTokMetadata(validated.url)
+    if ('error' in result) {
+      const statusMap = {
+        INVALID_URL: 400 as const,
+        FETCH_FAILED: 500 as const,
+        NO_RECIPE_FOUND: 422 as const,
+      }
+      return { body: { error: result.error }, status: statusMap[result.error] }
+    }
+
+    // Feed the caption/description text into the AI extraction path
+    const rawText = result.rawTextForDraft ?? result.title ?? ''
+    try {
+      const recipe = await textAiExtractor(rawText, result.canonicalUrl)
+      return { body: { recipe }, status: 200 as const }
+    } catch {
+      return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
+    }
+  }
+
+  // General web path — unchanged
   let html: string
   try {
     html = await pageFetcher(validated.url)

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import {
+  FetchError,
   classifyUrlPlatform,
+  fetchRecipePage,
   resolveUrlSafely,
   setRecipeImportDependenciesForTests,
 } from '../src/recipe-import.js'
@@ -601,5 +603,67 @@ describe('resolveUrlSafely', () => {
     }
 
     vi.unstubAllGlobals()
+  })
+})
+
+describe('fetchRecipePage SSRF redirect protection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('blocks a redirect to a private 192.168.x.x address', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 })) // robots.txt
+      .mockResolvedValueOnce(new Response(null, {
+        status: 301,
+        headers: { location: 'http://192.168.1.1/secret' },
+      })),
+    )
+    await expect(fetchRecipePage('https://example.com/recipe')).rejects.toThrow(FetchError)
+  })
+
+  it('blocks a redirect to the AWS metadata endpoint (169.254.169.254)', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 })) // robots.txt
+      .mockResolvedValueOnce(new Response(null, {
+        status: 301,
+        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+      })),
+    )
+    await expect(fetchRecipePage('https://example.com/recipe')).rejects.toThrow(FetchError)
+  })
+
+  it('blocks a redirect to localhost', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 })) // robots.txt
+      .mockResolvedValueOnce(new Response(null, {
+        status: 302,
+        headers: { location: 'http://localhost:8080/admin' },
+      })),
+    )
+    await expect(fetchRecipePage('https://example.com/recipe')).rejects.toThrow(FetchError)
+  })
+
+  it('follows a safe redirect and returns html', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 })) // robots.txt
+      .mockResolvedValueOnce(new Response(null, {
+        status: 301,
+        headers: { location: 'https://example.com/recipe-final' },
+      }))
+      .mockResolvedValueOnce(new Response('<html>recipe</html>', { status: 200 })),
+    )
+    const html = await fetchRecipePage('https://example.com/recipe')
+    expect(html).toBe('<html>recipe</html>')
+  })
+
+  it('throws NETWORK_ERROR when redirect has no location header', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 })) // robots.txt
+      .mockResolvedValueOnce(new Response(null, { status: 301 })),
+    )
+    const err = await fetchRecipePage('https://example.com/recipe').catch((e) => e)
+    expect(err).toBeInstanceOf(FetchError)
+    expect((err as FetchError).code).toBe('NETWORK_ERROR')
   })
 })

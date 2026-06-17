@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 
 const PRIVATE_IP_PATTERN =
-  /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)/
+  /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
 const MAX_CONTENT_BYTES = 500 * 1024
 const FETCH_TIMEOUT_MS = 8_000
 const ROBOTS_TIMEOUT_MS = 3_000
@@ -325,23 +325,50 @@ async function checkRobotsTxt(url: string): Promise<void> {
 export async function fetchRecipePage(url: string): Promise<string> {
   await checkRobotsTxt(url)
 
-  let response: Response
-  try {
-    response = await fetch(url, {
-      headers: { Accept: 'text/html', 'User-Agent': 'VecklyBot/1.0 (recipe import)' },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    })
-  } catch (err) {
-    const isTimeout = err instanceof Error && err.name === 'TimeoutError'
-    throw new FetchError(isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR')
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    if (hop === MAX_REDIRECT_HOPS) throw new FetchError('NETWORK_ERROR')
+
+    let parsed: URL
+    try {
+      parsed = new URL(current)
+    } catch {
+      throw new FetchError('NETWORK_ERROR')
+    }
+    if (PRIVATE_IP_PATTERN.test(parsed.hostname)) throw new FetchError('NETWORK_ERROR')
+
+    let response: Response
+    try {
+      response = await fetch(current, {
+        redirect: 'manual',
+        headers: { Accept: 'text/html', 'User-Agent': 'VecklyBot/1.0 (recipe import)' },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      })
+    } catch (err) {
+      const isTimeout = err instanceof Error && err.name === 'TimeoutError'
+      throw new FetchError(isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR')
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) throw new FetchError('NETWORK_ERROR')
+      try {
+        current = new URL(location, current).toString()
+      } catch {
+        throw new FetchError('NETWORK_ERROR')
+      }
+      continue
+    }
+
+    const contentLength = Number(response.headers.get('content-length') ?? 0)
+    if (contentLength > MAX_CONTENT_BYTES) throw new FetchError('TOO_LARGE')
+
+    const html = await response.text()
+    if (html.length > MAX_CONTENT_BYTES) throw new FetchError('TOO_LARGE')
+    return html
   }
 
-  const contentLength = Number(response.headers.get('content-length') ?? 0)
-  if (contentLength > MAX_CONTENT_BYTES) throw new FetchError('TOO_LARGE')
-
-  const html = await response.text()
-  if (html.length > MAX_CONTENT_BYTES) throw new FetchError('TOO_LARGE')
-  return html
+  throw new FetchError('NETWORK_ERROR')
 }
 
 type TSchemaOrgBlock = Record<string, unknown>

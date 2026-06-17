@@ -165,8 +165,8 @@ async function createBatch(
   householdId: string,
   body: z.infer<typeof CreatePrepBatchSchema>,
 ) {
-  const [batch] = await withRls(db, accessToken, (tx) =>
-    tx
+  return withRls(db, accessToken, async (tx) => {
+    const [batch] = await tx
       .insert(householdPrepBatches)
       .values({
         householdId,
@@ -176,33 +176,32 @@ async function createBatch(
         totalPortions: body.totalPortions,
         createdBy: userId,
       })
-      .returning(),
-  )
-  if (!batch) return null
+      .returning()
 
-  const insertedAssignments = await withRls(db, accessToken, (tx) =>
-    tx
+    if (!batch) return null
+
+    const insertedAssignments = await tx
       .insert(householdPrepBatchAssignments)
       .values(body.assignments.map((a) => ({ batchId: batch.id, date: a.date, mealType: a.mealType })))
-      .returning(),
-  )
+      .returning()
 
-  return {
-    id: batch.id,
-    householdId: batch.householdId,
-    recipeId: batch.recipeId ?? null,
-    customRecipeId: batch.customRecipeId ?? null,
-    cookDate: batch.cookDate,
-    totalPortions: batch.totalPortions,
-    createdBy: batch.createdBy,
-    createdAt: batch.createdAt.toISOString(),
-    assignments: insertedAssignments.map((a) => ({
-      id: a.id,
-      batchId: a.batchId,
-      date: a.date,
-      mealType: a.mealType as 'lunch' | 'dinner',
-    })),
-  }
+    return {
+      id: batch.id,
+      householdId: batch.householdId,
+      recipeId: batch.recipeId ?? null,
+      customRecipeId: batch.customRecipeId ?? null,
+      cookDate: batch.cookDate,
+      totalPortions: batch.totalPortions,
+      createdBy: batch.createdBy,
+      createdAt: batch.createdAt.toISOString(),
+      assignments: insertedAssignments.map((a) => ({
+        id: a.id,
+        batchId: a.batchId,
+        date: a.date,
+        mealType: a.mealType as 'lunch' | 'dinner',
+      })),
+    }
+  })
 }
 
 async function deleteBatch(db: Db, accessToken: string, householdId: string, batchId: string) {
@@ -222,9 +221,12 @@ export function buildPrepBatchesRoutes(db: Db) {
   app.use('/households/:householdId/prep_batches/:batchId', requireAuth)
 
   app.openapi(listRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const { from, to } = c.req.valid('query')
+    const member = await assertActiveMembership(db, householdId, user.id)
+    if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
     const result = await listBatches(db, accessToken, householdId, from, to)
     return c.json(result, 200)
   })

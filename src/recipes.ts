@@ -1,9 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, asc, desc, eq, ilike, inArray, isNotNull, not, or } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, isNotNull, not, or, sql } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { withRls } from './rls.js'
-import { householdMemberships, recipes, userSavedRecipes } from './schema.js'
+import { householdMemberships, mealFeedback, recipes, userSavedRecipes } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes ------------------------------------------------------------
@@ -40,6 +40,7 @@ const RecipeSchema = z.object({
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  userVote: z.enum(['up', 'down']).nullable(),
 }).openapi('Recipe')
 
 const CreateRecipeSchema = z.object({
@@ -89,7 +90,7 @@ const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse')
 
 // --- Domain functions -------------------------------------------------------
 
-function toRecipeResponse(row: typeof recipes.$inferSelect) {
+function toRecipeResponse(row: typeof recipes.$inferSelect, userVote: 'up' | 'down' | null = null) {
   return {
     id: row.id,
     householdId: row.householdId,
@@ -111,6 +112,7 @@ function toRecipeResponse(row: typeof recipes.$inferSelect) {
     createdBy: row.createdBy ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    userVote,
   }
 }
 
@@ -152,6 +154,7 @@ export async function listRecipes(
   db: Db,
   accessToken: string,
   householdId: string,
+  userId: string,
   includeArchived: boolean,
   includePublic: boolean = false,
 ) {
@@ -160,14 +163,22 @@ export async function listRecipes(
     if (!includeArchived) householdConditions.push(eq(recipes.isArchived, false))
 
     const householdRows = await tx
-      .select()
+      .select({ recipe: recipes, userVote: mealFeedback.vote })
       .from(recipes)
+      .leftJoin(
+        mealFeedback,
+        and(
+          eq(mealFeedback.householdId, householdId),
+          eq(mealFeedback.userId, userId),
+          eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
+        ),
+      )
       .where(and(...householdConditions))
       .orderBy(desc(recipes.updatedAt))
 
-    if (!includePublic) return householdRows.map(toRecipeResponse)
+    if (!includePublic) return householdRows.map((r) => toRecipeResponse(r.recipe, r.userVote ?? null))
 
-    const householdIds = new Set(householdRows.map((r) => r.id))
+    const householdIds = new Set(householdRows.map((r) => r.recipe.id))
     const publicRows = await tx
       .select()
       .from(recipes)
@@ -175,7 +186,10 @@ export async function listRecipes(
       .orderBy(asc(recipes.title))
 
     const uniquePublic = publicRows.filter((r) => !householdIds.has(r.id))
-    return [...householdRows, ...uniquePublic].map(toRecipeResponse)
+    return [
+      ...householdRows.map((r) => toRecipeResponse(r.recipe, r.userVote ?? null)),
+      ...uniquePublic.map((r) => toRecipeResponse(r, null)),
+    ]
   })
 }
 
@@ -183,14 +197,23 @@ export async function getRecipe(
   db: Db,
   accessToken: string,
   householdId: string,
+  userId: string,
   recipeId: string,
 ) {
   return withRls(db, accessToken, async (tx) => {
-    const [recipe] = await tx
-      .select()
+    const [row] = await tx
+      .select({ recipe: recipes, userVote: mealFeedback.vote })
       .from(recipes)
+      .leftJoin(
+        mealFeedback,
+        and(
+          eq(mealFeedback.householdId, householdId),
+          eq(mealFeedback.userId, userId),
+          eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
+        ),
+      )
       .where(and(eq(recipes.id, recipeId), eq(recipes.householdId, householdId)))
-    return recipe ? toRecipeResponse(recipe) : null
+    return row ? toRecipeResponse(row.recipe, row.userVote ?? null) : null
   })
 }
 
@@ -269,7 +292,7 @@ export async function listPublicRecipes(
       .orderBy(desc(recipes.updatedAt))
       .limit(30)
 
-    return rows.map(toRecipeResponse)
+    return rows.map((r) => toRecipeResponse(r, null))
   })
 }
 
@@ -435,17 +458,19 @@ export function buildRecipesRoutes(db: Db) {
 
   app.openapi(listRecipesRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId } = c.req.valid('param')
     const { includeArchived, includePublic } = c.req.valid('query')
-    const list = await listRecipes(db, accessToken, householdId, includeArchived === 'true', includePublic === 'true')
+    const list = await listRecipes(db, accessToken, householdId, user.id, includeArchived === 'true', includePublic === 'true')
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(list, 200)
   })
 
   app.openapi(getRecipeRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, recipeId } = c.req.valid('param')
-    const recipe = await getRecipe(db, accessToken, householdId, recipeId)
+    const recipe = await getRecipe(db, accessToken, householdId, user.id, recipeId)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)
     return c.json(recipe, 200)
   })
@@ -582,7 +607,7 @@ export function buildInternalRecipesRoutes(db: Db) {
     if (!query.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
 
     const householdId = await resolveInternalHouseholdId(db, accessToken, user.id, query.data.householdId)
-    const list = await listRecipes(db, accessToken, householdId, query.data.includeArchived === 'true')
+    const list = await listRecipes(db, accessToken, householdId, user.id, query.data.includeArchived === 'true')
     const filtered = filterRecipesForMealPlannerSearch(list, query.data.search)
     return c.json({ recipes: filtered.map(toMealPlannerListItem) }, 200)
   })

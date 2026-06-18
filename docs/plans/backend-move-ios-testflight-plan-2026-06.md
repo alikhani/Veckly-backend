@@ -23,8 +23,8 @@ The order is deliberate:
 | Phase 1 — Backend parity foundation | Complete | Core OpenAPI/RLS loop working. All foundation slices done: household profile/members, active week, week-plan events, shopping-state, recipes, week-history, meal feedback, saved plans, recipe AI routes, and meal prep. |
 | Phase 2 — Backend product parity | Not started | Move remaining MealPlanner API behavior route by route. |
 | Phase 3 — Web strangler migration | Not started | Existing web app starts calling/proxying to `Veckly-backend`. |
-| Phase 4 — iOS foundation | In progress | `Veckly-ios` exists with generated OpenAPI client, tabs, week/shopping/settings foundations. Needs auth and full environment setup. |
-| Phase 5 — iOS product parity | Not started | Build native planning workflows. |
+| Phase 4 — iOS foundation | In progress | `Veckly-ios` exists with generated OpenAPI client, tabs, localized English/Swedish app shell, and week/shopping/settings foundations. Needs auth and full environment setup. |
+| Phase 5 — iOS product parity | In progress | Shopping list, recipe detail, lock/skip, feedback, household, onboarding, localized UI, and several native planning workflows are implemented or stabilized. |
 | Phase 6 — TestFlight readiness | Not started | App Store Connect, signing, QA, telemetry, beta checklist. |
 
 ## Working Rules
@@ -36,6 +36,7 @@ The order is deliberate:
 - Move route by route. Avoid a big-bang cutover.
 - Keep the OpenAPI spec generated and committed when route contracts change.
 - Treat `MealPlanner/docs/` as the product and behavior source of truth during migration.
+- In iOS, keep UI copy in `Localizable.xcstrings`; English is fallback, Swedish follows iOS system language, and API requests should include `Accept-Language`.
 
 ## Phase 0 — Migration Inventory
 
@@ -173,7 +174,8 @@ Work order:
 2. Environments: local, staging, production, and clear app-level switching for development builds.
 3. OpenAPI workflow: regenerate from `Veckly-backend`, compile generated code, keep generated types out of manual edits.
 4. App shell: signed-out state, signed-in tab structure, household loading/empty states, global error patterns.
-5. Observability: crash reporting decision, basic analytics decision, API error logging for beta builds.
+5. Localization: English/Swedish String Catalog coverage, system-locale weekday/date formatting, and `Accept-Language` on API requests.
+6. Observability: crash reporting decision, basic analytics decision, API error logging for beta builds.
 
 Exit criteria:
 
@@ -181,6 +183,7 @@ Exit criteria:
 - App restores session after restart.
 - App fetches household and current week from real backend.
 - Generated OpenAPI client is the only API client for backend routes.
+- API requests include `Accept-Language` so backend/AI flows can honor locale later.
 
 ## Phase 5 — iOS Product Parity
 
@@ -198,6 +201,7 @@ Work order:
 6. Household: preferences, members, invite/join.
 7. Meal prep: prep batch display, create/delete prep batch, lunch coverage.
 8. Premium: trial/subscription status, premium gates, upgrade entry point.
+9. Localization: English and Swedish UI strings remain complete; user-owned recipe/content data is not translated in the iOS client.
 
 Exit criteria:
 
@@ -217,7 +221,7 @@ Work order:
 2. App Store Connect: app record, TestFlight groups, beta review metadata.
 3. Privacy and compliance: privacy manifest, data collection notes, account deletion/support path, Sign in with Apple compliance.
 4. Backend production readiness: staging/prod separation, env vars, rate limits, security headers, migration runbook, rollback plan.
-5. QA: simulator, device, small/large iPhone, dark mode, poor network/offline, fresh install, upgrade install.
+5. QA: simulator, device, small/large iPhone, dark mode, English locale, Swedish locale, poor network/offline, fresh install, upgrade install.
 6. Release: archive, upload, internal TestFlight pass, external TestFlight submission.
 
 Exit criteria:
@@ -255,3 +259,4 @@ Start here:
 - 2026-06-14: Phase 1 complete. Meal prep slice added as final domain gap: `GET/POST /households/{householdId}/prep-batches`, `DELETE /households/{householdId}/prep-batches/{batchId}`, migration `0022_prep_batches.sql`, RLS policies, and integration tests. All non-billing MealPlanner routes now migrated. Phase 2 domain parity is done — remaining gaps are billing/Stripe and recipe translation, both deferred until commercial flags go live.
 - 2026-06-16: Critical DB client bug fixed. `postgres-js` defaults to `prepare: true` (named prepared statements), which is incompatible with Supabase's transaction-mode PgBouncer pooler (port 6543). Every `withRls` call uses `db.transaction()` — the driver was hanging inside every transaction until Vercel's 30 s timeout fired. Symptom: iOS week view meal assignment produced "We could not assign the meal" after a delay. Fix: `src/db.ts` now passes `{ prepare: false, max: 1 }` — `prepare: false` makes the driver compatible with the pooler; `max: 1` is the standard single-connection-per-serverless-instance pattern for Supabase on Vercel. Deployed to production.
 - 2026-06-16: iOS locked-day summary contract completed and deployed to staging/production. `WeekPlanSummaryDay` now includes `isLocked`, generated OpenAPI specs were updated, and the iOS week view reads locked state from the per-day summary row instead of maintaining a separate client-side set.
+- 2026-06-18: iOS English/Swedish localization completed. `Veckly-ios` now uses `Localizable.xcstrings` with English fallback and Swedish system-language UI, locale-aware weekdays, and `Accept-Language` on API requests. Backend behavior is unchanged for now; recipe/content translation remains separate future work.

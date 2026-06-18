@@ -42,6 +42,17 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-06-18 — iOS language signal
+
+`Veckly-ios` now sends `Accept-Language` on generated OpenAPI requests and
+manual URLSession requests, based on iOS `Locale.preferredLanguages`.
+
+Backend behavior is unchanged in this step. The header is now available for
+future AI responses, recipe/content translation, and language-aware copy where
+backend-owned text is appropriate. Client-side iOS localization is handled in
+`Veckly-ios/Veckly/Localizable.xcstrings` with English fallback and Swedish
+system-language UI.
+
 ### 2026-06-17 — Recipe URL import error contract
 
 `POST /recipes/import-from-url` now exposes stable `RecipeImportError` response

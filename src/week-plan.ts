@@ -472,6 +472,10 @@ const GenerateWeekPlanResponseSchema = z.object({
   ok: z.literal(true),
 }).openapi('GenerateWeekPlanResponse')
 
+const GenerateWeekPlanErrorSchema = z.object({
+  error: z.enum(['NO_RECIPES']),
+}).openapi('GenerateWeekPlanError')
+
 const generateWeekPlanRoute = createRoute({
   method: 'post',
   path: '/households/{householdId}/week-plans/{weekStartDate}/generate',
@@ -484,8 +488,12 @@ const generateWeekPlanRoute = createRoute({
   },
   responses: {
     200: {
-      description: 'Week plan generated',
+      description: 'Week plan generated (or nothing to do — all days already filled)',
       content: { 'application/json': { schema: GenerateWeekPlanResponseSchema } },
+    },
+    422: {
+      description: 'No recipes available to plan with',
+      content: { 'application/json': { schema: GenerateWeekPlanErrorSchema } },
     },
     401: { description: 'Missing or invalid session' },
   },
@@ -762,7 +770,7 @@ async function doGenerateWeekPlan(
   householdId: string,
   weekStartDate: string,
   regenerate: boolean,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true } | { error: 'NO_RECIPES' }> {
   const [profileRows, projection, poolRecipes] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
@@ -788,7 +796,8 @@ async function doGenerateWeekPlan(
     return regenerate ? true : !projState.meals[day]
   })
 
-  if (daysToFill.length === 0 || poolRecipes.length === 0) return { ok: true }
+  if (daysToFill.length === 0) return { ok: true }
+  if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
   const filtered = avoidIngredients.length > 0
     ? poolRecipes.filter((r) => !avoidIngredients.some((a) => r.title.toLowerCase().includes(a.toLowerCase())))
@@ -841,6 +850,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const { regenerate } = c.req.valid('json')
     const result = await doGenerateWeekPlan(db, accessToken, user.id, householdId, weekStartDate, regenerate)
+    if ('error' in result) return c.json(result, 422)
     return c.json(result, 200)
   })
 

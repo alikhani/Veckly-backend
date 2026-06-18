@@ -8,10 +8,10 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 |---|---|
 | Phase 0 — Migration inventory | Complete |
 | Phase 1 — Backend parity foundation | Complete |
-| Phase 2 — Backend product parity | Not started (remaining: billing/Stripe, recipe translation) |
+| Phase 2 — Backend product parity | In progress (remaining: billing/Stripe, recipe translation unless parity matrix says otherwise) |
 | Phase 3 — Web strangler migration | Not started |
 | Phase 4 — iOS foundation | In progress |
-| Phase 5 — iOS product parity | Not started |
+| Phase 5 — iOS product parity | In progress |
 | Phase 6 — TestFlight readiness | Not started |
 
 ## What is working
@@ -116,6 +116,11 @@ Deployed and verified in production.
 
 ## Next focus
 
-Phase 4 — iOS foundation: auth on device, session persistence, environment switching, and fetching real household/week data from the backend.
+iOS-first TestFlight path:
+
+1. Finish Phase 4 foundation: auth on device, session persistence, environment switching, generated client compile health.
+2. Close backend parity gaps only where they block the first iOS beta scope.
+3. Keep OpenAPI committed and deterministic after every route contract change.
+4. Support Phase 5 iOS product parity for the weekly planning and shopping loop.
 
 See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for detail.

@@ -236,6 +236,8 @@ export function buildPrepBatchesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
+    const member = await assertActiveMembership(db, householdId, user.id)
+    if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
     const batch = await createBatch(db, accessToken, user.id, householdId, body)
     if (!batch) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
     return c.json(batch, 201)

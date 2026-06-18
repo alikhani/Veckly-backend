@@ -41,7 +41,8 @@ Rules:
 - 3–6 steps maximum
 - amount must be a number, never a string
 - steps must be actionable ("Fry the onion in butter over medium heat for 3 minutes", not "Cook the onion")
-- If the title is ambiguous, pick the most family-friendly common interpretation`
+- If the title is ambiguous, pick the most family-friendly common interpretation
+- If existing ingredients or steps are provided in the user message, treat them as fixed constraints: always include them in your output and build the rest of the recipe around them. Do not drop or rename existing items.`
 
 const FillInIngredientSchema = z.object({
   name: z.string().min(1).max(120),
@@ -71,6 +72,12 @@ const FillInBodySchema = z.object({
     adults: z.number(),
     children: z.number(),
   }).optional(),
+  existingIngredients: z.array(z.object({
+    name: z.string().max(120),
+    amount: z.string().max(20).optional(),
+    unit: z.string().max(20).optional(),
+  })).max(50).optional(),
+  existingSteps: z.array(z.string().max(1000)).max(30).optional(),
 }).openapi('RecipeFillInRequest')
 
 const FillInEnvelopeSchema = z.object({ recipe: FillInResponseSchema }).openapi('RecipeFillInEnvelope')
@@ -92,9 +99,26 @@ function isRateLimited(userId: string, now = Date.now()) {
   return false
 }
 
-function buildUserMessage(title: string, profile: { adults: number; children: number } | undefined): string {
-  if (!profile) return title
-  return `${title}\n\nHousehold context: ${profile.adults} adults, ${profile.children} children. Adjust complexity accordingly.`
+function buildUserMessage(title: string, body: z.infer<typeof FillInBodySchema>): string {
+  const parts: string[] = [title]
+
+  if (body.householdProfile) {
+    parts.push(`\nHousehold context: ${body.householdProfile.adults} adults, ${body.householdProfile.children} children. Adjust complexity accordingly.`)
+  }
+
+  if (body.existingIngredients && body.existingIngredients.length > 0) {
+    const list = body.existingIngredients
+      .map((i) => [i.amount, i.unit, i.name].filter(Boolean).join(' '))
+      .join('\n  - ')
+    parts.push(`\nExisting ingredients (keep all of these, build the recipe around them):\n  - ${list}`)
+  }
+
+  if (body.existingSteps && body.existingSteps.length > 0) {
+    const list = body.existingSteps.map((s, i) => `${i + 1}. ${s}`).join('\n  ')
+    parts.push(`\nExisting steps (keep these, expand or refine if needed):\n  ${list}`)
+  }
+
+  return parts.join('')
 }
 
 function parseAiJson(raw: string) {
@@ -129,7 +153,7 @@ async function handleFillIn(userId: string, body: z.infer<typeof FillInBodySchem
 
   let raw: string
   try {
-    raw = await generator(SYSTEM_PROMPT, buildUserMessage(body.title.trim(), body.householdProfile))
+    raw = await generator(SYSTEM_PROMPT, buildUserMessage(body.title.trim(), body))
   } catch (error) {
     console.error('[fill-in] AI generation failed', error)
     return { body: { error: 'AI_UNAVAILABLE' }, status: 500 as const }

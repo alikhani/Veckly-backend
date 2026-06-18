@@ -291,9 +291,12 @@ function normalizeKeyPart(value: string | null | undefined) {
 function buildItemKey(ingredient: TRecipeIngredient) {
   const category = normalizeKeyPart(ingredient.category || 'Other')
   const item = normalizeKeyPart(ingredient.item)
-  const amount = normalizeKeyPart(ingredient.amount)
   const unit = normalizeKeyPart(ingredient.unit)
-  return [category, item, amount, unit].join(':')
+  return [category, item, unit].join(':')
+}
+
+function formatAggregatedAmount(n: number): string {
+  return Number.isInteger(n) ? String(n) : parseFloat(n.toFixed(2)).toString()
 }
 
 function readShoppingProjectionState(state: unknown): TShoppingListProjectionState {
@@ -435,21 +438,46 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
         .where(and(eq(recipes.householdId, householdId), inArray(recipes.id, recipeIds)))
       : []
 
-    const itemsByKey = new Map<string, { category: string; label: string; amount: string | null; unit: string | null; checked: boolean }>()
+    type TItemAccumulator = { category: string; label: string; totalAmount: number | null; canSum: boolean; unit: string | null }
+    const accumulator = new Map<string, TItemAccumulator>()
 
     for (const recipe of recipeRows) {
       for (const ingredient of recipe.ingredients as TRecipeIngredient[]) {
         if (!ingredient.item.trim()) continue
         const itemKey = buildItemKey(ingredient)
-        if (itemsByKey.has(itemKey)) continue
-        itemsByKey.set(itemKey, {
-          category: ingredient.category?.trim() || 'Other',
-          label: ingredient.item.trim(),
-          amount: ingredient.amount?.trim() || null,
-          unit: ingredient.unit?.trim() || null,
-          checked: shoppingState.checkedItems[itemKey] === true,
-        })
+        const rawAmount = ingredient.amount?.trim() || null
+        const parsed = rawAmount ? parseFloat(rawAmount) : null
+        const validNum = parsed !== null && !isNaN(parsed) && isFinite(parsed)
+
+        const existing = accumulator.get(itemKey)
+        if (existing) {
+          if (existing.canSum && validNum) {
+            existing.totalAmount = (existing.totalAmount ?? 0) + parsed!
+          } else {
+            existing.canSum = false
+            existing.totalAmount = null
+          }
+        } else {
+          accumulator.set(itemKey, {
+            category: ingredient.category?.trim() || 'Other',
+            label: ingredient.item.trim(),
+            totalAmount: validNum ? parsed! : null,
+            canSum: validNum,
+            unit: ingredient.unit?.trim() || null,
+          })
+        }
       }
+    }
+
+    const itemsByKey = new Map<string, { category: string; label: string; amount: string | null; unit: string | null; checked: boolean }>()
+    for (const [itemKey, item] of accumulator) {
+      itemsByKey.set(itemKey, {
+        category: item.category,
+        label: item.label,
+        amount: item.totalAmount !== null ? formatAggregatedAmount(item.totalAmount) : null,
+        unit: item.unit,
+        checked: shoppingState.checkedItems[itemKey] === true,
+      })
     }
 
     const groupsByCategory = new Map<string, Array<{ itemKey: string; label: string; amount: string | null; unit: string | null; checked: boolean }>>()

@@ -465,7 +465,7 @@ export function parseSchemaOrgRecipe(html: string, sourceUrl: string): TRawRecip
 
   return {
     title: (recipe['name'] as string).trim(),
-    prepTimeMinutes: parseIsoDuration(recipe['prepTime']) ?? parseIsoDuration(recipe['totalTime']),
+    prepTimeMinutes: parseIsoDuration(recipe['prepTime']) ?? null,
     ingredients,
     cuisine: typeof recipe['recipeCuisine'] === 'string' ? recipe['recipeCuisine'] : null,
     proteinSource: null,

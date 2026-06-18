@@ -38,7 +38,7 @@ const RecipeSchema = z.object({
   source: z.enum(['user_created', 'url_import', 'ai_generated', 'builtin']),
   isPublic: z.boolean(),
   isArchived: z.boolean(),
-  createdBy: z.string().uuid().nullable(),
+  createdBy: z.string().uuid(),
   createdAt: z.string(),
   updatedAt: z.string(),
   userVote: z.enum(['up', 'down']).nullable(),
@@ -110,7 +110,7 @@ function toRecipeResponse(row: typeof recipes.$inferSelect, userVote: 'up' | 'do
     source: row.source,
     isPublic: row.isPublic,
     isArchived: row.isArchived,
-    createdBy: row.createdBy ?? null,
+    createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     userVote,
@@ -264,6 +264,7 @@ export async function listPublicRecipes(
   accessToken: string,
   userId: string,
   search: string,
+  householdId?: string,
 ) {
   return withRls(db, accessToken, async (tx) => {
     const normalizedSearch = search.trim()
@@ -274,6 +275,9 @@ export async function listPublicRecipes(
       .from(householdMemberships)
       .where(and(eq(householdMemberships.userId, userId), eq(householdMemberships.status, 'active')))
     const householdIds = membershipRows.map((row) => row.householdId)
+    // Use the provided householdId for vote scoping; fall back to the user's
+    // first active household when the route has no household context.
+    const voteHouseholdId = householdId ?? householdIds[0]
 
     const conditions = [
       eq(recipes.isPublic, true),
@@ -287,26 +291,46 @@ export async function listPublicRecipes(
     }
 
     const rows = await tx
-      .select()
+      .select({ recipe: recipes, userVote: mealFeedback.vote })
       .from(recipes)
+      .leftJoin(
+        mealFeedback,
+        voteHouseholdId
+          ? and(
+              eq(mealFeedback.householdId, voteHouseholdId),
+              eq(mealFeedback.userId, userId),
+              eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
+            )
+          : sql`false`,
+      )
       .where(and(...conditions))
       .orderBy(desc(recipes.updatedAt))
       .limit(30)
 
-    return rows.map((r) => toRecipeResponse(r, null))
+    return rows.map((r) => toRecipeResponse(r.recipe, r.userVote ?? null))
   })
 }
 
-export async function listSavedRecipes(db: Db, accessToken: string, userId: string) {
+export async function listSavedRecipes(db: Db, accessToken: string, userId: string, householdId?: string) {
   return withRls(db, accessToken, async (tx) => {
     const rows = await tx
-      .select({ recipe: recipes })
+      .select({ recipe: recipes, userVote: mealFeedback.vote })
       .from(userSavedRecipes)
       .innerJoin(recipes, eq(recipes.id, userSavedRecipes.recipeId))
+      .leftJoin(
+        mealFeedback,
+        householdId
+          ? and(
+              eq(mealFeedback.householdId, householdId),
+              eq(mealFeedback.userId, userId),
+              eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
+            )
+          : sql`false`,
+      )
       .where(and(eq(userSavedRecipes.userId, userId), eq(recipes.isArchived, false)))
       .orderBy(desc(userSavedRecipes.savedAt))
 
-    return rows.map((row) => toRecipeResponse(row.recipe))
+    return rows.map((row) => toRecipeResponse(row.recipe, row.userVote ?? null))
   })
 }
 

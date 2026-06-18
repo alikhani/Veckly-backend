@@ -187,12 +187,12 @@ export async function listPendingInvites(db: Db, accessToken: string, householdI
 // (zero rows = "wasn't pending, wasn't yours, or didn't exist" — all three
 // collapse to the same observable outcome by design, the same way RLS makes
 // "can't see it" and "doesn't exist" indistinguishable elsewhere).
-export async function revokeInvite(db: Db, accessToken: string, inviteId: string) {
+export async function revokeInvite(db: Db, accessToken: string, householdId: string, inviteId: string) {
   return withRls(db, accessToken, async (tx) => {
     const result = await tx
       .update(householdInvites)
       .set({ status: 'revoked' })
-      .where(eq(householdInvites.id, inviteId))
+      .where(and(eq(householdInvites.id, inviteId), eq(householdInvites.householdId, householdId)))
       .returning({ id: householdInvites.id })
 
     return { revoked: result.length > 0 }
@@ -388,9 +388,9 @@ export function buildInvitesRoutes(db: Db) {
 
   app.openapi(revokeInviteRoute, async (c) => {
     const accessToken = c.get('accessToken')
-    const { inviteId } = c.req.valid('param')
+    const { householdId, inviteId } = c.req.valid('param')
 
-    await revokeInvite(db, accessToken, inviteId)
+    await revokeInvite(db, accessToken, householdId, inviteId)
 
     return c.body(null, 204)
   })

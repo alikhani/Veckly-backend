@@ -12,6 +12,7 @@ import { buildInternalRecipeRecommendationRoutes, buildRecipeRecommendationRoute
 import { buildInternalMealFeedbackRoutes, buildMealFeedbackRoutes } from './meal-feedback.js'
 import { buildInternalSavedPlansRoutes, buildSavedPlansRoutes } from './saved-plans.js'
 import { buildInternalPrepBatchesRoutes, buildPrepBatchesRoutes } from './prep-batches.js'
+import { buildDevAuthRoutes, isDevAuthEnabled } from './dev-auth.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -43,6 +44,7 @@ export function buildApp(db: Db) {
   app.route('/', buildMealFeedbackRoutes(db))
   app.route('/', buildSavedPlansRoutes(db))
   app.route('/', buildPrepBatchesRoutes(db))
+  app.route('/', buildDevAuthRoutes())
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',
@@ -55,7 +57,11 @@ export function buildApp(db: Db) {
     info: { title: 'Veckly API', version: '0.0.1' },
   })
 
-  app.get('/health', (c) => c.json({ status: 'ok' }))
+  app.get('/health', (c) => c.json({
+    status: 'ok',
+    environment: process.env.APP_ENV ?? process.env.VERCEL_ENV ?? 'development',
+    devAuthEnabled: isDevAuthEnabled(),
+  }))
 
   app.onError((err, c) => {
     console.error('Unhandled error', err)

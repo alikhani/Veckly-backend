@@ -42,6 +42,20 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-06-18 - Staging dev-login foundation
+
+Added a staging-only `POST /auth/dev-token` flow for iOS simulator/debug builds.
+The route is guarded by `ENABLE_DEV_AUTH` and production environment checks, and it
+returns a real Supabase access token + refresh token for a configured staging test
+user.
+
+This is the backend half of the new app split:
+
+- `Debug` / simulator -> staging
+- `Release` / TestFlight -> production
+
+Runbook: `docs/runbooks/staging-dev-auth.md`
+
 ### 2026-06-17 — Recipe URL import error contract
 
 `POST /recipes/import-from-url` now exposes stable `RecipeImportError` response
@@ -117,5 +131,8 @@ Deployed and verified in production.
 ## Next focus
 
 Phase 4 — iOS foundation: auth on device, session persistence, environment switching, and fetching real household/week data from the backend.
+
+Immediate next step: provision a dedicated staging Supabase/Auth setup and fill the
+placeholder staging values in `Veckly-ios/Config/Base.xcconfig`.
 
 See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for detail.

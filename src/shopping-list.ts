@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
@@ -436,7 +436,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
       ? await tx
         .select({ id: recipes.id, ingredients: recipes.ingredients })
         .from(recipes)
-        .where(and(eq(recipes.householdId, householdId), inArray(recipes.id, recipeIds)))
+        .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
       : []
 
     type TItemAccumulator = { category: string; label: string; totalAmount: number | null; canSum: boolean; unit: string | null }

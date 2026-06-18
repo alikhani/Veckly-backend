@@ -782,7 +782,7 @@ async function doGenerateWeekPlan(
     ),
     getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
     withRls(db, accessToken, (tx) =>
-      tx.select({ id: recipes.id, title: recipes.title })
+      tx.select({ id: recipes.id, title: recipes.title, tags: recipes.tags })
         .from(recipes)
         .where(and(eq(recipes.isArchived, false), or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true))))
     ),
@@ -804,7 +804,12 @@ async function doGenerateWeekPlan(
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
   const filtered = avoidIngredients.length > 0
-    ? poolRecipes.filter((r) => !avoidIngredients.some((a) => r.title.toLowerCase().includes(a.toLowerCase())))
+    ? poolRecipes.filter((r) =>
+      !avoidIngredients.some((a) =>
+        r.title.toLowerCase().includes(a.toLowerCase()) ||
+        (r.tags as string[]).some((t) => t.toLowerCase().includes(a.toLowerCase()))
+      )
+    )
     : poolRecipes
   const candidates = filtered.length > 0 ? filtered : poolRecipes
 

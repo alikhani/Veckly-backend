@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { households, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
@@ -512,7 +513,10 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(appendShoppingListEventRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
 
@@ -541,7 +545,10 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
     // Exactly one query, against the projection only — `getStreamProjection`
     // enforces the same read-path rule as week-plan's: never replay the event
@@ -563,7 +570,10 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListSummaryRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate)
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
@@ -573,7 +583,10 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListStateRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const state = await getShoppingListState(db, accessToken, householdId, weekStartDate)
     return c.json(state, 200)
   })
@@ -582,6 +595,8 @@ export function buildShoppingListRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const result = await replaceShoppingListState(db, accessToken, {
       householdId,

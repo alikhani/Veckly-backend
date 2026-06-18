@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { mealFeedback } from './schema.js'
 import type { Db } from './db.js'
@@ -152,6 +153,8 @@ export function buildMealFeedbackRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const response = await listMealFeedback(db, accessToken, user.id, householdId)
     return c.json(response, 200)
   })
@@ -160,6 +163,8 @@ export function buildMealFeedbackRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const { mealId, feedback } = c.req.valid('json')
     if (feedback === null) {
       await removeMealFeedback(db, accessToken, user.id, householdId, mealId)

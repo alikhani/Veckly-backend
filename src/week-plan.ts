@@ -2,8 +2,9 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdMemberships, householdProfiles, householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdProfiles, householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -763,18 +764,6 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
   })
 }
 
-async function assertWeekPlanMembership(db: Db, accessToken: string, householdId: string, userId: string) {
-  const [row] = await withRls(db, accessToken, (tx) =>
-    tx.select({ id: householdMemberships.id }).from(householdMemberships)
-      .where(and(
-        eq(householdMemberships.householdId, householdId),
-        eq(householdMemberships.userId, userId),
-        eq(householdMemberships.status, 'active'),
-      )).limit(1),
-  )
-  return row ?? null
-}
-
 async function doGenerateWeekPlan(
   db: Db,
   accessToken: string,
@@ -783,7 +772,7 @@ async function doGenerateWeekPlan(
   weekStartDate: string,
   regenerate: boolean,
 ): Promise<{ ok: true } | { error: 'NO_RECIPES' } | { error: 'NOT_MEMBER' }> {
-  const member = await assertWeekPlanMembership(db, accessToken, householdId, userId)
+  const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
 
   const [profileRows, projection, poolRecipes] = await Promise.all([
@@ -881,7 +870,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
-    const member = await assertWeekPlanMembership(db, accessToken, householdId, user.id)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
@@ -934,7 +923,10 @@ export function buildWeekPlanRoutes(db: Db) {
 
   app.openapi(getWeekPlanSummaryRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getWeekPlanSummary(db, accessToken, householdId, weekStartDate)
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)

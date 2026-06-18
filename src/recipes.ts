@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, asc, desc, eq, ilike, inArray, isNotNull, not, or, sql } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, mealFeedback, recipes, userSavedRecipes } from './schema.js'
 import type { Db } from './db.js'
@@ -460,6 +461,8 @@ export function buildRecipesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const { includeArchived, includePublic } = c.req.valid('query')
     const list = await listRecipes(db, accessToken, householdId, user.id, includeArchived === 'true', includePublic === 'true')
     c.header('Cache-Control', 'private, max-age=300')
@@ -470,6 +473,8 @@ export function buildRecipesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, recipeId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const recipe = await getRecipe(db, accessToken, householdId, user.id, recipeId)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)
     return c.json(recipe, 200)
@@ -479,6 +484,8 @@ export function buildRecipesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const recipe = await createRecipe(db, accessToken, user.id, householdId, body)
     return c.json(recipe, 201)
@@ -486,7 +493,10 @@ export function buildRecipesRoutes(db: Db) {
 
   app.openapi(updateRecipeRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, recipeId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const recipe = await updateRecipe(db, accessToken, householdId, recipeId, body)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)

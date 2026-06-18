@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, householdProfiles } from './schema.js'
 import type { Db } from './db.js'
@@ -190,7 +191,10 @@ export function buildHouseholdProfileRoutes(db: Db) {
 
   app.openapi(getHouseholdProfileRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const profile = await getHouseholdProfile(db, accessToken, householdId)
     c.header('Cache-Control', 'private, max-age=300')
     return c.json({ profile }, 200)
@@ -200,6 +204,8 @@ export function buildHouseholdProfileRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const profile = await upsertHouseholdProfile(db, accessToken, user.id, householdId, body)
     return c.json(profile, 200)

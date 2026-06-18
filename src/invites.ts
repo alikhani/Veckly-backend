@@ -350,7 +350,7 @@ export function buildInternalInvitesRoutes(db: Db) {
       case 'expired':
         return c.json({ error: 'INVITE_EXPIRED' }, 410)
       case 'not_acceptable':
-        return c.json({ error: 'ACCEPT_INVITE_FAILED' }, 500)
+        return c.json({ error: 'ACCEPT_INVITE_FAILED' }, 409)
     }
   })
 

@@ -199,7 +199,9 @@ export function buildInternalSavedPlansRoutes(db: Db) {
   app.post('/internal/saved-plans', async (c) => {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
-    const body = UpsertSavedPlanSchema.parse(await c.req.json())
+    const parsed = UpsertSavedPlanSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'Invalid payload' }, 400)
+    const body = parsed.data
     await upsertSavedPlan(db, accessToken, user.id, body)
     return c.json({ ok: true })
   })
@@ -207,9 +209,12 @@ export function buildInternalSavedPlansRoutes(db: Db) {
   app.patch('/internal/saved-plans/:id', async (c) => {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
-    const id = z.string().uuid().parse(c.req.param('id'))
-    const body = RenameSavedPlanSchema.parse(await c.req.json())
-    const plan = await renameSavedPlan(db, accessToken, user.id, id, body.label.trim())
+    const idParsed = z.string().uuid().safeParse(c.req.param('id'))
+    if (!idParsed.success) return c.json({ error: 'Invalid id' }, 400)
+    const id = idParsed.data
+    const bodyParsed = RenameSavedPlanSchema.safeParse(await c.req.json().catch(() => null))
+    if (!bodyParsed.success) return c.json({ error: 'Invalid payload' }, 400)
+    const plan = await renameSavedPlan(db, accessToken, user.id, id, bodyParsed.data.label.trim())
     if (!plan) return c.json({ error: 'Saved plan not found' }, 404)
     return c.json({ ok: true })
   })
@@ -217,7 +222,9 @@ export function buildInternalSavedPlansRoutes(db: Db) {
   app.delete('/internal/saved-plans/:id', async (c) => {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
-    const id = z.string().uuid().parse(c.req.param('id'))
+    const idParsed = z.string().uuid().safeParse(c.req.param('id'))
+    if (!idParsed.success) return c.json({ error: 'Invalid id' }, 400)
+    const id = idParsed.data
     await removeSavedPlan(db, accessToken, user.id, id)
     return c.json({ ok: true })
   })

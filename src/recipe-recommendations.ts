@@ -1,3 +1,4 @@
+import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 
@@ -108,29 +109,16 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    signal: AbortSignal.timeout(30_000),
-    headers: {
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL ?? 'claude-3-5-haiku-latest',
-      max_tokens: 1800,
-      temperature: 0.2,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-    }),
+  const client = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 0 })
+  const message = await client.messages.create({
+    model: process.env.ANTHROPIC_MODEL ?? 'claude-haiku-4-5-20251001',
+    max_tokens: 1800,
+    temperature: 0.2,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
   })
 
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => '(unreadable)')
-    throw new Error(`Anthropic request failed: HTTP ${response.status} — ${errBody}`)
-  }
-  const body = await response.json() as { content?: Array<{ type: string; text?: string }> }
-  const text = body.content?.find((part) => part.type === 'text')?.text
+  const text = message.content.find((b) => b.type === 'text')?.text
   if (!text) throw new Error('Anthropic response did not include text content')
   return text
 }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { households, householdMemberships } from './schema.js'
 import type { Db } from './db.js'
@@ -464,8 +465,11 @@ export function buildHouseholdsRoutes(db: Db) {
   })
 
   app.openapi(listHouseholdMembersRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
     const members = await listHouseholdMembers(db, accessToken, householdId)
     c.header('Cache-Control', 'private, max-age=300')
     return c.json({ members }, 200)

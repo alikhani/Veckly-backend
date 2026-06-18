@@ -904,8 +904,11 @@ export function buildWeekPlanRoutes(db: Db) {
   })
 
   app.openapi(getWeekPlanRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
     // Exactly one query, against the projection only — `getStreamProjection`
     // is what enforces the one rule the entire pattern hinges on (design doc
@@ -940,9 +943,12 @@ export function buildWeekPlanRoutes(db: Db) {
   })
 
   app.openapi(listWeekHistoryPlansRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const { from, to } = c.req.valid('query')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json([] as never, 200)
 
     if ((from && !isMonday(from)) || (to && !isMonday(to))) return c.json({ error: 'INVALID_WEEK_RANGE' } as never, 400)
 
@@ -951,8 +957,11 @@ export function buildWeekPlanRoutes(db: Db) {
   })
 
   app.openapi(getWeekHistoryPlanRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ week: null } as never, 200)
 
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
 
@@ -961,10 +970,12 @@ export function buildWeekPlanRoutes(db: Db) {
   })
 
   app.openapi(upsertWeekHistoryPlanRoute, async (c) => {
-    const accessToken = c.get('accessToken')
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
     const body = c.req.valid('json')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
 
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
 

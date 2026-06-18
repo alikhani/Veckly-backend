@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { eq } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdActiveWeeks } from './schema.js'
 import type { Db } from './db.js'
@@ -140,24 +141,32 @@ export function buildActiveWeekRoutes(db: Db) {
   app.use('/households/*', requireAuth)
 
   app.openapi(getActiveWeekRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ activeWeek: null }, 200)
     const activeWeek = await getActiveWeek(db, accessToken, householdId)
     return c.json({ activeWeek }, 200)
   })
 
   app.openapi(setActiveWeekRoute, async (c) => {
-    const accessToken = c.get('accessToken')
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
     const activeWeek = await setActiveWeek(db, accessToken, user.id, householdId, body)
     return c.json(activeWeek, 200)
   })
 
   app.openapi(clearActiveWeekRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.body(null, 204)
     await clearActiveWeek(db, accessToken, householdId)
     return c.body(null, 204)
   })

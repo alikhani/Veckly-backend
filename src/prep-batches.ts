@@ -1,8 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, eq, gte, inArray, lte } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdMemberships, householdPrepBatchAssignments, householdPrepBatches } from './schema.js'
+import { householdPrepBatchAssignments, householdPrepBatches } from './schema.js'
 import type { Db } from './db.js'
 
 type AppEnv = { Variables: { user: AuthedUser; accessToken: string } }
@@ -89,20 +90,6 @@ const deleteRoute = createRoute({
     404: { content: { 'application/json': { schema: z.object({ error: z.string() }) } }, description: 'Prep batch not found or not a member' },
   },
 })
-
-async function assertActiveMembership(db: Db, householdId: string, userId: string) {
-  const [row] = await db
-    .select({ id: householdMemberships.id })
-    .from(householdMemberships)
-    .where(
-      and(
-        eq(householdMemberships.householdId, householdId),
-        eq(householdMemberships.userId, userId),
-        eq(householdMemberships.status, 'active'),
-      ),
-    )
-  return row ?? null
-}
 
 async function listBatches(db: Db, accessToken: string, householdId: string, from: string, to: string) {
   const batches = await withRls(db, accessToken, (tx) =>
@@ -225,7 +212,7 @@ export function buildPrepBatchesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const { from, to } = c.req.valid('query')
-    const member = await assertActiveMembership(db, householdId, user.id)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
     const result = await listBatches(db, accessToken, householdId, from, to)
     return c.json(result, 200)
@@ -236,7 +223,7 @@ export function buildPrepBatchesRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
-    const member = await assertActiveMembership(db, householdId, user.id)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
     const batch = await createBatch(db, accessToken, user.id, householdId, body)
     if (!batch) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
@@ -244,8 +231,11 @@ export function buildPrepBatchesRoutes(db: Db) {
   })
 
   app.openapi(deleteRoute, async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId, batchId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const deleted = await deleteBatch(db, accessToken, householdId, batchId)
     if (!deleted) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true as const }, 200)
@@ -270,7 +260,7 @@ export function buildInternalPrepBatchesRoutes(db: Db) {
       return c.json({ error: 'Invalid date range' }, 400)
     }
 
-    const member = await assertActiveMembership(db, householdId, user.id)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
 
     const result = await listBatches(db, accessToken, householdId, from, to)
@@ -285,7 +275,7 @@ export function buildInternalPrepBatchesRoutes(db: Db) {
     const parsed = CreatePrepBatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
 
-    const member = await assertActiveMembership(db, householdId, user.id)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'HOUSEHOLD_NOT_FOUND' }, 404)
 
     const batch = await createBatch(db, accessToken, user.id, householdId, parsed.data)

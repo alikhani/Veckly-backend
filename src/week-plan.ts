@@ -921,7 +921,7 @@ export function buildWeekPlanRoutes(db: Db) {
 
     if (!projection) return c.json({ error: 'No week plan found for this week' }, 404)
 
-    c.header('Cache-Control', 'private, max-age=60')
+    c.header('Cache-Control', 'private, max-age=300')
     return c.json(
       {
         householdId: projection.householdId,
@@ -942,7 +942,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const summary = await getWeekPlanSummary(db, accessToken, householdId, weekStartDate)
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
-    c.header('Cache-Control', 'private, max-age=60')
+    c.header('Cache-Control', 'private, max-age=300')
     return c.json(summary, 200)
   })
 

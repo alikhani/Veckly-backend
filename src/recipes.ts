@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, asc, desc, eq, ilike, inArray, isNotNull, not, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, not, or, sql } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { assertMembership } from './membership.js'
@@ -213,7 +213,7 @@ export async function getRecipe(
           eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
         ),
       )
-      .where(and(eq(recipes.id, recipeId), eq(recipes.householdId, householdId)))
+      .where(and(eq(recipes.id, recipeId), or(eq(recipes.householdId, householdId), isNull(recipes.householdId))))
     return row ? toRecipeResponse(row.recipe, row.userVote ?? null) : null
   })
 }

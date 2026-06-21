@@ -25,7 +25,7 @@ The order is deliberate:
 | Phase 3 — Web strangler migration | Not started | Existing web app starts calling/proxying to `Veckly-backend`. |
 | Phase 4 — iOS foundation | In progress | `Veckly-ios` exists with generated OpenAPI client, tabs, localized English/Swedish app shell, and week/shopping/settings foundations. Needs auth and full environment setup. |
 | Phase 5 — iOS product parity | In progress | Shopping list, recipe detail, lock/skip, feedback, household, onboarding, localized UI, and several native planning workflows are implemented or stabilized. |
-| Phase 6 — TestFlight readiness | Not started | App Store Connect, signing, QA, telemetry, beta checklist. |
+| Phase 6 — TestFlight readiness | In progress | App icon, signing, entitlements, privacy manifest, and account deletion are done; internal TestFlight build is live. Remaining: backend prod hardening, QA matrix, external TestFlight submission. |
 
 ## Working Rules
 
@@ -211,24 +211,24 @@ Exit criteria:
 
 ## Phase 6 — TestFlight Readiness
 
-Status: not started
+Status: in progress
 
 Purpose: prepare iOS for internal and then external beta testing.
 
 Work order:
 
-1. Apple project setup: bundle id, signing, app icon, launch screen, display name.
-2. App Store Connect: app record, TestFlight groups, beta review metadata.
-3. Privacy and compliance: privacy manifest, data collection notes, account deletion/support path, Sign in with Apple compliance.
-4. Backend production readiness: staging/prod separation, env vars, rate limits, security headers, migration runbook, rollback plan.
-5. QA: simulator, device, small/large iPhone, dark mode, English locale, Swedish locale, poor network/offline, fresh install, upgrade install.
-6. Release: archive, upload, internal TestFlight pass, external TestFlight submission.
+1. ✅ Apple project setup: bundle id (`com.nimaalikhani.Veckly`), automatic signing, app icon (light/dark/tinted), auto-generated launch screen, display name.
+2. ⬜ App Store Connect: app record exists and internal TestFlight is live. External TestFlight groups and beta review metadata are not yet submitted.
+3. ✅ Privacy and compliance: `PrivacyInfo.xcprivacy` declares email collection (app functionality, no tracking); account deletion is fully wired (Household tab → `AppModel.deleteAccount()` → backend); Sign in with Apple entitlement present. Not yet verified: privacy policy/support URLs in the App Store Connect listing itself.
+4. 🔵 Backend production readiness: security headers added (`hono/secure-headers`, 2026-06-21) and migration/rollback runbook written (`docs/runbooks/migration-and-rollback-runbook.md`, 2026-06-21). Still open: persistent rate limiting (current limiter is in-memory, resets per serverless instance), staging/prod Supabase separation (one project today), structured observability (console.error only, no Sentry/log drain).
+5. ⬜ QA: simulator, device, small/large iPhone, dark mode, English locale, Swedish locale, poor network/offline, fresh install, upgrade install. Not yet run as a systematic pass.
+6. 🔵 Release: archive and internal TestFlight pass are done and in active internal use. External TestFlight submission not yet started.
 
 Exit criteria:
 
-- Archive succeeds.
-- Internal TestFlight build is installed and smoke-tested.
-- External TestFlight build is approved or ready for beta review submission.
+- Archive succeeds. ✅ (already true — internal build exists)
+- Internal TestFlight build is installed and smoke-tested. ✅
+- External TestFlight build is approved or ready for beta review submission. ⬜ Not yet — this is the remaining gate.
 
 ## Immediate Next Tasks
 
@@ -260,3 +260,4 @@ Start here:
 - 2026-06-16: Critical DB client bug fixed. `postgres-js` defaults to `prepare: true` (named prepared statements), which is incompatible with Supabase's transaction-mode PgBouncer pooler (port 6543). Every `withRls` call uses `db.transaction()` — the driver was hanging inside every transaction until Vercel's 30 s timeout fired. Symptom: iOS week view meal assignment produced "We could not assign the meal" after a delay. Fix: `src/db.ts` now passes `{ prepare: false, max: 1 }` — `prepare: false` makes the driver compatible with the pooler; `max: 1` is the standard single-connection-per-serverless-instance pattern for Supabase on Vercel. Deployed to production.
 - 2026-06-16: iOS locked-day summary contract completed and deployed to staging/production. `WeekPlanSummaryDay` now includes `isLocked`, generated OpenAPI specs were updated, and the iOS week view reads locked state from the per-day summary row instead of maintaining a separate client-side set.
 - 2026-06-18: iOS English/Swedish localization completed. `Veckly-ios` now uses `Localizable.xcstrings` with English fallback and Swedish system-language UI, locale-aware weekdays, and `Accept-Language` on API requests. Backend behavior is unchanged for now; recipe/content translation remains separate future work.
+- 2026-06-21: Phase 6 audit. Internal TestFlight build confirmed live (Apple project setup, privacy manifest, account deletion already done — this phase was further along than the table indicated). Backend production-readiness audit run: security headers were missing (fixed — `hono/secure-headers` added in `src/app.ts`) and no migration/rollback runbook existed (written — `docs/runbooks/migration-and-rollback-runbook.md`). Still open before external TestFlight: persistent rate limiting, staging/prod Supabase separation, structured observability (Sentry/log drain), and a systematic QA pass.

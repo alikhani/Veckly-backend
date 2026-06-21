@@ -12,7 +12,7 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 | Phase 3 — Web strangler migration | Not started |
 | Phase 4 — iOS foundation | In progress |
 | Phase 5 — iOS product parity | In progress |
-| Phase 6 — TestFlight readiness | Not started |
+| Phase 6 — TestFlight readiness | In progress — internal TestFlight live; security headers + migration runbook added 2026-06-21; remaining: rate limiting, staging DB, observability, QA pass, external submission |
 
 ## What is working
 
@@ -41,6 +41,20 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 - Meal prep batches
 
 ## Recent changes
+
+### 2026-06-21 — Phase 6 production-readiness audit
+
+Audited backend against the Phase 6 TestFlight-readiness checklist (the iOS app already has an internal TestFlight build live, ahead of what this doc previously reflected).
+
+Fixed:
+- Security headers were entirely missing — added `hono/secure-headers` middleware in `src/app.ts` (default config: HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, removes `X-Powered-By`).
+- No migration/rollback process was documented — written up in `docs/runbooks/migration-and-rollback-runbook.md`, motivated directly by the 2026-06-16 missing-migrations incident below.
+
+Still open, by design decision rather than oversight at this point:
+- Rate limiting on AI routes is in-memory (per serverless instance, resets on cold start) — fine for internal testing, needs Redis/Upstash before a larger external beta.
+- One Supabase project total — no separate staging database to test migrations against before production.
+- No structured observability (Sentry or a Vercel log drain) — only `console.error`.
+- No systematic QA pass yet (device matrix, dark mode, locale, offline, fresh/upgrade install).
 
 ### 2026-06-18 — iOS language signal
 

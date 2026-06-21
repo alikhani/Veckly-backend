@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
+import { secureHeaders } from 'hono/secure-headers'
 import { buildActiveWeekRoutes } from './active-week.js'
 import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './households.js'
 import { buildHouseholdProfileRoutes, buildInternalHouseholdProfileRoutes } from './household-profile.js'
@@ -16,6 +17,8 @@ import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
+
+  app.use(secureHeaders())
 
   // Internal server-to-server routes (MealPlanner strangle path)
   app.route('/', buildInternalHouseholdsRoutes(db))

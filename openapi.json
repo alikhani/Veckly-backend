@@ -491,6 +491,20 @@
           "ok"
         ]
       },
+      "GenerateWeekPlanError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "NO_RECIPES"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "GenerateWeekPlanRequest": {
         "type": "object",
         "properties": {
@@ -1841,6 +1855,32 @@
             "additionalProperties": {
               "type": "number"
             }
+          },
+          "customItems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemKey": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "category": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "itemKey",
+                "label",
+                "category"
+              ]
+            },
+            "default": []
           }
         },
         "required": [
@@ -1984,6 +2024,9 @@
           },
           "checked": {
             "type": "boolean"
+          },
+          "isCustom": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1991,7 +2034,8 @@
           "label",
           "amount",
           "unit",
-          "checked"
+          "checked",
+          "isCustom"
         ]
       },
       "ShoppingListSummaryGroup": {
@@ -2267,10 +2311,7 @@
             "type": "boolean"
           },
           "createdBy": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid"
           },
           "createdAt": {
@@ -2278,6 +2319,16 @@
           },
           "updatedAt": {
             "type": "string"
+          },
+          "userVote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "up",
+              "down"
+            ]
           }
         },
         "required": [
@@ -2300,7 +2351,8 @@
           "isArchived",
           "createdBy",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "userVote"
         ]
       },
       "CreateRecipe": {
@@ -2664,6 +2716,38 @@
               "adults",
               "children"
             ]
+          },
+          "existingIngredients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "amount": {
+                  "type": "string",
+                  "maxLength": 20
+                },
+                "unit": {
+                  "type": "string",
+                  "maxLength": 20
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "maxItems": 50
+          },
+          "existingSteps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "maxItems": 30
           }
         },
         "required": [
@@ -2741,6 +2825,12 @@
               "null"
             ]
           },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -2762,15 +2852,63 @@
           "title"
         ]
       },
+      "ImportSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "web",
+              "tiktok",
+              "instagram"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "authorName": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ]
+      },
       "RecipeImportEnvelope": {
         "type": "object",
         "properties": {
           "recipe": {
             "$ref": "#/components/schemas/ImportedRecipe"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
           }
         },
         "required": [
-          "recipe"
+          "recipe",
+          "warnings",
+          "confidence"
         ]
       },
       "RecipeImportError": {
@@ -2784,7 +2922,9 @@
               "FETCH_FAILED",
               "NO_RECIPE_FOUND",
               "RATE_LIMITED",
-              "IMPORT_FAILED"
+              "IMPORT_FAILED",
+              "UNSUPPORTED_SOCIAL_SOURCE",
+              "CAPTION_REQUIRED"
             ]
           }
         },
@@ -3535,6 +3675,40 @@
             "description": "Household not found or caller is not a member"
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteHousehold",
+        "summary": "Delete a household (owner only)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Household deleted"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Caller is not the household owner"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
       }
     },
     "/households/{householdId}/members": {
@@ -4020,7 +4194,7 @@
         },
         "responses": {
           "200": {
-            "description": "Week plan generated",
+            "description": "Week plan generated (or nothing to do — all days already filled)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4031,6 +4205,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "422": {
+            "description": "No recipes available to plan with",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateWeekPlanError"
+                }
+              }
+            }
           }
         }
       }
@@ -4907,6 +5091,7 @@
           {
             "schema": {
               "type": "string",
+              "minLength": 2,
               "maxLength": 120
             },
             "required": false,
@@ -5143,6 +5328,16 @@
           },
           "500": {
             "description": "Could not fetch page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeImportError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream social platform unavailable",
             "content": {
               "application/json": {
                 "schema": {

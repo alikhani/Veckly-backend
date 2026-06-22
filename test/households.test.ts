@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { bootstrapHousehold, createNamedHousehold, listHouseholdsForUser, renameHousehold } from '../src/households.js'
+import { bootstrapHousehold, createNamedHousehold, deleteHousehold, listHouseholdsForUser, renameHousehold } from '../src/households.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -172,6 +172,23 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
     expect(result).toBeNull()
   })
 
+  it('owner can delete their household and its memberships cascade away', async () => {
+    const deleted = await deleteHousehold(db, fakeAccessToken(userA), householdAId)
+
+    expect(deleted).toBe(true)
+
+    const householdRows = await db.select().from(households).where(eq(households.id, householdAId))
+    expect(householdRows).toHaveLength(0)
+
+    const membershipRows = await db.select().from(householdMemberships).where(eq(householdMemberships.householdId, householdAId))
+    expect(membershipRows).toHaveLength(0)
+  })
+
+  it('non-member cannot delete a household they cannot see', async () => {
+    const deleted = await deleteHousehold(db, fakeAccessToken(stranger), householdAId)
+    expect(deleted).toBe(false)
+  })
+
   it('rolls back the household insert if the membership insert fails — never one without the other', async () => {
     await expect(
       asUser(stranger, async (tx) => {
@@ -202,5 +219,11 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
 
     const deleteResponse = await app.request(`/households/${householdAId}/members/${userB}`, { method: 'DELETE' })
     expect(deleteResponse.status).toBe(401)
+  })
+
+  it('requires auth for public household delete route', async () => {
+    const app = buildApp(db)
+    const response = await app.request(`/households/${householdAId}`, { method: 'DELETE' })
+    expect(response.status).toBe(401)
   })
 })

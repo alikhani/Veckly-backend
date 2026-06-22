@@ -100,7 +100,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdBId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: {}, pantryStock: {} },
+        state: { listStarted: true, checkedItems: {}, pantryStock: {}, customItems: [] },
       })
 
       const rows = await asUser(userA, (tx) =>
@@ -177,7 +177,7 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(event).toBeDefined()
       expect(projection).toBeDefined()
-      expect(projection!.state).toEqual({ listStarted: true, checkedItems: { milk: true }, pantryStock: {} })
+      expect(projection!.state).toEqual({ listStarted: true, checkedItems: { milk: true }, pantryStock: {}, customItems: [] })
     })
 
     it('rolls back the event insert if the projection step fails — never one without the other', async () => {
@@ -222,7 +222,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       // ...but seed the projection directly (bypassing the write path) with a
       // deliberately contradictory state. If the read path ever replayed the
       // log, this assertion would be impossible to satisfy.
-      const seededState: TShoppingListProjectionState = { listStarted: true, checkedItems: { bread: false }, pantryStock: {} }
+      const seededState: TShoppingListProjectionState = { listStarted: true, checkedItems: { bread: false }, pantryStock: {}, customItems: [] }
       await db.insert(shoppingListProjections).values({ householdId: householdAId, weekStartDate, state: seededState })
 
       const [projection] = await asUser(userA, (tx) =>
@@ -239,7 +239,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdAId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: {}, pantryStock: {} },
+        state: { listStarted: true, checkedItems: {}, pantryStock: {}, customItems: [] },
       })
 
       const queries: string[] = []
@@ -283,7 +283,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         householdId: householdAId,
         weekStartDate,
         causedBy: userCausedBy(userA),
-        state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 } },
+        state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 }, customItems: [] },
       })
 
       expect(result.outcome).toBe('updated')
@@ -292,12 +292,13 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(state.state).toEqual({
         checkedItems: ['rice:g', 'tomatoes:can'],
         pantryStock: { 'rice:g': 100 },
+        customItems: [],
       })
       expect(state.updatedAt).toEqual(result.updatedAt)
 
       const [event] = await db.select().from(shoppingListEvents).where(eq(shoppingListEvents.householdId, householdAId))
       expect(event!.eventType).toBe('shopping_state_replaced')
-      expect(event!.payload).toEqual({ state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 } } })
+      expect(event!.payload).toEqual({ state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 }, customItems: [] } })
     })
 
     it('returns null state when no projection exists or after the state is cleared', async () => {
@@ -308,7 +309,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         householdId: householdAId,
         weekStartDate,
         causedBy: userCausedBy(userA),
-        state: { checkedItems: ['rice:g'], pantryStock: { 'rice:g': 100 } },
+        state: { checkedItems: ['rice:g'], pantryStock: { 'rice:g': 100 }, customItems: [] },
       })
       expect(created.outcome).toBe('updated')
 
@@ -329,7 +330,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         weekStartDate,
         causedBy: userCausedBy(userA),
         expectedUpdatedAt: null,
-        state: { checkedItems: ['pasta:g'], pantryStock: {} },
+        state: { checkedItems: ['pasta:g'], pantryStock: {}, customItems: [] },
       })
       expect(replacedAfterClear.outcome).toBe('updated')
 
@@ -351,7 +352,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         householdId: householdAId,
         weekStartDate,
         causedBy: userCausedBy(userA),
-        state: { checkedItems: ['rice:g'], pantryStock: {} },
+        state: { checkedItems: ['rice:g'], pantryStock: {}, customItems: [] },
       })
       expect(created.outcome).toBe('updated')
 
@@ -360,13 +361,13 @@ describeWithDb('Shopping-list event log + projection', () => {
         weekStartDate,
         causedBy: userCausedBy(userA),
         expectedUpdatedAt: '2026-04-06T04:00:00.000Z',
-        state: { checkedItems: ['pasta:g'], pantryStock: { 'pasta:g': 250 } },
+        state: { checkedItems: ['pasta:g'], pantryStock: { 'pasta:g': 250 }, customItems: [] },
       })
 
       expect(stale).toEqual({ outcome: 'stale', updatedAt: created.updatedAt })
 
       const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
-      expect(state.state).toEqual({ checkedItems: ['rice:g'], pantryStock: {} })
+      expect(state.state).toEqual({ checkedItems: ['rice:g'], pantryStock: {}, customItems: [] })
     })
 
     it('returns 401 from the state route when no bearer token is supplied', async () => {
@@ -378,7 +379,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       const patchResponse = await app.request(`/households/${householdAId}/shopping-lists/${weekStartDate}/state`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: { checkedItems: [], pantryStock: {} } }),
+        body: JSON.stringify({ state: { checkedItems: [], pantryStock: {}, customItems: [] } }),
       })
       expect(patchResponse.status).toBe(401)
     })
@@ -430,7 +431,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdAId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true }, pantryStock: {} },
+        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true }, pantryStock: {}, customItems: [] },
       })
 
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
@@ -438,11 +439,11 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(summary?.groups).toEqual([
         {
           category: 'Pantry',
-          items: [{ itemKey: 'pantry:spaghetti:400:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true }],
+          items: [{ itemKey: 'pantry:spaghetti:400:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true, isCustom: false }],
         },
         {
           category: 'Produce',
-          items: [{ itemKey: 'produce:tomatoes:2:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false }],
+          items: [{ itemKey: 'produce:tomatoes:2:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false, isCustom: false }],
         },
       ])
     })
@@ -451,6 +452,30 @@ describeWithDb('Shopping-list event log + projection', () => {
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
 
       expect(summary).toBeNull()
+    })
+
+    it('includes custom shopping items in the same grouped summary', async () => {
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          listStarted: true,
+          checkedItems: { 'custom:bananas': true },
+          pantryStock: {},
+          customItems: [
+            { itemKey: 'custom:bananas', label: 'Bananas', category: 'Other' },
+          ],
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Other',
+          items: [{ itemKey: 'custom:bananas', label: 'Bananas', amount: null, unit: null, checked: true, isCustom: true }],
+        },
+      ])
     })
   })
 })

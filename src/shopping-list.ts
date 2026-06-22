@@ -40,6 +40,13 @@ const ItemCheckedPayloadSchema = z.object({
 const ShoppingStatePayloadSchema = z.object({
   checkedItems: z.array(z.string().min(1)),
   pantryStock: z.record(z.string(), z.number().finite()),
+  customItems: z.array(
+    z.object({
+      itemKey: z.string().min(1),
+      label: z.string().min(1),
+      category: z.string().min(1),
+    }),
+  ).optional().default([]),
 }).openapi('ShoppingStatePayload')
 
 const ShoppingStateReplacedPayloadSchema = z.object({
@@ -91,6 +98,7 @@ const ShoppingListSummaryItemSchema = z.object({
   amount: z.string().nullable(),
   unit: z.string().nullable(),
   checked: z.boolean(),
+  isCustom: z.boolean(),
 }).openapi('ShoppingListSummaryItem')
 
 const ShoppingListSummaryGroupSchema = z.object({
@@ -135,9 +143,10 @@ type TShoppingListProjectionState = {
   listStarted: boolean
   checkedItems: Record<string, boolean>
   pantryStock: Record<string, number>
+  customItems: Array<{ itemKey: string; label: string; category: string }>
 }
 
-const emptyProjectionState = (): TShoppingListProjectionState => ({ listStarted: false, checkedItems: {}, pantryStock: {} })
+const emptyProjectionState = (): TShoppingListProjectionState => ({ listStarted: false, checkedItems: {}, pantryStock: {}, customItems: [] })
 
 function checkedItemsArrayToMap(checkedItems: string[]) {
   return Object.fromEntries([...new Set(checkedItems)].map((itemKey) => [itemKey, true]))
@@ -164,6 +173,7 @@ function foldEventIntoProjection(
         listStarted: true,
         checkedItems: checkedItemsArrayToMap(payload.state.checkedItems),
         pantryStock: payload.state.pantryStock,
+        customItems: payload.state.customItems ?? [],
       }
     case 'shopping_list_cleared':
       return emptyProjectionState()
@@ -301,7 +311,9 @@ function formatAggregatedAmount(n: number): string {
 }
 
 function readShoppingProjectionState(state: unknown): TShoppingListProjectionState {
-  const candidate = state as (Partial<TShoppingListProjectionState> & { checkedItems?: unknown; pantryStock?: unknown }) | null | undefined
+  const candidate = state as (
+    Partial<TShoppingListProjectionState> & { checkedItems?: unknown; pantryStock?: unknown; customItems?: unknown }
+  ) | null | undefined
   const checkedItems = Array.isArray(candidate?.checkedItems)
     ? checkedItemsArrayToMap(candidate.checkedItems.filter((item): item is string => typeof item === 'string'))
     : candidate?.checkedItems && typeof candidate.checkedItems === 'object'
@@ -313,17 +325,45 @@ function readShoppingProjectionState(state: unknown): TShoppingListProjectionSta
         .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])),
     )
     : {}
+  const customItems = Array.isArray(candidate?.customItems)
+    ? candidate.customItems
+      .filter((item): item is { itemKey: string; label: string; category: string } => {
+        if (!item || typeof item !== 'object') return false
+        const candidateItem = item as Record<string, unknown>
+        return typeof candidateItem.itemKey === 'string'
+          && candidateItem.itemKey.trim().length > 0
+          && typeof candidateItem.label === 'string'
+          && candidateItem.label.trim().length > 0
+          && typeof candidateItem.category === 'string'
+          && candidateItem.category.trim().length > 0
+      })
+      .map((item) => ({
+        itemKey: item.itemKey.trim(),
+        label: item.label.trim(),
+        category: item.category.trim(),
+      }))
+    : []
 
   return {
     listStarted: candidate?.listStarted === true,
     checkedItems,
     pantryStock,
+    customItems,
   }
 }
 
 function toShoppingStatePayload(state: TShoppingListProjectionState): z.infer<typeof ShoppingStatePayloadSchema> | null {
-  if (!state.listStarted && Object.keys(state.checkedItems).length === 0 && Object.keys(state.pantryStock).length === 0) return null
-  return { checkedItems: checkedItemsMapToArray(state.checkedItems), pantryStock: state.pantryStock }
+  if (
+    !state.listStarted
+    && Object.keys(state.checkedItems).length === 0
+    && Object.keys(state.pantryStock).length === 0
+    && state.customItems.length === 0
+  ) return null
+  return {
+    checkedItems: checkedItemsMapToArray(state.checkedItems),
+    pantryStock: state.pantryStock,
+    customItems: state.customItems,
+  }
 }
 
 async function getShoppingListState(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
@@ -470,7 +510,14 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
       }
     }
 
-    const itemsByKey = new Map<string, { category: string; label: string; amount: string | null; unit: string | null; checked: boolean }>()
+    const itemsByKey = new Map<string, {
+      category: string
+      label: string
+      amount: string | null
+      unit: string | null
+      checked: boolean
+      isCustom: boolean
+    }>()
     for (const [itemKey, item] of accumulator) {
       itemsByKey.set(itemKey, {
         category: item.category,
@@ -478,13 +525,32 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
         amount: item.totalAmount !== null ? formatAggregatedAmount(item.totalAmount) : null,
         unit: item.unit,
         checked: shoppingState.checkedItems[itemKey] === true,
+        isCustom: false,
       })
     }
 
-    const groupsByCategory = new Map<string, Array<{ itemKey: string; label: string; amount: string | null; unit: string | null; checked: boolean }>>()
+    for (const item of shoppingState.customItems) {
+      itemsByKey.set(item.itemKey, {
+        category: item.category,
+        label: item.label,
+        amount: null,
+        unit: null,
+        checked: shoppingState.checkedItems[item.itemKey] === true,
+        isCustom: true,
+      })
+    }
+
+    const groupsByCategory = new Map<string, Array<{
+      itemKey: string
+      label: string
+      amount: string | null
+      unit: string | null
+      checked: boolean
+      isCustom: boolean
+    }>>()
     for (const [itemKey, item] of itemsByKey) {
       const group = groupsByCategory.get(item.category) ?? []
-      group.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked })
+      group.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked, isCustom: item.isCustom })
       groupsByCategory.set(item.category, group)
     }
 

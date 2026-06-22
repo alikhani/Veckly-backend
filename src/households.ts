@@ -80,6 +80,23 @@ const renameHouseholdRoute = createRoute({
   },
 })
 
+const deleteHouseholdRoute = createRoute({
+  method: 'delete',
+  path: '/households/{id}',
+  operationId: 'deleteHousehold',
+  summary: 'Delete a household (owner only)',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    204: { description: 'Household deleted' },
+    401: { description: 'Missing or invalid session' },
+    403: { description: 'Caller is not the household owner' },
+    404: { description: 'Household not found or caller is not a member' },
+  },
+})
+
 const bootstrapMyHousehold = createRoute({
   method: 'post',
   path: '/households/me/bootstrap',
@@ -203,6 +220,16 @@ export async function renameHousehold(db: Db, accessToken: string, householdId: 
       .where(eq(households.id, householdId))
       .returning({ id: households.id, name: households.name })
     return updated ?? null
+  })
+}
+
+export async function deleteHousehold(db: Db, accessToken: string, householdId: string) {
+  return withRls(db, accessToken, async (tx) => {
+    const result = await tx
+      .delete(households)
+      .where(eq(households.id, householdId))
+      .returning({ id: households.id })
+    return result.length > 0
   })
 }
 
@@ -462,6 +489,33 @@ export function buildHouseholdsRoutes(db: Db) {
     const result = await renameHousehold(db, accessToken, householdId, name)
     if (!result) return c.json({ error: 'Household not found.' } as never, 404)
     return c.json({ id: result.id, name: result.name }, 200)
+  })
+
+  app.openapi(deleteHouseholdRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { id: householdId } = c.req.valid('param')
+
+    const [membership] = await withRls(db, accessToken, (tx) =>
+      tx
+        .select({ role: householdMemberships.role })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.userId, user.id),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+        .limit(1),
+    )
+
+    if (!membership) return c.json({ error: 'Household not found.' } as never, 404)
+    if (membership.role !== 'owner') return c.json({ error: 'FORBIDDEN' } as never, 403)
+
+    const deleted = await deleteHousehold(db, accessToken, householdId)
+    if (!deleted) return c.json({ error: 'Household not found.' } as never, 404)
+    return c.body(null, 204)
   })
 
   app.openapi(listHouseholdMembersRoute, async (c) => {

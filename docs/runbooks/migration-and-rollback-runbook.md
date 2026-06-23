@@ -82,6 +82,12 @@ or via the Vercel dashboard: Deployments → select the last known-good deployme
 
 ---
 
+## Known issue — `__drizzle_migrations` tracker is desynced from production
+
+On 2026-06-24, applying migration 0024 via Option A (`npm run db:migrate`) failed immediately on migration **0011** (`policy "households_update_owner_only" ... already exists`) — ten migrations before the one actually being added. Drizzle's own tracking table still believes migrations from early in the history haven't run, even though they plainly have (the app depends on them today). This is the same root cause as the 0014–0019 incident — migrations applied historically via Option B never wrote a row into `__drizzle_migrations` — except this time the gap is further back and Option A can no longer be trusted to "skip already-applied migrations" at all.
+
+**Until this tracker is reconciled, use Option B (`mcp__supabase__apply_migration`) for every new migration**, applying only the new file's SQL directly rather than letting `drizzle-kit migrate` walk the full history. Reconciling the tracker itself (backfilling `__drizzle_migrations` with rows for every migration already known to be applied) is a separate piece of work, not done as part of this note — do not attempt it casually; getting the backfill wrong is worse than leaving the tracker stale.
+
 ## Known gap — no staging environment
 
 There is currently one Supabase project for Veckly-backend; there is no separate staging database to test a migration against production-shaped data before it lands on production. The `test:local` script covers schema-correctness against a fresh local Postgres, but not against production data shapes or volume. Until a staging project exists, treat every production migration as the first real test — follow the checklist above strictly, and prefer reversible (additive, nullable) migrations over destructive ones whenever the product requirement allows it.

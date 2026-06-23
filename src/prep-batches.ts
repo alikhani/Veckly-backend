@@ -29,6 +29,12 @@ const PrepBatchSchema = z.object({
 
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
 const BatchParamsSchema = z.object({ householdId: z.string().uuid(), batchId: z.string().uuid() })
+const AssignmentParamsSchema = z.object({
+  householdId: z.string().uuid(),
+  batchId: z.string().uuid(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+})
+const AssignmentQuerySchema = z.object({ mealType: z.enum(['lunch', 'dinner']) })
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('PrepBatchOkResponse')
 
 const CreatePrepBatchSchema = z.object({
@@ -40,8 +46,9 @@ const CreatePrepBatchSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     mealType: z.enum(['lunch', 'dinner']),
   })).min(1),
-}).refine((b) => Boolean(b.recipeId) !== Boolean(b.customRecipeId), {
-  message: 'Exactly one of recipeId or customRecipeId is required',
+}).refine((b) => !(b.recipeId && b.customRecipeId), {
+  // Both unset is valid — leftovers with no specific dish tracked.
+  message: 'recipeId and customRecipeId cannot both be set',
 }).openapi('CreatePrepBatch')
 
 const listRoute = createRoute({
@@ -88,6 +95,20 @@ const deleteRoute = createRoute({
     200: { content: { 'application/json': { schema: OkResponseSchema } }, description: 'Prep batch deleted' },
     401: { content: { 'application/json': { schema: z.object({ error: z.string() }) } }, description: 'Unauthenticated' },
     404: { content: { 'application/json': { schema: z.object({ error: z.string() }) } }, description: 'Prep batch not found or not a member' },
+  },
+})
+
+const removeAssignmentRoute = createRoute({
+  method: 'delete',
+  path: '/households/{householdId}/prep_batches/{batchId}/assignments/{date}',
+  operationId: 'removePrepBatchAssignment',
+  summary: 'Remove a single day from a prep batch (deletes the batch if no days remain)',
+  security: [{ bearerAuth: [] }],
+  request: { params: AssignmentParamsSchema, query: AssignmentQuerySchema },
+  responses: {
+    200: { content: { 'application/json': { schema: OkResponseSchema } }, description: 'Assignment removed' },
+    401: { content: { 'application/json': { schema: z.object({ error: z.string() }) } }, description: 'Unauthenticated' },
+    404: { content: { 'application/json': { schema: z.object({ error: z.string() }) } }, description: 'Assignment not found or not a member' },
   },
 })
 
@@ -201,11 +222,51 @@ async function deleteBatch(db: Db, accessToken: string, householdId: string, bat
   return deleted ?? null
 }
 
+async function removeAssignment(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  batchId: string,
+  date: string,
+  mealType: 'lunch' | 'dinner',
+) {
+  return withRls(db, accessToken, async (tx) => {
+    const [deleted] = await tx
+      .delete(householdPrepBatchAssignments)
+      .where(
+        and(
+          eq(householdPrepBatchAssignments.batchId, batchId),
+          eq(householdPrepBatchAssignments.date, date),
+          eq(householdPrepBatchAssignments.mealType, mealType),
+        ),
+      )
+      .returning({ id: householdPrepBatchAssignments.id })
+
+    if (!deleted) return null
+
+    const remaining = await tx
+      .select({ id: householdPrepBatchAssignments.id })
+      .from(householdPrepBatchAssignments)
+      .where(eq(householdPrepBatchAssignments.batchId, batchId))
+
+    // A batch with no covered days left has no UI surface to find it from —
+    // clean it up rather than leaving orphaned rows behind.
+    if (remaining.length === 0) {
+      await tx
+        .delete(householdPrepBatches)
+        .where(and(eq(householdPrepBatches.id, batchId), eq(householdPrepBatches.householdId, householdId)))
+    }
+
+    return deleted
+  })
+}
+
 export function buildPrepBatchesRoutes(db: Db) {
   const app = new OpenAPIHono<AppEnv>()
 
   app.use('/households/:householdId/prep_batches', requireAuth)
   app.use('/households/:householdId/prep_batches/:batchId', requireAuth)
+  app.use('/households/:householdId/prep_batches/:batchId/assignments/:date', requireAuth)
 
   app.openapi(listRoute, async (c) => {
     const user = c.get('user')
@@ -238,6 +299,18 @@ export function buildPrepBatchesRoutes(db: Db) {
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const deleted = await deleteBatch(db, accessToken, householdId, batchId)
     if (!deleted) return c.json({ error: 'NOT_FOUND' }, 404)
+    return c.json({ ok: true as const }, 200)
+  })
+
+  app.openapi(removeAssignmentRoute, async (c) => {
+    const user = c.get('user')
+    const accessToken = c.get('accessToken')
+    const { householdId, batchId, date } = c.req.valid('param')
+    const { mealType } = c.req.valid('query')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+    const removed = await removeAssignment(db, accessToken, householdId, batchId, date, mealType)
+    if (!removed) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true as const }, 200)
   })
 
@@ -289,6 +362,22 @@ export function buildInternalPrepBatchesRoutes(db: Db) {
     const batchId = c.req.param('batchId')
     const deleted = await deleteBatch(db, accessToken, householdId, batchId)
     if (!deleted) return c.json({ error: 'NOT_FOUND' }, 404)
+    return c.json({ ok: true as const }, 200)
+  })
+
+  app.delete('/internal/households/:householdId/prep_batches/:batchId/assignments/:date', async (c) => {
+    const accessToken = c.get('accessToken')
+    const householdId = c.req.param('householdId')
+    const batchId = c.req.param('batchId')
+    const date = c.req.param('date')
+    const mealType = c.req.query('mealType')
+
+    if (mealType !== 'lunch' && mealType !== 'dinner') {
+      return c.json({ error: 'INVALID_MEAL_TYPE' }, 400)
+    }
+
+    const removed = await removeAssignment(db, accessToken, householdId, batchId, date, mealType)
+    if (!removed) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true as const }, 200)
   })
 

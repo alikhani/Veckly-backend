@@ -100,6 +100,39 @@ describeWithDb('Prep batches + RLS', () => {
     expect((data.assignments as unknown[]).length).toBe(2)
   })
 
+  it('creates a recipe-less batch (leftovers with no specific dish) and returns 201', async () => {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-15', mealType: 'dinner' }],
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const data = await res.json() as Record<string, unknown>
+    expect(data.recipeId).toBeNull()
+    expect(data.customRecipeId).toBeNull()
+  })
+
+  it('rejects a batch with both recipeId and customRecipeId set', async () => {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipeId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-15', mealType: 'dinner' }],
+      }),
+    })
+
+    expect(res.status).toBe(400)
+  })
+
   it('lists batches whose cookDate falls within the requested date range', async () => {
     await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',
@@ -151,6 +184,85 @@ describeWithDb('Prep batches + RLS', () => {
     })
     expect(deleteRes.status).toBe(200)
     expect(await deleteRes.json()).toEqual({ ok: true })
+  })
+
+  it('removing one of several assignments leaves the batch with the rest intact', async () => {
+    const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 6,
+        assignments: [
+          { date: '2026-06-16', mealType: 'lunch' },
+          { date: '2026-06-17', mealType: 'dinner' },
+        ],
+      }),
+    })
+    const { id } = await createRes.json() as { id: string }
+
+    const removeRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches/${id}/assignments/2026-06-16?mealType=lunch`,
+      { method: 'DELETE', headers: authHeaders(userA) },
+    )
+    expect(removeRes.status).toBe(200)
+    expect(await removeRes.json()).toEqual({ ok: true })
+
+    const listRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches?from=2026-06-15&to=2026-06-21`,
+      { headers: authHeaders(userA) },
+    )
+    const data = await listRes.json() as { batches: Array<{ id: string; assignments: unknown[] }> }
+    expect(data.batches.length).toBe(1)
+    expect(data.batches[0]!.assignments.length).toBe(1)
+  })
+
+  it('removing the last assignment deletes the batch', async () => {
+    const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-16', mealType: 'lunch' }],
+      }),
+    })
+    const { id } = await createRes.json() as { id: string }
+
+    const removeRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches/${id}/assignments/2026-06-16?mealType=lunch`,
+      { method: 'DELETE', headers: authHeaders(userA) },
+    )
+    expect(removeRes.status).toBe(200)
+
+    const listRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches?from=2026-06-15&to=2026-06-21`,
+      { headers: authHeaders(userA) },
+    )
+    const data = await listRes.json() as { batches: unknown[] }
+    expect(data.batches.length).toBe(0)
+  })
+
+  it('non-member cannot remove an assignment from another household\'s batch', async () => {
+    const createRes = await app.request(`/internal/households/${householdBId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userB), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-16', mealType: 'lunch' }],
+      }),
+    })
+    const { id } = await createRes.json() as { id: string }
+
+    const removeRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches/${id}/assignments/2026-06-16?mealType=lunch`,
+      { method: 'DELETE', headers: authHeaders(userA) },
+    )
+    expect(removeRes.status).toBe(404)
   })
 
   it('returns 404 when deleting a batch from another household', async () => {

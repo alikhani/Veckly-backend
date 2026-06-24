@@ -42,6 +42,13 @@ export const householdMemberships = pgTable('household_memberships', {
   uniqueIndex('household_memberships_household_id_user_id_idx').on(table.householdId, table.userId),
 ])
 
+export const userProfiles = pgTable('user_profiles', {
+  userId: uuid('user_id').primaryKey(),
+  displayName: text('display_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const householdInvites = pgTable('household_invites', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),

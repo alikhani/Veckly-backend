@@ -13,6 +13,7 @@ import { buildInternalRecipeRecommendationRoutes, buildRecipeRecommendationRoute
 import { buildInternalMealFeedbackRoutes, buildMealFeedbackRoutes } from './meal-feedback.js'
 import { buildInternalSavedPlansRoutes, buildSavedPlansRoutes } from './saved-plans.js'
 import { buildInternalPrepBatchesRoutes, buildPrepBatchesRoutes } from './prep-batches.js'
+import { buildInternalUserProfileRoutes, buildUserProfileRoutes } from './user-profile.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -31,6 +32,7 @@ export function buildApp(db: Db) {
   app.route('/', buildInternalRecipeRecommendationRoutes())
   app.route('/', buildInternalSavedPlansRoutes(db))
   app.route('/', buildInternalPrepBatchesRoutes(db))
+  app.route('/', buildInternalUserProfileRoutes(db))
 
   // Public client-facing routes
   app.route('/', buildActiveWeekRoutes(db))
@@ -46,6 +48,7 @@ export function buildApp(db: Db) {
   app.route('/', buildMealFeedbackRoutes(db))
   app.route('/', buildSavedPlansRoutes(db))
   app.route('/', buildPrepBatchesRoutes(db))
+  app.route('/', buildUserProfileRoutes(db))
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',

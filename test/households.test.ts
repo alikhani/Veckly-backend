@@ -3,7 +3,8 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { bootstrapHousehold, createNamedHousehold, deleteHousehold, listHouseholdsForUser, renameHousehold } from '../src/households.js'
+import { bootstrapHousehold, createNamedHousehold, deleteHousehold, listHouseholdMembers, listHouseholdsForUser, renameHousehold } from '../src/households.js'
+import { upsertMyProfile } from '../src/user-profile.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -37,6 +38,7 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "user_profiles"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
   })
@@ -202,6 +204,14 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
 
     const orphans = await db.select().from(households).where(eq(households.name, 'My household'))
     expect(orphans).toHaveLength(0)
+  })
+
+  it('includes a member\'s display name once set, and null otherwise', async () => {
+    await upsertMyProfile(db, fakeAccessToken(userA), userA, 'Nima')
+
+    const members = await listHouseholdMembers(db, fakeAccessToken(userA), householdAId)
+    const owner = members.find((m) => m.userId === userA)
+    expect(owner?.displayName).toBe('Nima')
   })
 
   it('requires auth for public household member routes', async () => {

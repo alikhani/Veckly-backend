@@ -135,11 +135,18 @@
               "owner",
               "member"
             ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "userId",
-          "role"
+          "role",
+          "displayName"
         ]
       },
       "ListHouseholdMembersResponse": {
@@ -3429,6 +3436,38 @@
         "required": [
           "ok"
         ]
+      },
+      "UserProfile": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName"
+        ]
+      },
+      "UpsertUserProfile": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "displayName"
+        ]
       }
     },
     "parameters": {}
@@ -6079,6 +6118,73 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/users/me/profile": {
+      "get": {
+        "operationId": "getMyProfile",
+        "summary": "Read the caller's own display-name profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, or null when no display name has been saved yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/UserProfile"
+                    }
+                  },
+                  "required": [
+                    "profile"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      },
+      "put": {
+        "operationId": "upsertMyProfile",
+        "summary": "Create or update the caller's own display name",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertUserProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
           }
         }
       }

@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { households, householdMemberships } from './schema.js'
+import { households, householdMemberships, userProfiles } from './schema.js'
 import type { Db } from './db.js'
 
 function parseHouseholdName(raw: unknown): string | null {
@@ -45,6 +45,7 @@ const RenameHouseholdResponseSchema = z.object({
 const HouseholdMemberSchema = z.object({
   userId: z.string().uuid(),
   role: z.enum(['owner', 'member']),
+  displayName: z.string().nullable(),
 }).openapi('HouseholdMember')
 
 const ListHouseholdMembersResponseSchema = z.object({
@@ -252,8 +253,13 @@ export async function createNamedHousehold(db: Db, accessToken: string, userId: 
 export async function listHouseholdMembers(db: Db, accessToken: string, householdId: string) {
   return withRls(db, accessToken, (tx) =>
     tx
-      .select({ userId: householdMemberships.userId, role: householdMemberships.role })
+      .select({
+        userId: householdMemberships.userId,
+        role: householdMemberships.role,
+        displayName: userProfiles.displayName,
+      })
       .from(householdMemberships)
+      .leftJoin(userProfiles, eq(userProfiles.userId, householdMemberships.userId))
       .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active')))
       .orderBy(householdMemberships.joinedAt),
   )

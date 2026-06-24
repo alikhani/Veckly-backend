@@ -45,7 +45,8 @@ const RenameHouseholdResponseSchema = z.object({
 const HouseholdMemberSchema = z.object({
   userId: z.string().uuid(),
   role: z.enum(['owner', 'member']),
-  displayName: z.string().nullable(),
+  givenName: z.string().nullable(),
+  familyName: z.string().nullable(),
 }).openapi('HouseholdMember')
 
 const ListHouseholdMembersResponseSchema = z.object({
@@ -256,7 +257,8 @@ export async function listHouseholdMembers(db: Db, accessToken: string, househol
       .select({
         userId: householdMemberships.userId,
         role: householdMemberships.role,
-        displayName: userProfiles.displayName,
+        givenName: userProfiles.givenName,
+        familyName: userProfiles.familyName,
       })
       .from(householdMemberships)
       .leftJoin(userProfiles, eq(userProfiles.userId, householdMemberships.userId))

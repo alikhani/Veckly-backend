@@ -206,12 +206,13 @@ describeWithDb('Household bootstrap + write-path RLS', () => {
     expect(orphans).toHaveLength(0)
   })
 
-  it('includes a member\'s display name once set, and null otherwise', async () => {
-    await upsertMyProfile(db, fakeAccessToken(userA), userA, 'Nima')
+  it('includes a member\'s given/family name once set, and null otherwise', async () => {
+    await upsertMyProfile(db, fakeAccessToken(userA), userA, { givenName: 'Nima', familyName: 'Alikhani' })
 
     const members = await listHouseholdMembers(db, fakeAccessToken(userA), householdAId)
     const owner = members.find((m) => m.userId === userA)
-    expect(owner?.displayName).toBe('Nima')
+    expect(owner?.givenName).toBe('Nima')
+    expect(owner?.familyName).toBe('Alikhani')
   })
 
   it('requires auth for public household member routes', async () => {

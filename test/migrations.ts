@@ -27,10 +27,12 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
   const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
-    select to_regclass('public.user_profiles') as exists
+    select column_name as exists from information_schema.columns
+    where table_name = 'user_profiles' and column_name = 'given_name'
   `)
   if (latestMarker?.exists) return
 
+  const [userProfilesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.user_profiles') as exists`)
   const [peerVisibilityMarker] = await db.execute<{ exists: string | null }>(sql`select to_regprocedure('caller_is_active_member(uuid)') as exists`)
   const [prepBatchesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_prep_batches') as exists`)
   const [baseMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.week_plan_projections') as exists`)
@@ -40,6 +42,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
+  const alreadyHasUserProfilesMigration = Boolean(userProfilesMarker?.exists)
   const alreadyHasPeerVisibilityMigration = Boolean(peerVisibilityMarker?.exists)
   const alreadyHasPrepBatchesMigration = Boolean(prepBatchesMarker?.exists)
   const alreadyHasBaseMigrations = Boolean(baseMarker?.exists)
@@ -51,6 +54,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasUserProfilesMigration && file < '0026_') continue
     if (alreadyHasPeerVisibilityMigration && file < '0025_') continue
     if (alreadyHasPrepBatchesMigration && file < '0024_') continue
     if (alreadyHasSavedPlansMigration && file < '0022_') continue

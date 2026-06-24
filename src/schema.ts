@@ -44,7 +44,8 @@ export const householdMemberships = pgTable('household_memberships', {
 
 export const userProfiles = pgTable('user_profiles', {
   userId: uuid('user_id').primaryKey(),
-  displayName: text('display_name').notNull(),
+  givenName: text('given_name').notNull(),
+  familyName: text('family_name'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

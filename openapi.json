@@ -136,7 +136,13 @@
               "member"
             ]
           },
-          "displayName": {
+          "givenName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "familyName": {
             "type": [
               "string",
               "null"
@@ -146,7 +152,8 @@
         "required": [
           "userId",
           "role",
-          "displayName"
+          "givenName",
+          "familyName"
         ]
       },
       "ListHouseholdMembersResponse": {
@@ -3447,26 +3454,37 @@
             "type": "string",
             "format": "uuid"
           },
-          "displayName": {
+          "givenName": {
             "type": "string"
+          },
+          "familyName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "userId",
-          "displayName"
+          "givenName",
+          "familyName"
         ]
       },
       "UpsertUserProfile": {
         "type": "object",
         "properties": {
-          "displayName": {
+          "givenName": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 60
+          },
+          "familyName": {
+            "type": "string",
             "maxLength": 60
           }
         },
         "required": [
-          "displayName"
+          "givenName"
         ]
       }
     },
@@ -6125,7 +6143,7 @@
     "/users/me/profile": {
       "get": {
         "operationId": "getMyProfile",
-        "summary": "Read the caller's own display-name profile",
+        "summary": "Read the caller's own name profile",
         "security": [
           {
             "bearerAuth": []
@@ -6133,7 +6151,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The profile, or null when no display name has been saved yet",
+            "description": "The profile, or null when no name has been saved yet",
             "content": {
               "application/json": {
                 "schema": {
@@ -6157,7 +6175,7 @@
       },
       "put": {
         "operationId": "upsertMyProfile",
-        "summary": "Create or update the caller's own display name",
+        "summary": "Create or update the caller's own name",
         "security": [
           {
             "bearerAuth": []

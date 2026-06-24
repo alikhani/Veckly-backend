@@ -14,7 +14,7 @@ const describeWithDb = testDatabaseUrl ? describe : describe.skip
 
 const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations')
 
-describeWithDb('User profiles (display names) + RLS', () => {
+describeWithDb('User profiles (given/family name) + RLS', () => {
   const db = createDb(testDatabaseUrl!)
   const app = buildApp(db)
 
@@ -56,28 +56,36 @@ describeWithDb('User profiles (display names) + RLS', () => {
     }
   }
 
-  it('returns null before any display name has been saved', async () => {
+  it('returns null before any name has been saved', async () => {
     const profile = await getMyProfile(db, fakeAccessToken(userA), userA)
     expect(profile).toBeNull()
   })
 
-  it('upserts and round-trips a display name for the caller', async () => {
-    const saved = await upsertMyProfile(db, fakeAccessToken(userA), userA, 'Nima')
-    expect(saved).toEqual({ userId: userA, displayName: 'Nima' })
+  it('upserts and round-trips a given name with no family name', async () => {
+    const saved = await upsertMyProfile(db, fakeAccessToken(userA), userA, { givenName: 'Nima' })
+    expect(saved).toEqual({ userId: userA, givenName: 'Nima', familyName: null })
 
     const fetched = await getMyProfile(db, fakeAccessToken(userA), userA)
-    expect(fetched).toEqual({ userId: userA, displayName: 'Nima' })
+    expect(fetched).toEqual({ userId: userA, givenName: 'Nima', familyName: null })
   })
 
-  it('lets a household peer see the display name via shares_active_household', async () => {
-    await upsertMyProfile(db, fakeAccessToken(userA), userA, 'Nima')
+  it('upserts and round-trips both given and family name', async () => {
+    const saved = await upsertMyProfile(db, fakeAccessToken(userA), userA, { givenName: 'Nima', familyName: 'Alikhani' })
+    expect(saved).toEqual({ userId: userA, givenName: 'Nima', familyName: 'Alikhani' })
+
+    const fetched = await getMyProfile(db, fakeAccessToken(userA), userA)
+    expect(fetched).toEqual({ userId: userA, givenName: 'Nima', familyName: 'Alikhani' })
+  })
+
+  it('lets a household peer see the name via shares_active_household', async () => {
+    await upsertMyProfile(db, fakeAccessToken(userA), userA, { givenName: 'Nima', familyName: 'Alikhani' })
 
     const seenByPeer = await getMyProfile(db, fakeAccessToken(userB), userA)
-    expect(seenByPeer).toEqual({ userId: userA, displayName: 'Nima' })
+    expect(seenByPeer).toEqual({ userId: userA, givenName: 'Nima', familyName: 'Alikhani' })
   })
 
-  it('hides the display name from a user who shares no household', async () => {
-    await upsertMyProfile(db, fakeAccessToken(userA), userA, 'Nima')
+  it('hides the name from a user who shares no household', async () => {
+    await upsertMyProfile(db, fakeAccessToken(userA), userA, { givenName: 'Nima' })
 
     const seenByStranger = await getMyProfile(db, fakeAccessToken(stranger), userA)
     expect(seenByStranger).toBeNull()
@@ -87,13 +95,13 @@ describeWithDb('User profiles (display names) + RLS', () => {
     const putRes = await app.request('/internal/users/me/profile', {
       method: 'PUT',
       headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ displayName: 'Nima' }),
+      body: JSON.stringify({ givenName: 'Nima', familyName: 'Alikhani' }),
     })
     expect(putRes.status).toBe(200)
-    expect(await putRes.json()).toEqual({ userId: userA, displayName: 'Nima' })
+    expect(await putRes.json()).toEqual({ userId: userA, givenName: 'Nima', familyName: 'Alikhani' })
 
     const getRes = await app.request('/internal/users/me/profile', { headers: authHeaders(userA) })
     expect(getRes.status).toBe(200)
-    expect(await getRes.json()).toEqual({ userId: userA, displayName: 'Nima' })
+    expect(await getRes.json()).toEqual({ userId: userA, givenName: 'Nima', familyName: 'Alikhani' })
   })
 })

@@ -298,4 +298,38 @@ describeWithDb('Prep batches + RLS', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  describe('two members of the same household', () => {
+    const userC = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+
+    beforeEach(async () => {
+      await db.insert(householdMemberships).values([
+        { householdId: householdAId, userId: userC, role: 'member', status: 'active' },
+      ])
+    })
+
+    it('lets member B see a batch member A created in their shared household', async () => {
+      const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+        method: 'POST',
+        headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customRecipeId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+          cookDate: '2026-06-15',
+          totalPortions: 6,
+          assignments: [{ date: '2026-06-16', mealType: 'lunch' }],
+        }),
+      })
+      expect(createRes.status).toBe(201)
+
+      const listRes = await app.request(
+        `/internal/households/${householdAId}/prep_batches?from=2026-06-15&to=2026-06-21`,
+        { headers: authHeaders(userC) },
+      )
+      expect(listRes.status).toBe(200)
+      const data = await listRes.json() as { batches: Array<{ id: string; createdBy: string; assignments: unknown[] }> }
+      expect(data.batches.length).toBe(1)
+      expect(data.batches[0]!.createdBy).toBe(userA)
+      expect(data.batches[0]!.assignments.length).toBe(1)
+    })
+  })
 })

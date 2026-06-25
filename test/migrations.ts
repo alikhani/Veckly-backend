@@ -26,11 +26,13 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
-  const [latestMarker] = await db.execute<{ exists: string | null }>(sql`
-    select column_name as exists from information_schema.columns
-    where table_name = 'user_profiles' and column_name = 'given_name'
+  const [prepBatchesRlsHardeningMarker] = await db.execute<{ exists: string | null }>(sql`
+    select policyname as exists from pg_policies
+    where tablename = 'household_prep_batches'
+      and policyname = 'members can read their household prep batches'
+      and qual like '%caller_is_active_member%'
   `)
-  if (latestMarker?.exists) return
+  if (prepBatchesRlsHardeningMarker?.exists) return
 
   const [userProfilesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.user_profiles') as exists`)
   const [peerVisibilityMarker] = await db.execute<{ exists: string | null }>(sql`select to_regprocedure('caller_is_active_member(uuid)') as exists`)
@@ -42,6 +44,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
+  const alreadyHasPrepBatchesRlsHardeningMigration = Boolean(prepBatchesRlsHardeningMarker?.exists)
   const alreadyHasUserProfilesMigration = Boolean(userProfilesMarker?.exists)
   const alreadyHasPeerVisibilityMigration = Boolean(peerVisibilityMarker?.exists)
   const alreadyHasPrepBatchesMigration = Boolean(prepBatchesMarker?.exists)
@@ -54,6 +57,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasPrepBatchesRlsHardeningMigration && file < '0027_') continue
     if (alreadyHasUserProfilesMigration && file < '0026_') continue
     if (alreadyHasPeerVisibilityMigration && file < '0025_') continue
     if (alreadyHasPrepBatchesMigration && file < '0024_') continue

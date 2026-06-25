@@ -12,7 +12,9 @@ const SavedPlanSchema = z.object({
   state: z.string(),
 }).openapi('SavedPlan')
 
-const UpsertSavedPlanSchema = SavedPlanSchema.openapi('UpsertSavedPlan')
+const UpsertSavedPlanSchema = SavedPlanSchema.extend({
+  createdAt: z.string().datetime(),
+}).openapi('UpsertSavedPlan')
 const RenameSavedPlanSchema = z.object({ label: z.string().min(1) }).openapi('RenameSavedPlan')
 const SavedPlanParamsSchema = z.object({ id: z.string().uuid() })
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse')
@@ -62,10 +64,11 @@ export async function upsertSavedPlan(
           label: input.label,
           stateJson: input.state,
         },
+        where: eq(savedPlans.userId, userId),
       })
       .returning()
 
-    if (!row) throw new Error('Upsert did not return the persisted saved plan')
+    if (!row) return null
     return toSavedPlanResponse(row)
   })
 }
@@ -160,6 +163,7 @@ export function buildSavedPlansRoutes(db: Db) {
     const user = c.get('user')
     const body = c.req.valid('json')
     const plan = await upsertSavedPlan(db, accessToken, user.id, body)
+    if (!plan) return c.json({ error: 'CONFLICT' }, 409)
     return c.json(plan, 200)
   })
 

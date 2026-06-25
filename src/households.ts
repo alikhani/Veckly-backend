@@ -539,8 +539,27 @@ export function buildHouseholdsRoutes(db: Db) {
 
   app.openapi(updateHouseholdMemberRoleRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, userId } = c.req.valid('param')
     const { role } = c.req.valid('json')
+
+    const [membership] = await withRls(db, accessToken, (tx) =>
+      tx
+        .select({ role: householdMemberships.role })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.userId, user.id),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+        .limit(1),
+    )
+
+    if (!membership) return c.json({ error: 'Household not found.' } as never, 404)
+    if (membership.role !== 'owner') return c.json({ error: 'FORBIDDEN' } as never, 403)
+
     const result = await updateMemberRole(db, accessToken, householdId, userId, role)
     if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' } as never, 404)
     if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' } as never, 409)
@@ -549,7 +568,26 @@ export function buildHouseholdsRoutes(db: Db) {
 
   app.openapi(removeHouseholdMemberRoute, async (c) => {
     const accessToken = c.get('accessToken')
+    const user = c.get('user')
     const { householdId, userId } = c.req.valid('param')
+
+    const [membership] = await withRls(db, accessToken, (tx) =>
+      tx
+        .select({ role: householdMemberships.role })
+        .from(householdMemberships)
+        .where(
+          and(
+            eq(householdMemberships.householdId, householdId),
+            eq(householdMemberships.userId, user.id),
+            eq(householdMemberships.status, 'active'),
+          ),
+        )
+        .limit(1),
+    )
+
+    if (!membership) return c.json({ error: 'Household not found.' } as never, 404)
+    if (membership.role !== 'owner') return c.json({ error: 'FORBIDDEN' } as never, 403)
+
     const result = await removeMember(db, accessToken, householdId, userId)
     if (result.outcome === 'not_found') return c.json({ error: 'MEMBER_NOT_FOUND' } as never, 404)
     if (result.outcome === 'last_owner') return c.json({ error: 'LAST_OWNER' } as never, 409)

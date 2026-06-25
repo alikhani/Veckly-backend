@@ -346,6 +346,48 @@ describeWithDb('Prep batches + RLS', () => {
     expect(res.status).toBe(404)
   })
 
+  it('rejects an assignment date more than 14 days after cookDate', async () => {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-30', mealType: 'lunch' }],
+      }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects an assignment date before cookDate', async () => {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-14', mealType: 'lunch' }],
+      }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts an assignment date exactly 14 days after cookDate', async () => {
+    const res = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-29', mealType: 'lunch' }],
+      }),
+    })
+    expect(res.status).toBe(201)
+  })
+
   describe('two members of the same household', () => {
     const userC = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
 

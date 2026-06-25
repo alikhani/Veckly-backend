@@ -37,6 +37,22 @@ const AssignmentParamsSchema = z.object({
 const AssignmentQuerySchema = z.object({ mealType: z.enum(['lunch', 'dinner']) })
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('PrepBatchOkResponse')
 
+// Matches MealPlanner's ASSIGNMENT_WINDOW_DAYS (src/app/api/households/[id]/prep-batches/route.ts)
+// and the client's coverage-date generation (web usePrepBatchSheetForm.ts, iOS PrepBatchViews.swift):
+// a cook batch is meant to cover "the next couple of weeks," not an arbitrary future date.
+const ASSIGNMENT_WINDOW_DAYS = 14
+
+function areAssignmentDatesInWindow(assignments: Array<{ date: string }>, cookDate: string): boolean {
+  const cook = new Date(`${cookDate}T00:00:00Z`)
+  const maxDate = new Date(cook)
+  maxDate.setUTCDate(maxDate.getUTCDate() + ASSIGNMENT_WINDOW_DAYS)
+
+  return assignments.every((a) => {
+    const date = new Date(`${a.date}T00:00:00Z`)
+    return date >= cook && date <= maxDate
+  })
+}
+
 const CreatePrepBatchSchema = z.object({
   recipeId: z.string().uuid().optional(),
   customRecipeId: z.string().uuid().optional(),
@@ -49,6 +65,9 @@ const CreatePrepBatchSchema = z.object({
 }).refine((b) => !(b.recipeId && b.customRecipeId), {
   // Both unset is valid — leftovers with no specific dish tracked.
   message: 'recipeId and customRecipeId cannot both be set',
+}).refine((b) => areAssignmentDatesInWindow(b.assignments, b.cookDate), {
+  message: `assignment dates must fall within ${ASSIGNMENT_WINDOW_DAYS} days of cookDate`,
+  path: ['assignments'],
 }).openapi('CreatePrepBatch')
 
 const listRoute = createRoute({

@@ -357,15 +357,21 @@ export function buildInternalPrepBatchesRoutes(db: Db) {
   })
 
   app.delete('/internal/households/:householdId/prep_batches/:batchId', async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const householdId = c.req.param('householdId')
     const batchId = c.req.param('batchId')
+
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+
     const deleted = await deleteBatch(db, accessToken, householdId, batchId)
     if (!deleted) return c.json({ error: 'NOT_FOUND' }, 404)
     return c.json({ ok: true as const }, 200)
   })
 
   app.delete('/internal/households/:householdId/prep_batches/:batchId/assignments/:date', async (c) => {
+    const user = c.get('user')
     const accessToken = c.get('accessToken')
     const householdId = c.req.param('householdId')
     const batchId = c.req.param('batchId')
@@ -375,6 +381,9 @@ export function buildInternalPrepBatchesRoutes(db: Db) {
     if (mealType !== 'lunch' && mealType !== 'dinner') {
       return c.json({ error: 'INVALID_MEAL_TYPE' }, 400)
     }
+
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
     const removed = await removeAssignment(db, accessToken, householdId, batchId, date, mealType)
     if (!removed) return c.json({ error: 'NOT_FOUND' }, 404)

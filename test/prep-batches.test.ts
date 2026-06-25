@@ -186,6 +186,53 @@ describeWithDb('Prep batches + RLS', () => {
     expect(await deleteRes.json()).toEqual({ ok: true })
   })
 
+  it('returns 404 when a non-member tries to delete a batch in the correct household', async () => {
+    const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 4,
+        assignments: [{ date: '2026-06-16', mealType: 'lunch' }],
+      }),
+    })
+    const { id } = await createRes.json() as { id: string }
+
+    // userB is not a member of householdA at all — without assertMembership,
+    // deleteBatch's own householdId-scoped WHERE clause would still let this
+    // succeed, because the path's householdId IS correct; the missing check
+    // is "is the caller actually IN that household."
+    const deleteRes = await app.request(`/internal/households/${householdAId}/prep_batches/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(userB),
+    })
+    expect(deleteRes.status).toBe(404)
+  })
+
+  it('returns 404 when a non-member tries to remove an assignment in the correct household', async () => {
+    const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
+      method: 'POST',
+      headers: { ...authHeaders(userA), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customRecipeId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        cookDate: '2026-06-15',
+        totalPortions: 6,
+        assignments: [
+          { date: '2026-06-16', mealType: 'lunch' },
+          { date: '2026-06-17', mealType: 'dinner' },
+        ],
+      }),
+    })
+    const { id } = await createRes.json() as { id: string }
+
+    const removeRes = await app.request(
+      `/internal/households/${householdAId}/prep_batches/${id}/assignments/2026-06-16?mealType=lunch`,
+      { method: 'DELETE', headers: authHeaders(userB) },
+    )
+    expect(removeRes.status).toBe(404)
+  })
+
   it('removing one of several assignments leaves the batch with the rest intact', async () => {
     const createRes = await app.request(`/internal/households/${householdAId}/prep_batches`, {
       method: 'POST',

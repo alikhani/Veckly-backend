@@ -869,6 +869,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
     const { regenerate } = c.req.valid('json')
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const result = await doGenerateWeekPlan(db, accessToken, user.id, householdId, weekStartDate, regenerate)
     if ('error' in result && result.error === 'NOT_MEMBER') return c.json({ error: 'NOT_MEMBER' }, 404)
     if ('error' in result) return c.json(result, 422)
@@ -879,6 +880,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
@@ -911,6 +913,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const { householdId, weekStartDate } = c.req.valid('param')
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
@@ -937,6 +940,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getWeekPlanSummary(db, accessToken, householdId, weekStartDate)
@@ -952,7 +956,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId } = c.req.valid('param')
     const { from, to } = c.req.valid('query')
     const member = await assertMembership(db, accessToken, householdId, user.id)
-    if (!member) return c.json([] as never, 200)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
 
     if ((from && !isMonday(from)) || (to && !isMonday(to))) return c.json({ error: 'INVALID_WEEK_RANGE' } as never, 400)
 
@@ -1001,6 +1005,9 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
 
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
     const plan = await finalizeWeekHistoryPlan(db, accessToken, user.id, householdId, weekStartDate)
     if (!plan) return c.json({ error: 'WEEK_PLAN_NOT_FOUND' } as never, 404)

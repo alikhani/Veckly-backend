@@ -34,7 +34,7 @@ const RawRecipeSchema = z.object({
 
 const ImportBodySchema = z.object({ url: z.string() }).openapi('RecipeImportRequest')
 const TextImportBodySchema = z.object({
-  text: z.string(),
+  text: z.string().max(50_000),
   sourceUrl: z.string().optional(),
 }).openapi('RecipeTextImportRequest')
 const ImportSourceSchema = z.object({
@@ -557,7 +557,7 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
 
-  const client = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 1 })
+  const client = new Anthropic({ apiKey, timeout: 20_000, maxRetries: 0 })
   const message = await client.messages.create({
     model: process.env.ANTHROPIC_MODEL ?? 'claude-haiku-4-5-20251001',
     max_tokens: 1800,

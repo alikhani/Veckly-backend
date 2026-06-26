@@ -22,6 +22,10 @@ const SetActiveWeekSchema = z.object({
   timezone: z.string().min(1),
 }).openapi('SetHouseholdActiveWeek')
 
+function isMonday(yyyyMmDd: string) {
+  return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
+}
+
 function toActiveWeekResponse(row: typeof householdActiveWeeks.$inferSelect) {
   return {
     householdId: row.householdId,
@@ -145,7 +149,7 @@ export function buildActiveWeekRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const member = await assertMembership(db, accessToken, householdId, user.id)
-    if (!member) return c.json({ activeWeek: null }, 200)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
     const activeWeek = await getActiveWeek(db, accessToken, householdId)
     return c.json({ activeWeek }, 200)
   })
@@ -155,6 +159,7 @@ export function buildActiveWeekRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
+    if (!isMonday(body.weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
     const activeWeek = await setActiveWeek(db, accessToken, user.id, householdId, body)

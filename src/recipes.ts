@@ -213,7 +213,7 @@ export async function getRecipe(
           eq(mealFeedback.mealId, sql<string>`${recipes.id}::text`),
         ),
       )
-      .where(and(eq(recipes.id, recipeId), or(eq(recipes.householdId, householdId), isNull(recipes.householdId))))
+      .where(and(eq(recipes.id, recipeId), eq(recipes.isArchived, false), or(eq(recipes.householdId, householdId), isNull(recipes.householdId))))
     return row ? toRecipeResponse(row.recipe, row.userVote ?? null) : null
   })
 }

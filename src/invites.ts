@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, gt } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls, withRlsAndToken } from './rls.js'
 import { households, householdInvites, householdMemberships } from './schema.js'
@@ -176,7 +176,7 @@ export async function listPendingInvites(db: Db, accessToken: string, householdI
     tx
       .select()
       .from(householdInvites)
-      .where(and(eq(householdInvites.householdId, householdId), eq(householdInvites.status, 'pending')))
+      .where(and(eq(householdInvites.householdId, householdId), eq(householdInvites.status, 'pending'), gt(householdInvites.expiresAt, new Date())))
       .orderBy(householdInvites.createdAt),
   )
 }
@@ -348,7 +348,7 @@ export function buildInternalInvitesRoutes(db: Db) {
       case 'not_found':
         return c.json({ error: 'INVITE_NOT_FOUND' }, 404)
       case 'expired':
-        return c.json({ error: 'INVITE_EXPIRED' }, 410)
+        return c.json({ error: 'INVITE_EXPIRED' }, 409)
       case 'not_acceptable':
         return c.json({ error: 'ACCEPT_INVITE_FAILED' }, 409)
     }
@@ -419,7 +419,7 @@ export function buildInvitesRoutes(db: Db) {
       case 'not_found':
         return c.json({ error: 'Invite not found' }, 404)
       case 'expired':
-        return c.json({ error: 'Invite has expired' }, 409)
+        return c.json({ error: 'INVITE_EXPIRED' }, 409)
       case 'not_acceptable':
         return c.json({ error: `Invite is ${result.status}, not pending` }, 409)
     }

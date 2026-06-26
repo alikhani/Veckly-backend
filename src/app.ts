@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
+import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { buildActiveWeekRoutes } from './active-week.js'
 import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './households.js'
@@ -19,6 +20,11 @@ import type { Db } from './db.js'
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
 
+  app.use(cors({
+    origin: process.env.ALLOWED_ORIGIN ?? 'http://localhost:3000',
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+  }))
   app.use(secureHeaders())
 
   // Internal server-to-server routes (MealPlanner strangle path)

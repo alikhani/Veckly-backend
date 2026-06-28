@@ -431,7 +431,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       await db.insert(shoppingListProjections).values({
         householdId: householdAId,
         weekStartDate,
-        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:400:g': true }, pantryStock: {}, customItems: [] },
+        state: { listStarted: true, checkedItems: { 'pantry:spaghetti:g': true }, pantryStock: {}, customItems: [] },
       })
 
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
@@ -439,11 +439,11 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(summary?.groups).toEqual([
         {
           category: 'Pantry',
-          items: [{ itemKey: 'pantry:spaghetti:400:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true, isCustom: false }],
+          items: [{ itemKey: 'pantry:spaghetti:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true, isCustom: false }],
         },
         {
           category: 'Produce',
-          items: [{ itemKey: 'produce:tomatoes:2:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false, isCustom: false }],
+          items: [{ itemKey: 'produce:tomatoes:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false, isCustom: false }],
         },
       ])
     })

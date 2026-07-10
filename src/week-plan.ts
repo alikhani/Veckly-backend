@@ -360,16 +360,18 @@ function foldEventIntoProjection(
         skippedDays: toggleSortedDay(toggleSortedDay(state.skippedDays, payload.toDayOfWeek, false), payload.fromDayOfWeek, false),
       }
     }
-    case 'day_skipped': {
-      const meals = { ...state.meals }
-      delete meals[payload.dayOfWeek]
+    case 'day_skipped':
+      // Skip is a state layered on top of an existing assignment, not a
+      // deletion — a skipped day keeps its `meals` entry (recipe, reason,
+      // confidence) so `getWeekPlanSummary` can still return the recipe
+      // alongside `state: 'skipped'`, and un-skipping restores it exactly.
+      // (Matches the iOS client's local optimistic model — see
+      // `WeekDayRowViewModel.withSkipped` — which already assumed this.)
       return {
         ...state,
-        meals,
         lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false),
         skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, true),
       }
-    }
     case 'day_unskipped':
       return { ...state, skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false) }
     case 'servings_changed': {

@@ -42,6 +42,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-10 — Fix: skipping a day deleted its assigned recipe instead of preserving it
+
+Found while building Plan D1/D2 (surfacing `reason`/`confidence` in the week view) — see `PLAN-veckoritual-familjeminne-2026-07.md`. The `day_skipped` fold case in `foldEventIntoProjection` (`src/week-plan.ts`) deleted `state.meals[dayOfWeek]` entirely, contradicting the "skip is a state layered on top of the assignment" model the iOS client already assumed (`WeekDayRowViewModel.withSkipped` — added 2026-07-10 as Plan 0.4 — keeps `recipe`/`mealTitle` locally when skipping, expecting the server to do the same). In practice: skip a planned day, then reload from the server (e.g. `scenePhase == .active`) — the day would come back as `state: 'empty'`, silently losing the recipe, reason, and confidence instead of showing them dimmed alongside a "Skipped" badge.
+
+Fixed: `day_skipped` now only moves the day into `skippedDays` and clears any lock — it no longer touches `meals`. `getWeekPlanSummary` already read `recipeIds`/`recipe` from every day's `meals` entry regardless of skip status, so once the entry survives, a skipped day's response now correctly includes its recipe (and `reason`/`confidence`) alongside `state: 'skipped'`. Un-skipping (`day_unskipped`) needed no change — it never touched `meals` in the first place, so it now correctly "restores" a recipe that was never actually gone.
+
+One existing unit test hard-coded the old (buggy) deletion behavior and was updated; one new integration test added confirming a skipped day's recipe survives in the summary response.
+
 ### 2026-07-10 — Reason and confidence per meal assignment (Plan A2)
 
 Part of the same initiative — see `PLAN-veckoritual-familjeminne-2026-07.md` (Plan A2). This is what makes Plan D's "why this meal" UI possible: `doGenerateWeekPlan` now attaches a `reason` and `confidence` to every algorithmically-assigned meal, surfaced per day in `GET /households/{id}/week-plans/{weekStartDate}/summary`.

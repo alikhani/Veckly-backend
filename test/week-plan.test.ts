@@ -367,14 +367,21 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(afterMove.lockedDays).toEqual(['tuesday'])
 
       const afterSkip = foldEventIntoProjection(afterMove, { eventType: 'day_skipped', dayOfWeek: 'tuesday' })
-      expect(afterSkip.meals.tuesday).toBeUndefined()
+      // Skip layers on top of the assignment — it does not delete it (the
+      // day keeps its recipe so `getWeekPlanSummary` can still show it, and
+      // un-skipping restores it exactly, without a refetch).
+      expect(afterSkip.meals.tuesday).toEqual({ recipeRef: '11111111-1111-1111-1111-111111111111', servings: 5 })
       expect(afterSkip.lockedDays).toEqual([])
       expect(afterSkip.skippedDays).toEqual(['tuesday'])
 
       const afterUnskip = foldEventIntoProjection(afterSkip, { eventType: 'day_unskipped', dayOfWeek: 'tuesday' })
+      expect(afterUnskip.meals.tuesday).toEqual({ recipeRef: '11111111-1111-1111-1111-111111111111', servings: 5 })
       expect(afterUnskip.skippedDays).toEqual([])
 
-      const cleared = foldEventIntoProjection(afterUnskip, { eventType: 'week_plan_cleared' })
+      const afterUnassign = foldEventIntoProjection(afterUnskip, { eventType: 'meal_unassigned', dayOfWeek: 'tuesday' })
+      expect(afterUnassign.meals.tuesday).toBeUndefined()
+
+      const cleared = foldEventIntoProjection(afterUnassign, { eventType: 'week_plan_cleared' })
       expect(cleared).toEqual(emptyProjectionState())
     })
 
@@ -582,6 +589,22 @@ describeWithDb('Week-plan event log + projection', () => {
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
 
       expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
+    })
+
+    it('preserves the assigned recipe on a skipped day that already had one', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { wednesday: { recipeRef: recipe.id } },
+        lockedDays: [],
+        skippedDays: ['wednesday'],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: { id: recipe.id, title: 'Monday Pasta' } })
     })
 
     it('exposes locked days on the iOS summary read model', async () => {

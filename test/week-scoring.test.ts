@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   createWeekContext,
+  deriveAssignmentReason,
   detectFatiguedMeals,
+  evaluateAssignmentConfidence,
   extractRecentMealIds,
   rankCandidates,
   scoreFamilyRecipe,
@@ -12,6 +14,7 @@ import {
   scoreWeekConstraints,
   updateWeekContext,
   type TFeedbackState,
+  type TReasonContext,
   type TScoringContext,
   type TScoringRecipe,
 } from '../src/week-scoring.js'
@@ -264,5 +267,87 @@ describe('detectFatiguedMeals', () => {
     ]
 
     expect(detectFatiguedMeals(records)).toEqual([])
+  })
+})
+
+function baseReasonContext(overrides: Partial<TReasonContext> = {}): TReasonContext {
+  return { householdId: 'household-1', feedback: {}, allRecipes: [], ...overrides }
+}
+
+describe('deriveAssignmentReason', () => {
+  it('picks liked-before first, even when the recipe is also the household\'s own', () => {
+    const pasta = recipe({ id: 'pasta', householdId: 'household-1' })
+    const ctx = baseReasonContext({ feedback: { pasta: { vote: 'up' } } })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBe('liked-before')
+  })
+
+  it('picks family-recipe for the household\'s own recipe with no feedback', () => {
+    const pasta = recipe({ id: 'pasta', householdId: 'household-1' })
+    const ctx = baseReasonContext()
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBe('family-recipe')
+  })
+
+  it('picks back-after-break for a fatigued meal that still won its slot', () => {
+    const pasta = recipe({ id: 'pasta', householdId: null })
+    const ctx = baseReasonContext({ fatiguedMealIds: ['pasta'] })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBe('back-after-break')
+  })
+
+  it('picks based-on-feedback for positive tag spillover with no direct vote', () => {
+    const pasta = recipe({ id: 'pasta', householdId: null, tags: ['quick'] })
+    const liked = recipe({ id: 'liked', tags: ['quick'] })
+    const ctx = baseReasonContext({ feedback: { liked: { vote: 'up' } }, allRecipes: [pasta, liked] })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBe('based-on-feedback')
+  })
+
+  it('picks new-for-variety for a recipe absent from recent history', () => {
+    const pasta = recipe({ id: 'pasta', householdId: null })
+    const ctx = baseReasonContext({ everCookedRecipeIds: new Set(['other']) })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBe('new-for-variety')
+  })
+
+  it('returns undefined when no signal applies', () => {
+    const pasta = recipe({ id: 'pasta', householdId: null })
+    const ctx = baseReasonContext({ everCookedRecipeIds: new Set(['pasta']) })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBeUndefined()
+  })
+})
+
+describe('evaluateAssignmentConfidence', () => {
+  it('flags low confidence for a hearty meal placed right after another hearty meal', () => {
+    const ctx = createWeekContext()
+    ctx.placedWeights.push('hearty')
+    const pasta = recipe({ id: 'pasta', mealWeight: 'hearty' })
+
+    expect(evaluateAssignmentConfidence(pasta, ctx)).toBe('low')
+  })
+
+  it('flags low confidence for a 3rd repeat of the same cuisine', () => {
+    const ctx = createWeekContext()
+    ctx.placedCuisines.italian = 2
+    const pasta = recipe({ id: 'pasta', cuisine: 'italian' })
+
+    expect(evaluateAssignmentConfidence(pasta, ctx)).toBe('low')
+  })
+
+  it('flags low confidence for a 3rd repeat of the same protein source', () => {
+    const ctx = createWeekContext()
+    ctx.placedProteins.chicken = 2
+    const pasta = recipe({ id: 'pasta', proteinSource: 'chicken' })
+
+    expect(evaluateAssignmentConfidence(pasta, ctx)).toBe('low')
+  })
+
+  it('is ok when nothing about the pick is a compromise', () => {
+    const ctx = createWeekContext()
+    const pasta = recipe({ id: 'pasta', cuisine: 'italian', proteinSource: 'chicken', mealWeight: 'light' })
+
+    expect(evaluateAssignmentConfidence(pasta, ctx)).toBe('ok')
   })
 })

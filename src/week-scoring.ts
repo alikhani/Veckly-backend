@@ -204,6 +204,47 @@ function processWeekRecord(state: TMealStreakState, present: boolean): TMealStre
   return { streak: 0, streakBroke: state.streakBroke, weeksSinceBreak: state.streakBroke ? state.weeksSinceBreak + 1 : state.weeksSinceBreak }
 }
 
+export type TAssignmentReason = 'family-recipe' | 'liked-before' | 'back-after-break' | 'based-on-feedback' | 'new-for-variety'
+export type TAssignmentConfidence = 'ok' | 'low'
+
+export type TReasonContext = {
+  householdId: string
+  feedback: TFeedbackState
+  allRecipes: TScoringRecipe[]
+  fatiguedMealIds?: string[]
+  everCookedRecipeIds?: Set<string>
+}
+
+/** Picks the single most salient explanation for why this recipe won its
+ * slot — checked in order of how specific/informative the signal is to the
+ * user, not how strongly it scored. An explicit vote outranks mere
+ * ownership: "you liked this" is more meaningful than "it's your own
+ * recipe" when both are true (the latter is redundant — they already know
+ * it's theirs). Day-level signals (busy/lateEvening/occasion — see web's
+ * `deriveReasonTags`) aren't ported: the backend has no day-selection data
+ * yet (see A4 in the plan doc), so a pick with none of these signals simply
+ * has no `reason`. */
+export function deriveAssignmentReason(recipe: TScoringRecipe, ctx: TReasonContext): TAssignmentReason | undefined {
+  if (ctx.feedback[recipe.id]?.vote === 'up') return 'liked-before'
+  if (recipe.householdId === ctx.householdId) return 'family-recipe'
+  if (ctx.fatiguedMealIds?.includes(recipe.id)) return 'back-after-break'
+  if (scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes) > 0) return 'based-on-feedback'
+  if (ctx.everCookedRecipeIds && !ctx.everCookedRecipeIds.has(recipe.id)) return 'new-for-variety'
+  return undefined
+}
+
+/** Ported from `evaluateConfidence` in week-constraint-scoring.ts, minus the
+ * `hearty-on-busy-day` branch (needs day-selection data the backend doesn't
+ * have yet). Must be called with the week context as it stood *before* this
+ * recipe was placed — same call order as the web engine. */
+export function evaluateAssignmentConfidence(recipe: TScoringRecipe, weekCtx: TWeekContext): TAssignmentConfidence {
+  const lastWeight = weekCtx.placedWeights[weekCtx.placedWeights.length - 1]
+  if (recipe.mealWeight === 'hearty' && lastWeight === 'hearty') return 'low'
+  if (recipe.cuisine && (weekCtx.placedCuisines[recipe.cuisine] ?? 0) >= 2) return 'low'
+  if (recipe.proteinSource && (weekCtx.placedProteins[recipe.proteinSource] ?? 0) >= 2) return 'low'
+  return 'ok'
+}
+
 /** Ported verbatim from week-history-analysis.ts. Returns meal IDs that
  * appeared ≥3 consecutive weeks and were then skipped — penalized for 2
  * weeks after the skip. */

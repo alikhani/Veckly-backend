@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
+import { appendStreamEvent } from '../src/event-stream.js'
 import { createRecipe } from '../src/recipes.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
@@ -554,6 +555,8 @@ describeWithDb('Week-plan event log + projection', () => {
         date: '2026-06-08',
         state: 'planned',
         isLocked: false,
+        reason: null,
+        confidence: null,
         recipe: {
           id: recipe.id,
           title: 'Monday Pasta',
@@ -735,6 +738,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Liked Pasta')
+      expect(summary?.days[0]?.reason).toBe('liked-before')
     })
 
     it('avoids repeating last week\'s meal when an untouched alternative exists', async () => {
@@ -771,6 +775,27 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Household Recipe')
+      expect(summary?.days[0]?.reason).toBe('family-recipe')
+    })
+
+    it('leaves reason and confidence null for a manually assigned meal', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Manual Pick' })
+      await appendStreamEvent(
+        db, fakeAccessToken(userA),
+        { events: weekPlanEvents, projections: weekPlanProjections },
+        { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+        {
+          householdId: householdAId,
+          weekStartDate,
+          causedBy: { source: 'user', userId: userA },
+          payload: { eventType: 'meal_assigned', dayOfWeek: 'monday', recipeRef: recipe.id },
+        },
+      )
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Manual Pick')
+      expect(summary?.days[0]?.reason).toBeNull()
+      expect(summary?.days[0]?.confidence).toBeNull()
     })
   })
 })

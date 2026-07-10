@@ -42,6 +42,16 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-10 — Reason and confidence per meal assignment (Plan A2)
+
+Part of the same initiative — see `PLAN-veckoritual-familjeminne-2026-07.md` (Plan A2). This is what makes Plan D's "why this meal" UI possible: `doGenerateWeekPlan` now attaches a `reason` and `confidence` to every algorithmically-assigned meal, surfaced per day in `GET /households/{id}/week-plans/{weekStartDate}/summary`.
+
+- Two new pure functions in `src/week-scoring.ts`: `deriveAssignmentReason` (one of `liked-before`, `family-recipe`, `back-after-break`, `based-on-feedback`, `new-for-variety`, or `undefined` — checked in order of how specific/informative the signal is to the user, not how strongly it scored; an explicit vote outranks mere household-recipe ownership when both are true) and `evaluateAssignmentConfidence` (`'ok' | 'low'`, ported from the web engine's `evaluateConfidence` minus the day-selection-dependent `hearty-on-busy-day` branch — no day-level signals exist in the backend yet, see A4). Both are evaluated against the running `TWeekContext`/candidate pool *before* the pick updates that context, matching the web engine's call order.
+- Reduced from the web engine's `deriveReasonTags`/`evaluateConfidence` on purpose: the web versions depend on per-day planning selections (`occasion`, `effortLevel`, `lateEvening`, `cookingTolerance`) that this backend has no UI or data model for yet. `quick-weekday` from the plan doc's original reason enum is therefore never emitted in this pass — deferred alongside A4.
+- `meal_assigned` event payload gained optional `reason`/`confidence`; the projection fold now sets both unconditionally from the event (not merged with the prior assignment) so a manual re-pick correctly clears a stale reason left over from an earlier generated pick. `GET .../summary` exposes them as nullable fields per day (`null` for empty/skipped days and manual assignments).
+- OpenAPI regenerated and committed in both repos; iOS Swift client regenerated (`Components.Schemas.WeekPlanSummaryDay.reason`/`.confidence`, both optional enums) — additive only, no other contract drift. No consuming iOS UI code yet; that's Plan D1/D2.
+- 9 new unit tests in `test/week-scoring.test.ts`, 2 new integration assertions + 1 new test in `test/week-plan.test.ts` (manual assignment leaves both fields `null`).
+
 ### 2026-07-10 — Week generation scoring engine v2.0 (feedback, recency, fatigue, variety)
 
 Part of the same initiative as the fixes below — see `PLAN-veckoritual-familjeminne-2026-07.md` (Plan A). `doGenerateWeekPlan` previously picked meals via `sort(() => Math.random() - 0.5)` — pure chance, so a user's thumbs up/down had zero effect on what got generated. Replaced with a scoring engine ported from `MealPlanner`'s proven web planner (`src/lib/planner/meal-scoring.ts`, `week-constraint-scoring.ts`, `week-history-analysis.ts`), same formulas, adapted to this backend's recipe-row/feedback-row shapes:

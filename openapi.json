@@ -818,6 +818,23 @@
                   "recipeRef": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "family-recipe",
+                      "liked-before",
+                      "back-after-break",
+                      "based-on-feedback",
+                      "new-for-variety"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "low"
+                    ]
                   }
                 },
                 "required": [
@@ -1155,6 +1172,29 @@
           },
           "recipe": {
             "$ref": "#/components/schemas/WeekPlanSummaryRecipe"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "family-recipe",
+              "liked-before",
+              "back-after-break",
+              "based-on-feedback",
+              "new-for-variety"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "ok",
+              "low"
+            ]
           }
         },
         "required": [
@@ -1162,7 +1202,9 @@
           "date",
           "state",
           "isLocked",
-          "recipe"
+          "recipe",
+          "reason",
+          "confidence"
         ]
       },
       "WeekPlanSummary": {

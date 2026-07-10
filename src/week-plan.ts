@@ -8,7 +8,9 @@ import { householdProfiles, householdWeekPlans, households, mealFeedback, recipe
 import type { Db } from './db.js'
 import {
   createWeekContext,
+  deriveAssignmentReason,
   detectFatiguedMeals,
+  evaluateAssignmentConfidence,
   extractRecentMealIds,
   rankCandidates,
   updateWeekContext,
@@ -86,6 +88,12 @@ const PlanningRequestUpdatedPayloadSchema = z.object({
   request: PlanningRequestSchema,
 })
 
+// Populated only for algorithm-assigned meals (see `doGenerateWeekPlan`) —
+// a manual pick via the meal picker has no algorithmic "why", so both are
+// simply omitted for `source: 'user'` events.
+const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety'])
+const AssignmentConfidenceSchema = z.enum(['ok', 'low'])
+
 // `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
 // as a UUID; the FK relationship is intentionally not enforced at the database
 // level (no FK constraint on a JSONB payload column) — the application is the
@@ -94,6 +102,8 @@ const MealAssignedPayloadSchema = z.object({
   eventType: z.literal('meal_assigned'),
   dayOfWeek,
   recipeRef: z.string().uuid(),
+  reason: AssignmentReasonSchema.optional(),
+  confidence: AssignmentConfidenceSchema.optional(),
 })
 
 const MealUnassignedPayloadSchema = z.object({
@@ -199,6 +209,8 @@ const WeekPlanSummaryDaySchema = z.object({
   state: z.enum(['empty', 'planned', 'skipped']),
   isLocked: z.boolean(),
   recipe: WeekPlanSummaryRecipeSchema.nullable(),
+  reason: AssignmentReasonSchema.nullable(),
+  confidence: AssignmentConfidenceSchema.nullable(),
 }).openapi('WeekPlanSummaryDay')
 
 const WeekPlanSummarySchema = z.object({
@@ -277,7 +289,12 @@ const StaleWeekHistoryPlanResponseSchema = z.object({
 type TWeekPlanProjectionState = {
   weekStarted: boolean
   request: z.infer<typeof PlanningRequestSchema> | null
-  meals: Partial<Record<z.infer<typeof dayOfWeek>, { recipeRef: string; servings?: number }>>
+  meals: Partial<Record<z.infer<typeof dayOfWeek>, {
+    recipeRef: string
+    servings?: number
+    reason?: z.infer<typeof AssignmentReasonSchema>
+    confidence?: z.infer<typeof AssignmentConfidenceSchema>
+  }>>
   lockedDays: z.infer<typeof dayOfWeek>[]
   skippedDays: z.infer<typeof dayOfWeek>[]
 }
@@ -305,9 +322,21 @@ function foldEventIntoProjection(
     case 'planning_request_updated':
       return { ...state, request: payload.request }
     case 'meal_assigned':
+      // `reason`/`confidence` are set from this event's payload, not merged
+      // with the previous assignment's — a manual re-pick (no algorithmic
+      // reason) must clear a stale reason left over from a prior generated
+      // pick, not inherit it.
       return {
         ...state,
-        meals: { ...state.meals, [payload.dayOfWeek]: { ...state.meals[payload.dayOfWeek], recipeRef: payload.recipeRef } },
+        meals: {
+          ...state.meals,
+          [payload.dayOfWeek]: {
+            servings: state.meals[payload.dayOfWeek]?.servings,
+            recipeRef: payload.recipeRef,
+            reason: payload.reason,
+            confidence: payload.confidence,
+          },
+        },
         skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false),
       }
     case 'meal_unassigned': {
@@ -758,6 +787,8 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           date: addDays(weekStartDate, index),
           state,
           isLocked: projectionState.lockedDays.includes(dayOfWeek),
+          reason: meal?.reason ?? null,
+          confidence: meal?.confidence ?? null,
           recipe: recipe ? {
             id: recipe.id,
             title: recipe.title,
@@ -874,6 +905,7 @@ export async function doGenerateWeekPlan(
   }))
   const recentMealIds = extractRecentMealIds(weekHistoryRecords, weekStartDate)
   const fatiguedMealIds = detectFatiguedMeals(weekHistoryRecords)
+  const everCookedRecipeIds = new Set(weekHistoryRecords.flatMap((record) => record.mealIds))
 
   const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
   const weekCtx = createWeekContext()
@@ -903,13 +935,18 @@ export async function doGenerateWeekPlan(
     const next = ranked[0]
     if (!next) continue
 
+    // Evaluated against `weekCtx` as it stood *before* this pick — same
+    // order as the web engine (evaluateConfidence, then updateWeekContext).
+    const reason = deriveAssignmentReason(next, { householdId, feedback, allRecipes: candidates, fatiguedMealIds, everCookedRecipeIds })
+    const confidence = evaluateAssignmentConfidence(next, weekCtx)
+
     alreadyUsed.add(next.id)
     updateWeekContext(weekCtx, next)
     await appendStreamEvent(
       db, accessToken,
       { events: weekPlanEvents, projections: weekPlanProjections },
       { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy, payload: { eventType: 'meal_assigned', dayOfWeek: day, recipeRef: next.id } },
+      { householdId, weekStartDate, causedBy, payload: { eventType: 'meal_assigned', dayOfWeek: day, recipeRef: next.id, reason, confidence } },
     )
   }
 

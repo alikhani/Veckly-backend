@@ -3,8 +3,9 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
-import { householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
+  doGenerateWeekPlan,
   finalizeWeekHistoryPlan,
   foldEventIntoProjection,
   emptyProjectionState,
@@ -39,6 +40,7 @@ describeWithDb('Week-plan event log + projection', () => {
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
+    await db.execute(sql`delete from "household_profiles"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
 
@@ -58,6 +60,7 @@ describeWithDb('Week-plan event log + projection', () => {
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
     await db.execute(sql`delete from "week_plan_projections"`)
+    await db.execute(sql`delete from "household_profiles"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
   })
@@ -597,6 +600,114 @@ describeWithDb('Week-plan event log + projection', () => {
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
 
       expect(summary).toBeNull()
+    })
+  })
+
+  describe('(g) generate week plan', () => {
+    const baseRecipe = {
+      description: 'Fast family pasta',
+      servings: 4,
+      ingredients: [{ item: 'spaghetti', amount: '400', unit: 'g', category: 'Pantry' }],
+      steps: [{ text: 'Cook pasta' }],
+      tags: ['weekday'],
+      prepTimeMinutes: 10,
+      cookTimeMinutes: 15,
+      source: 'user_created' as const,
+      isPublic: false,
+    }
+
+    async function insertProfile(selectedDays: Array<{ day: string }>, avoidIngredients: string[] = []) {
+      await db.insert(householdProfiles).values({
+        householdId: householdAId,
+        adults: 2,
+        children: 0,
+        priorities: [],
+        avoidIngredients,
+        selectedDays,
+        updatedBy: userA,
+      })
+    }
+
+    it('never assigns a meal to a day the household has explicitly skipped', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'wednesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Monday Pasta' })
+      const skippedState: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: {},
+        lockedDays: [],
+        skippedDays: ['wednesday'],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: skippedState })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'planned' })
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
+    })
+
+    it('still respects a skipped day when regenerating the whole week', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'wednesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Monday Pasta' })
+      const skippedState: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: 'existing-recipe' } },
+        lockedDays: [],
+        skippedDays: ['wednesday'],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: skippedState })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
+    })
+
+    it('fails closed instead of falling back to the unfiltered pool when every recipe is excluded by the avoid-list', async () => {
+      await insertProfile([{ day: 'monday' }], ['peanut'])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Peanut Noodles',
+        tags: ['weekday', 'peanut'],
+      })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ error: 'ALL_RECIPES_EXCLUDED' })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'empty', recipe: null })
+    })
+
+    it('generates normally when at least one recipe survives the avoid-list filter', async () => {
+      await insertProfile([{ day: 'monday' }], ['peanut'])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Peanut Noodles',
+        tags: ['weekday', 'peanut'],
+      })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Plain Pasta',
+      })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'planned' })
+      expect(summary?.days[0]?.recipe?.title).toBe('Plain Pasta')
+    })
+
+    it('returns NO_RECIPES when the household has no recipes at all', async () => {
+      await insertProfile([{ day: 'monday' }])
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ error: 'NO_RECIPES' })
     })
   })
 })

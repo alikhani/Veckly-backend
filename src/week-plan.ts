@@ -474,7 +474,7 @@ const GenerateWeekPlanResponseSchema = z.object({
 }).openapi('GenerateWeekPlanResponse')
 
 const GenerateWeekPlanErrorSchema = z.object({
-  error: z.enum(['NO_RECIPES']),
+  error: z.enum(['NO_RECIPES', 'ALL_RECIPES_EXCLUDED']),
 }).openapi('GenerateWeekPlanError')
 
 const generateWeekPlanRoute = createRoute({
@@ -764,14 +764,14 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
   })
 }
 
-async function doGenerateWeekPlan(
+export async function doGenerateWeekPlan(
   db: Db,
   accessToken: string,
   userId: string,
   householdId: string,
   weekStartDate: string,
   regenerate: boolean,
-): Promise<{ ok: true } | { error: 'NO_RECIPES' } | { error: 'NOT_MEMBER' }> {
+): Promise<{ ok: true } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
   const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
 
@@ -797,13 +797,14 @@ async function doGenerateWeekPlan(
   const projState = readProjectionState(projection?.state)
   const daysToFill = selectedDayNames.filter((day) => {
     if (projState.lockedDays.includes(day)) return false
+    if (projState.skippedDays.includes(day)) return false
     return regenerate ? true : !projState.meals[day]
   })
 
   if (daysToFill.length === 0) return { ok: true }
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
-  const filtered = avoidIngredients.length > 0
+  const candidates = avoidIngredients.length > 0
     ? poolRecipes.filter((r) =>
       !avoidIngredients.some((a) => {
         const lower = a.toLowerCase()
@@ -815,7 +816,11 @@ async function doGenerateWeekPlan(
       })
     )
     : poolRecipes
-  const candidates = filtered.length > 0 ? filtered : poolRecipes
+
+  // Fail closed: if every recipe was excluded by the household's avoid-list,
+  // never silently fall back to the unfiltered pool — that would risk
+  // serving an ingredient the household explicitly flagged (e.g. an allergen).
+  if (candidates.length === 0) return { error: 'ALL_RECIPES_EXCLUDED' as const }
 
   const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
   const shuffled = [...candidates].sort(() => Math.random() - 0.5)

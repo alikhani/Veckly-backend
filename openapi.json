@@ -511,7 +511,8 @@
           "error": {
             "type": "string",
             "enum": [
-              "NO_RECIPES"
+              "NO_RECIPES",
+              "ALL_RECIPES_EXCLUDED"
             ]
           }
         },
@@ -2961,7 +2962,8 @@
         "type": "object",
         "properties": {
           "text": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 50000
           },
           "sourceUrl": {
             "type": "string"
@@ -3254,27 +3256,19 @@
         ]
       },
       "UpsertSavedPlan": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SavedPlan"
           },
-          "createdAt": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
+          {
+            "type": "object",
+            "properties": {
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
           }
-        },
-        "required": [
-          "id",
-          "createdAt",
-          "label",
-          "state"
         ]
       },
       "RenameSavedPlan": {

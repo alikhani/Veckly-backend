@@ -42,6 +42,20 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-10 — Week generation: fail-closed allergy filter, respect skipped days
+
+Part of a broader Sunday-ritual/family-memory initiative — see `PLAN-veckoritual-familjeminne-2026-07.md` in the workspace root for the full plan and priority order (this is Plan 0, the bug-fix slice; Plan A is the next step: porting `MealPlanner`'s feedback/recency/variety scoring into `doGenerateWeekPlan`, which today is still a random shuffle).
+
+Fixed in `POST /households/{id}/week-plans/{weekStartDate}/generate`:
+- **Allergy filter now fails closed.** If every candidate recipe is excluded by the household's `avoidIngredients`, the route now returns `422 { error: 'ALL_RECIPES_EXCLUDED' }` instead of silently falling back to the unfiltered pool — the old behavior could serve a recipe containing an ingredient the household explicitly flagged (e.g. an allergen). `GenerateWeekPlanErrorSchema` gained this new enum value alongside the existing `NO_RECIPES` (no recipes in the household at all).
+- **Generate/regenerate now respects skipped days.** `daysToFill` previously filtered out locked days but not `skippedDays`, and the `meal_assigned` fold un-skips a day — so Generate could silently re-fill a day the household explicitly skipped (e.g. "eating out Wednesday"). `skippedDays` is now excluded from `daysToFill` in both the fill-empty-days and full-regenerate paths.
+
+No iOS client changes required — `generateWeekPlan` in `VecklyAPIClient.swift` already maps any `422` to `APIError.noRecipesForGeneration` by status code, not by inspecting the error body. OpenAPI spec regenerated and committed in both repos (`Veckly-backend/openapi.json`, `Veckly-ios/OpenAPI/veckly-openapi.json`); the iOS Swift client was regenerated via `Veckly-ios/scripts/generate-openapi-client.sh`.
+
+**Unrelated drift caught by the same regen:** `UpsertSavedPlan`'s generated Swift shape had drifted significantly from the current backend schema (an `allOf`/intersection type, not the old flat `{id, createdAt, label, state}` shape) — the committed generated client predated a schema change that was never followed by a regen. Verified zero blast radius: no non-generated iOS code references `UpsertSavedPlan`. Fixed as a side effect of this regen; worth a periodic `openapi:write` + client-regen pass independent of route changes to catch this class of drift earlier.
+
+6 new backend tests added to `test/week-plan.test.ts` (`doGenerateWeekPlan` exported for direct testing, matching the file's existing pattern). 2 companion iOS fixes landed in the same session (swipe-to-skip removal, skip-then-undo meal preservation) — see the plan doc for detail.
+
 ### 2026-06-21 — Phase 6 production-readiness audit
 
 Audited backend against the Phase 6 TestFlight-readiness checklist (the iOS app already has an internal TestFlight build live, ahead of what this doc previously reflected).

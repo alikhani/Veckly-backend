@@ -4,8 +4,17 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdProfiles, householdWeekPlans, households, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdProfiles, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
+import {
+  createWeekContext,
+  detectFatiguedMeals,
+  extractRecentMealIds,
+  rankCandidates,
+  updateWeekContext,
+  type TFeedbackState,
+  type TScoringRecipe,
+} from './week-scoring.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -775,16 +784,39 @@ export async function doGenerateWeekPlan(
   const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
 
-  const [profileRows, projection, poolRecipes] = await Promise.all([
+  // Up to 6 prior Monday-start weeks — feeds both recency (last 1-2 weeks)
+  // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
+  const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
+
+  const [profileRows, projection, poolRecipes, feedbackRows, priorWeekProjections] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
     ),
     getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
     withRls(db, accessToken, (tx) =>
-      tx.select({ id: recipes.id, title: recipes.title, tags: recipes.tags, ingredients: recipes.ingredients })
+      tx.select({
+        id: recipes.id,
+        title: recipes.title,
+        tags: recipes.tags,
+        ingredients: recipes.ingredients,
+        cuisine: recipes.cuisine,
+        proteinSource: recipes.proteinSource,
+        mealWeight: recipes.mealWeight,
+        householdId: recipes.householdId,
+      })
         .from(recipes)
         .where(and(eq(recipes.isArchived, false), or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true))))
+    ),
+    withRls(db, accessToken, (tx) =>
+      tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })
+        .from(mealFeedback)
+        .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId)))
+    ),
+    withRls(db, accessToken, (tx) =>
+      tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
+        .from(weekPlanProjections)
+        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates)))
     ),
   ])
 
@@ -795,7 +827,8 @@ export async function doGenerateWeekPlan(
   const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
 
   const projState = readProjectionState(projection?.state)
-  const daysToFill = selectedDayNames.filter((day) => {
+  const daysToFill = orderedDays.filter((day) => {
+    if (!selectedDayNames.includes(day)) return false
     if (projState.lockedDays.includes(day)) return false
     if (projState.skippedDays.includes(day)) return false
     return regenerate ? true : !projState.meals[day]
@@ -804,7 +837,7 @@ export async function doGenerateWeekPlan(
   if (daysToFill.length === 0) return { ok: true }
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
-  const candidates = avoidIngredients.length > 0
+  const candidates: TScoringRecipe[] = (avoidIngredients.length > 0
     ? poolRecipes.filter((r) =>
       !avoidIngredients.some((a) => {
         const lower = a.toLowerCase()
@@ -816,18 +849,43 @@ export async function doGenerateWeekPlan(
       })
     )
     : poolRecipes
+  ).map((r) => ({
+    id: r.id,
+    title: r.title,
+    tags: r.tags as string[],
+    ingredients: r.ingredients as Array<{ item: string }> | null,
+    cuisine: r.cuisine,
+    proteinSource: r.proteinSource,
+    mealWeight: r.mealWeight,
+    householdId: r.householdId,
+  }))
 
   // Fail closed: if every recipe was excluded by the household's avoid-list,
   // never silently fall back to the unfiltered pool — that would risk
   // serving an ingredient the household explicitly flagged (e.g. an allergen).
   if (candidates.length === 0) return { error: 'ALL_RECIPES_EXCLUDED' as const }
 
-  const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
-  const shuffled = [...candidates].sort(() => Math.random() - 0.5)
-  const preferred = shuffled.filter((r) => !alreadyUsed.has(r.id))
-  const pool = preferred.length >= daysToFill.length ? preferred : shuffled
+  const feedback: TFeedbackState = Object.fromEntries(
+    feedbackRows.map((row) => [row.mealId, { vote: row.vote, ...(row.signal ? { signal: row.signal } : {}) }]),
+  )
+  const weekHistoryRecords = priorWeekProjections.map((row) => ({
+    weekStartDate: row.weekStartDate,
+    mealIds: Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef),
+  }))
+  const recentMealIds = extractRecentMealIds(weekHistoryRecords, weekStartDate)
+  const fatiguedMealIds = detectFatiguedMeals(weekHistoryRecords)
 
-  const causedBy = { source: 'algorithm' as const, algorithmVersion: '1.0', triggeredByUserId: userId }
+  const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
+  const weekCtx = createWeekContext()
+  // Seed week-context with this week's already-placed (locked/existing)
+  // meals so cuisine/protein-variety and hearty-adjacency scoring account
+  // for the whole week, not just the days being filled right now.
+  for (const meal of Object.values(projState.meals)) {
+    const placed = candidates.find((c) => c.id === meal.recipeRef)
+    if (placed) updateWeekContext(weekCtx, placed)
+  }
+
+  const causedBy = { source: 'algorithm' as const, algorithmVersion: '2.0', triggeredByUserId: userId }
 
   if (!projState.weekStarted) {
     await appendStreamEvent(
@@ -838,17 +896,15 @@ export async function doGenerateWeekPlan(
     )
   }
 
-  const assignedThisRun = new Set<string>()
-  const availablePool = pool.filter((r) => !alreadyUsed.has(r.id))
-  const fallbackPool = pool.filter((r) => alreadyUsed.has(r.id))
-
   for (const day of daysToFill) {
-    const next = availablePool.find((r) => !assignedThisRun.has(r.id))
-      ?? fallbackPool.find((r) => !assignedThisRun.has(r.id))
-      ?? availablePool[0]
-      ?? fallbackPool[0]
+    const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
+    const scoringPool = unused.length > 0 ? unused : candidates
+    const ranked = rankCandidates(scoringPool, { householdId, feedback, allRecipes: candidates, weekCtx, recentMealIds, fatiguedMealIds })
+    const next = ranked[0]
     if (!next) continue
-    assignedThisRun.add(next.id)
+
+    alreadyUsed.add(next.id)
+    updateWeekContext(weekCtx, next)
     await appendStreamEvent(
       db, accessToken,
       { events: weekPlanEvents, projections: weekPlanProjections },

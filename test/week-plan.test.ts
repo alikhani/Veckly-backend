@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
+import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
@@ -36,6 +37,7 @@ describeWithDb('Week-plan event log + projection', () => {
   // before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
@@ -56,6 +58,7 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
@@ -708,6 +711,66 @@ describeWithDb('Week-plan event log + projection', () => {
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
       expect(result).toEqual({ error: 'NO_RECIPES' })
+    })
+
+    it('stamps assigned meals with algorithmVersion 2.0', async () => {
+      await insertProfile([{ day: 'monday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Monday Pasta' })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const [event] = await asUser(userA, (tx) =>
+        tx.select().from(weekPlanEvents).where(and(eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.eventType, 'meal_assigned'))),
+      )
+      expect(event?.causedBy).toMatchObject({ source: 'algorithm', algorithmVersion: '2.0' })
+    })
+
+    it('prefers a recipe the user liked over one they had no opinion on', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const liked = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Liked Pasta' })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Neutral Pasta' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, liked.id, { vote: 'up' })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Liked Pasta')
+    })
+
+    it('avoids repeating last week\'s meal when an untouched alternative exists', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const cookedLastWeek = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Cooked Last Week' })
+      const freshAlternative = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Fresh Alternative' })
+      const lastWeekStart = '2026-06-01'
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate: lastWeekStart,
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: { monday: { recipeRef: cookedLastWeek.id } },
+          lockedDays: [],
+          skippedDays: [],
+        } satisfies TWeekPlanProjectionState,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Fresh Alternative')
+    })
+
+    it('prefers the household\'s own recipe over an otherwise-equal public recipe', async () => {
+      await insertProfile([{ day: 'monday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Household Recipe' })
+      // A public recipe owned by a different household (household B) — same
+      // shape, so only the family-recipe boost should decide the winner.
+      await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Community Recipe', isPublic: true })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Household Recipe')
     })
   })
 })

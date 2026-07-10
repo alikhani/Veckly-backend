@@ -42,6 +42,18 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-10 — Week generation scoring engine v2.0 (feedback, recency, fatigue, variety)
+
+Part of the same initiative as the fixes below — see `PLAN-veckoritual-familjeminne-2026-07.md` (Plan A). `doGenerateWeekPlan` previously picked meals via `sort(() => Math.random() - 0.5)` — pure chance, so a user's thumbs up/down had zero effect on what got generated. Replaced with a scoring engine ported from `MealPlanner`'s proven web planner (`src/lib/planner/meal-scoring.ts`, `week-constraint-scoring.ts`, `week-history-analysis.ts`), same formulas, adapted to this backend's recipe-row/feedback-row shapes:
+
+- New pure module `src/week-scoring.ts` (zero DB dependency, fully unit-tested in isolation — `test/week-scoring.test.ts`, 25 tests): explicit feedback (+8 liked / −12 disliked, plus signal and tag-spillover scoring), recency penalty (−8 last week / −4 two weeks ago), fatigue detection (−10 for 2 weeks after a ≥3-week streak breaks), week-level variety (cuisine/protein 3rd+ repeat penalty, hearty-meal-adjacency penalty), and a +12 boost for the household's own recipes over the shared/public pool.
+- `doGenerateWeekPlan` now fetches the triggering user's feedback (`meal_feedback`, scoped by `(householdId, userId)` — see the per-user note below) and up to 6 prior weeks of `week_plan_projections` in the same parallel query batch as before, builds a running `TWeekContext` (seeded from this week's already-locked/placed meals so variety scoring sees the whole week, not just the days being filled), and picks the highest-scoring unused candidate per day — ties break deterministically on recipe id (matches the web engine exactly; there is no randomness in the ranking itself, unlike the old v1.0 shuffle). `algorithmVersion` bumped `'1.0'` → `'2.0'`.
+- **Feedback is per-user, not household-shared** — confirmed from both this backend's RLS policy (`meal_feedback_select_own_via_active_membership` requires `user_id = auth.uid()` even for SELECT) and `MealPlanner`'s own schema (`meal_feedback` primary key is `(user_id, meal_id)`, no `household_id` at all). So generation scores using only the feedback of whoever clicked Generate — this matches the reference implementation's actual behavior, not a regression.
+- 4 new integration tests in `test/week-plan.test.ts`: algorithmVersion stamping, feedback preference, recency avoidance, family-recipe boost over an equivalent public recipe.
+- OpenAPI unchanged (no route contract change) — regenerated and diffed clean.
+
+Not done in this pass (tracked as Plan A2/A3/A4 in the plan doc): exposing `reason`/`confidence` per assignment in the API response (needed before the family-memory UI work can show "why" a meal was picked), and a decision on whether generation should draw from the full public-recipe pool or a narrower curated+bookmarked set.
+
 ### 2026-07-10 — Week generation: fail-closed allergy filter, respect skipped days
 
 Part of a broader Sunday-ritual/family-memory initiative — see `PLAN-veckoritual-familjeminne-2026-07.md` in the workspace root for the full plan and priority order (this is Plan 0, the bug-fix slice; Plan A is the next step: porting `MealPlanner`'s feedback/recency/variety scoring into `doGenerateWeekPlan`, which today is still a random shuffle).

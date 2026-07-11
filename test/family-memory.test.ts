@@ -136,6 +136,19 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       expect(cookbook.favorites).toEqual([{ recipeId: recipe.id, title: 'Korvstroganoff', timesCooked: 1, weeksSinceCooked: 0 }])
     })
 
+    it('clamps weeksSinceCooked to 0 instead of going negative for a stale client-supplied current week', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Korvstroganoff' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
+      // Cooked in a week *after* the "current" week the caller passes in —
+      // an out-of-date client clock shouldn't be able to produce a negative
+      // weeks-since-cooked value.
+      await seedWeek('2026-07-13', [recipe.id])
+
+      const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
+
+      expect(cookbook.favorites).toEqual([{ recipeId: recipe.id, title: 'Korvstroganoff', timesCooked: 1, weeksSinceCooked: 0 }])
+    })
+
     // Votes are per-user (RLS enforces `user_id = auth.uid()` even on
     // SELECT, migration 0020) — a household member's own cookbook never
     // includes recipes only their partner liked.

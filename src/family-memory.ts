@@ -80,10 +80,14 @@ const FamilyCookbookSchema = z.object({
 // mirrors the plan doc's "not eaten in 6 weeks" framing (Plan D3).
 const DUE_AGAIN_THRESHOLD_WEEKS = 6
 
+// Clamped to 0 rather than allowed to go negative — `currentWeekStartDate`
+// is client-supplied and only validated as *a* Monday, not as being on or
+// after the household's latest history, so a stale/misbehaving client could
+// otherwise produce a negative "weeks since cooked".
 function weeksBetween(earlierWeekStart: string, laterWeekStart: string): number {
   const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000
   const diff = new Date(`${laterWeekStart}T00:00:00Z`).getTime() - new Date(`${earlierWeekStart}T00:00:00Z`).getTime()
-  return Math.round(diff / MS_PER_WEEK)
+  return Math.max(0, Math.round(diff / MS_PER_WEEK))
 }
 
 type TWeekHistoryRow = { weekStartDate: string; state: unknown }

@@ -939,12 +939,23 @@ export async function doGenerateWeekPlan(
   const fatiguedMealIds = detectFatiguedMeals(weekHistoryRecords)
   const everCookedRecipeIds = new Set(weekHistoryRecords.flatMap((record) => record.mealIds))
 
-  const alreadyUsed = new Set(Object.values(projState.meals).map((m) => m.recipeRef))
+  // Only meals staying put (not in `daysToFill`) should inform exclusion/
+  // variety scoring — on a regenerate, a day's current meal is about to be
+  // discarded, so seeding from it would wrongly exclude that recipe from
+  // being re-picked (even onto the day it's leaving) and pollute cuisine/
+  // protein/hearty-adjacency scoring with data that won't exist in the
+  // final week.
+  const daysToFillSet = new Set(daysToFill)
+  const keptMeals = Object.entries(projState.meals)
+    .filter(([day]) => !daysToFillSet.has(day as z.infer<typeof dayOfWeek>))
+    .map(([, meal]) => meal)
+
+  const alreadyUsed = new Set(keptMeals.map((m) => m.recipeRef))
   const weekCtx = createWeekContext()
   // Seed week-context with this week's already-placed (locked/existing)
   // meals so cuisine/protein-variety and hearty-adjacency scoring account
   // for the whole week, not just the days being filled right now.
-  for (const meal of Object.values(projState.meals)) {
+  for (const meal of keptMeals) {
     const placed = candidates.find((c) => c.id === meal.recipeRef)
     if (placed) updateWeekContext(weekCtx, placed)
   }

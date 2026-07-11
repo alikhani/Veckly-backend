@@ -846,6 +846,33 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.reason).toBe('family-recipe')
     })
 
+    it('lets a regenerate re-pick the best recipe even if it was already assigned to a day being regenerated', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      const bestPick = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Family Favorite' })
+      const otherA = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Public Soup', isPublic: true })
+      await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Public Stew', isPublic: true })
+      // Both days already hold a recipe that's about to be replaced by this
+      // regenerate — the household's own (best-scoring) recipe is one of
+      // them, so a naive implementation that seeds "already used" from every
+      // current assignment (including ones being discarded) would wrongly
+      // treat it as unavailable for its own new pick.
+      const existingState: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: bestPick.id }, tuesday: { recipeRef: otherA.id } },
+        lockedDays: [],
+        skippedDays: [],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: existingState })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Family Favorite')
+      expect(summary?.days[0]?.reason).toBe('family-recipe')
+    })
+
     it('leaves reason and confidence null for a manually assigned meal', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Manual Pick' })
       await appendStreamEvent(

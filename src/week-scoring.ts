@@ -265,3 +265,17 @@ export function detectFatiguedMeals(records: TWeekMealRecord[]): string[] {
 
   return Array.from(fatigued)
 }
+
+/** How many consecutive weeks (counting the current week) a recipe has been
+ * cooked, most-recent-first. `weeksMostRecentFirst[0]` is the current week's
+ * meal IDs; counting stops at the first week that doesn't contain the recipe.
+ * Used for D4's satiation hint — a lightweight, presentation-only signal
+ * (no scoring/generation impact), unlike `detectFatiguedMeals`. */
+export function computeCurrentStreak(recipeId: string, weeksMostRecentFirst: string[][]): number {
+  let streak = 0
+  for (const weekMealIds of weeksMostRecentFirst) {
+    if (!weekMealIds.includes(recipeId)) break
+    streak++
+  }
+  return streak
+}

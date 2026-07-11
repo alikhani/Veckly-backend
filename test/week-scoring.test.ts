@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  computeCurrentStreak,
   createWeekContext,
   deriveAssignmentReason,
   detectFatiguedMeals,
@@ -267,6 +268,24 @@ describe('detectFatiguedMeals', () => {
     ]
 
     expect(detectFatiguedMeals(records)).toEqual([])
+  })
+})
+
+describe('computeCurrentStreak', () => {
+  it('counts consecutive weeks including the current one', () => {
+    expect(computeCurrentStreak('a', [['a'], ['a'], ['a'], []])).toBe(3)
+  })
+
+  it('stops at the first week missing the recipe', () => {
+    expect(computeCurrentStreak('a', [['a'], ['a'], [], ['a']])).toBe(2)
+  })
+
+  it('returns 0 when the current week does not contain the recipe', () => {
+    expect(computeCurrentStreak('a', [['b'], ['a'], ['a']])).toBe(0)
+  })
+
+  it('returns 0 for an empty history', () => {
+    expect(computeCurrentStreak('a', [])).toBe(0)
   })
 })
 

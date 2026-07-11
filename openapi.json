@@ -1195,6 +1195,12 @@
               "ok",
               "low"
             ]
+          },
+          "streakWeeks": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1204,7 +1210,8 @@
           "isLocked",
           "recipe",
           "reason",
-          "confidence"
+          "confidence",
+          "streakWeeks"
         ]
       },
       "WeekPlanSummary": {

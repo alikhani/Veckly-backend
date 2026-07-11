@@ -7,6 +7,7 @@ import { withRls } from './rls.js'
 import { householdProfiles, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
+  computeCurrentStreak,
   createWeekContext,
   deriveAssignmentReason,
   detectFatiguedMeals,
@@ -211,6 +212,10 @@ const WeekPlanSummaryDaySchema = z.object({
   recipe: WeekPlanSummaryRecipeSchema.nullable(),
   reason: AssignmentReasonSchema.nullable(),
   confidence: AssignmentConfidenceSchema.nullable(),
+  // Consecutive weeks (including this one) this recipe has been cooked, or
+  // null below the satiation-hint threshold (3). Presentation-only — has no
+  // bearing on generation/scoring (see `computeCurrentStreak`).
+  streakWeeks: z.number().int().nullable(),
 }).openapi('WeekPlanSummaryDay')
 
 const WeekPlanSummarySchema = z.object({
@@ -580,6 +585,12 @@ function getIsoWeekIdentity(yyyyMmDd: string) {
   return { weekNumber, weekYear }
 }
 
+const SATIATION_STREAK_THRESHOLD = 3
+
+function streakWeeksOrNull(streak: number): number | null {
+  return streak >= SATIATION_STREAK_THRESHOLD ? streak : null
+}
+
 function readProjectionState(state: unknown): TWeekPlanProjectionState {
   const candidate = state as Partial<TWeekPlanProjectionState> | null | undefined
   return {
@@ -747,16 +758,34 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
 
     if (!household) return null
 
-    const [projection] = await tx
-      .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
-      .from(weekPlanProjections)
-      .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
-      .limit(1)
+    // 4 prior weeks is enough to surface a streak (threshold 3) without an
+    // unbounded query — see `computeCurrentStreak` in week-scoring.ts.
+    const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
+
+    const [[projection], priorWeekProjections] = await Promise.all([
+      tx
+        .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
+        .from(weekPlanProjections)
+        .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
+        .limit(1),
+      tx
+        .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
+        .from(weekPlanProjections)
+        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates)))
+    ])
 
     const projectionState = readProjectionState(projection?.state)
     const recipeIds = orderedDays
       .map((day) => projectionState.meals[day]?.recipeRef)
       .filter((id): id is string => Boolean(id))
+
+    const priorWeeksByDate = new Map(
+      priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
+    )
+    const weeksMostRecentFirst = [
+      recipeIds,
+      ...priorWeekStartDates.map((date) => priorWeeksByDate.get(date) ?? []),
+    ]
 
     const recipeRows = recipeIds.length
       ? await tx
@@ -791,6 +820,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           isLocked: projectionState.lockedDays.includes(dayOfWeek),
           reason: meal?.reason ?? null,
           confidence: meal?.confidence ?? null,
+          streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
           recipe: recipe ? {
             id: recipe.id,
             title: recipe.title,

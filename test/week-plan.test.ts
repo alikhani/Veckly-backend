@@ -564,6 +564,7 @@ describeWithDb('Week-plan event log + projection', () => {
         isLocked: false,
         reason: null,
         confidence: null,
+        streakWeeks: null,
         recipe: {
           id: recipe.id,
           title: 'Monday Pasta',
@@ -574,6 +575,50 @@ describeWithDb('Week-plan event log + projection', () => {
           tags: ['weekday'],
         },
       })
+    })
+
+    it('surfaces a satiation streak when a recipe has been cooked 3+ consecutive weeks', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: recipe.id } },
+        lockedDays: [],
+        skippedDays: [],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+      for (const priorWeekStart of ['2026-06-01', '2026-05-25']) {
+        await db.insert(weekPlanProjections).values({
+          householdId: householdAId,
+          weekStartDate: priorWeekStart,
+          state: { weekStarted: true, request: null, meals: { monday: { recipeRef: recipe.id } }, lockedDays: [], skippedDays: [] },
+        })
+      }
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]?.streakWeeks).toBe(3)
+    })
+
+    it('leaves streakWeeks null when the recipe was cooked fewer than 3 consecutive weeks', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const state: TWeekPlanProjectionState = {
+        weekStarted: true,
+        request: null,
+        meals: { monday: { recipeRef: recipe.id } },
+        lockedDays: [],
+        skippedDays: [],
+      }
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate: '2026-06-01',
+        state: { weekStarted: true, request: null, meals: { monday: { recipeRef: recipe.id } }, lockedDays: [], skippedDays: [] },
+      })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]?.streakWeeks).toBeNull()
     })
 
     it('renders skipped days from the projection without requiring a recipe', async () => {

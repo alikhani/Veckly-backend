@@ -4,6 +4,7 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { appendStreamEvent } from '../src/event-stream.js'
 import { createRecipe } from '../src/recipes.js'
+import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
@@ -39,6 +40,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
   beforeEach(async () => {
     await db.execute(sql`delete from "meal_feedback"`)
+    await db.execute(sql`delete from "household_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
@@ -60,6 +62,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
   afterAll(async () => {
     await db.execute(sql`delete from "meal_feedback"`)
+    await db.execute(sql`delete from "household_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "household_week_plans"`)
     await db.execute(sql`delete from "week_plan_events"`)
@@ -784,6 +787,53 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(result).toEqual({ error: 'NO_RECIPES' })
     })
 
+    it('never picks a random public community recipe that nobody in the household bookmarked (Plan A3)', async () => {
+      await insertProfile([{ day: 'monday' }])
+      await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Stranger Stew', isPublic: true })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ error: 'NO_RECIPES' })
+    })
+
+    it('picks a builtin recipe even though it belongs to no household and was never bookmarked', async () => {
+      await insertProfile([{ day: 'monday' }])
+      // Seeded directly (bypassing RLS) — builtin recipes have `household_id:
+      // null`, which `recipes_insert_via_active_membership` would never allow
+      // through the normal per-request insert path (see
+      // `scripts/seed-builtin-recipes.ts`, the real seeding mechanism).
+      await db.insert(recipes).values({
+        householdId: null,
+        createdBy: userB,
+        title: 'Builtin Chili',
+        description: baseRecipe.description,
+        servings: baseRecipe.servings,
+        ingredients: baseRecipe.ingredients,
+        steps: baseRecipe.steps,
+        tags: baseRecipe.tags,
+        isPublic: true,
+        source: 'builtin',
+      })
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Builtin Chili')
+    })
+
+    it('picks a public community recipe the household bookmarked', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const bookmarked = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Bookmarked Curry', isPublic: true })
+      await addHouseholdSavedRecipe(db, fakeAccessToken(userA), userA, householdAId, bookmarked.id)
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Bookmarked Curry')
+    })
+
     it('stamps assigned meals with algorithmVersion 2.0', async () => {
       await insertProfile([{ day: 'monday' }])
       await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Monday Pasta' })
@@ -878,8 +928,13 @@ describeWithDb('Week-plan event log + projection', () => {
       // The only candidate recipe — guarantees it wins the day's pick
       // regardless of scoring, so `reason` directly reveals whether fatigue
       // detection (mis)fired.
+      // Bookmarked (not household-owned) so `reason` stays a clean signal for
+      // fatigue detection alone — an owned recipe would also carry the
+      // unrelated `family-recipe` reason and confound the assertion below.
       const recipe = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Salmon', isPublic: true })
-      const filler = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Filler' })
+      const filler = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Filler', isPublic: true })
+      await addHouseholdSavedRecipe(db, fakeAccessToken(userA), userA, householdAId, recipe.id)
+      await addHouseholdSavedRecipe(db, fakeAccessToken(userA), userA, householdAId, filler.id)
       const weeks: Array<[string, string | null]> = [
         ['2026-04-27', recipe.id], // 6 weeks ago — present
         ['2026-05-04', recipe.id], // 5 weeks ago — present

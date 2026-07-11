@@ -147,6 +147,204 @@
           "dueAgain"
         ]
       },
+      "RecipeIngredient": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string",
+            "minLength": 1
+          },
+          "amount": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item"
+        ]
+      },
+      "RecipeStep": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "Recipe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeIngredient"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeStep"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prepTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cookTimeMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cuisine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proteinSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mealWeight": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user_created",
+              "url_import",
+              "ai_generated",
+              "builtin"
+            ]
+          },
+          "isPublic": {
+            "type": "boolean"
+          },
+          "isArchived": {
+            "type": "boolean"
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "userVote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "up",
+              "down"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "title",
+          "description",
+          "servings",
+          "ingredients",
+          "steps",
+          "tags",
+          "prepTimeMinutes",
+          "cookTimeMinutes",
+          "cuisine",
+          "proteinSource",
+          "mealWeight",
+          "sourceUrl",
+          "source",
+          "isPublic",
+          "isArchived",
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          "userVote"
+        ]
+      },
+      "HouseholdSavedRecipesEnvelope": {
+        "type": "object",
+        "properties": {
+          "recipes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recipe"
+            }
+          }
+        },
+        "required": [
+          "recipes"
+        ]
+      },
+      "OkResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "Household": {
         "type": "object",
         "properties": {
@@ -2328,176 +2526,6 @@
           "state"
         ]
       },
-      "RecipeIngredient": {
-        "type": "object",
-        "properties": {
-          "item": {
-            "type": "string",
-            "minLength": 1
-          },
-          "amount": {
-            "type": "string"
-          },
-          "unit": {
-            "type": "string"
-          },
-          "category": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "item"
-        ]
-      },
-      "RecipeStep": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "text"
-        ]
-      },
-      "Recipe": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "householdId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "title": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "servings": {
-            "type": "integer"
-          },
-          "ingredients": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RecipeIngredient"
-            }
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RecipeStep"
-            }
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "prepTimeMinutes": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "cookTimeMinutes": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "cuisine": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "proteinSource": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mealWeight": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "sourceUrl": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "user_created",
-              "url_import",
-              "ai_generated",
-              "builtin"
-            ]
-          },
-          "isPublic": {
-            "type": "boolean"
-          },
-          "isArchived": {
-            "type": "boolean"
-          },
-          "createdBy": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          },
-          "userVote": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "up",
-              "down"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "householdId",
-          "title",
-          "description",
-          "servings",
-          "ingredients",
-          "steps",
-          "tags",
-          "prepTimeMinutes",
-          "cookTimeMinutes",
-          "cuisine",
-          "proteinSource",
-          "mealWeight",
-          "sourceUrl",
-          "source",
-          "isPublic",
-          "isArchived",
-          "createdBy",
-          "createdAt",
-          "updatedAt",
-          "userVote"
-        ]
-      },
       "CreateRecipe": {
         "type": "object",
         "properties": {
@@ -2683,20 +2711,6 @@
         },
         "required": [
           "recipes"
-        ]
-      },
-      "OkResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          }
-        },
-        "required": [
-          "ok"
         ]
       },
       "RecipeFillInIngredient": {
@@ -3812,6 +3826,142 @@
           },
           "400": {
             "description": "weekStartDate must be a Monday"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/saved-recipes": {
+      "get": {
+        "operationId": "listHouseholdSavedRecipes",
+        "summary": "The household's shared bookmark list",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household-saved recipes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdSavedRecipesEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/saved-recipes/{recipeId}": {
+      "post": {
+        "operationId": "addHouseholdSavedRecipe",
+        "summary": "Add a recipe to the household bookmark list",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Recipe added, or already added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found, caller is not a member, or recipe not found"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeHouseholdSavedRecipe",
+        "summary": "Remove a recipe from the household bookmark list",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe removed, or was not on the list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"

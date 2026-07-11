@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdProfiles, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
   computeCurrentStreak,
@@ -869,7 +869,17 @@ export async function doGenerateWeekPlan(
         householdId: recipes.householdId,
       })
         .from(recipes)
-        .where(and(eq(recipes.isArchived, false), or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true))))
+        .where(and(
+          eq(recipes.isArchived, false),
+          or(
+            eq(recipes.householdId, householdId),
+            eq(recipes.source, 'builtin'),
+            inArray(
+              recipes.id,
+              tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
+            ),
+          ),
+        ))
     ),
     withRls(db, accessToken, (tx) =>
       tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })

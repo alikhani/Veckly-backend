@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { buildActiveWeekRoutes } from './active-week.js'
 import { buildFamilyMemoryRoutes } from './family-memory.js'
+import { buildHouseholdSavedRecipesRoutes } from './household-saved-recipes.js'
 import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './households.js'
 import { buildHouseholdProfileRoutes, buildInternalHouseholdProfileRoutes } from './household-profile.js'
 import { buildInvitesRoutes, buildInternalInvitesRoutes } from './invites.js'
@@ -44,6 +45,7 @@ export function buildApp(db: Db) {
   // Public client-facing routes
   app.route('/', buildActiveWeekRoutes(db))
   app.route('/', buildFamilyMemoryRoutes(db))
+  app.route('/', buildHouseholdSavedRecipesRoutes(db))
   app.route('/', buildHouseholdsRoutes(db))
   app.route('/', buildHouseholdProfileRoutes(db))
   app.route('/', buildInvitesRoutes(db))

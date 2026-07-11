@@ -192,6 +192,21 @@ export const userSavedRecipes = pgTable('user_saved_recipes', {
   index('user_saved_recipes_user_saved_at_idx').on(table.userId, table.savedAt),
 ])
 
+// Distinct from `userSavedRecipes`: this is the household's shared bookmark
+// list (what week generation reads as a candidate source), not a personal
+// one. Any active member may add or remove a row — removing here never
+// touches a member's own `userSavedRecipes` entry, so a vetoed household
+// bookmark stays cookable by whoever personally saved it.
+export const householdSavedRecipes = pgTable('household_saved_recipes', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  recipeId: uuid('recipe_id').notNull().references(() => recipes.id, { onDelete: 'cascade' }),
+  addedBy: uuid('added_by').notNull(),
+  addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.recipeId], name: 'household_saved_recipes_pk' }),
+  index('household_saved_recipes_household_added_idx').on(table.householdId, table.addedAt),
+])
+
 export const mealFeedbackVote = pgEnum('meal_feedback_vote', ['up', 'down'])
 export const mealFeedbackSignal = pgEnum('meal_feedback_signal', [
   'easy-weeknight',

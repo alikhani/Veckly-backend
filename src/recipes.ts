@@ -20,7 +20,7 @@ const RecipeStepSchema = z.object({
   text: z.string().min(1),
 }).openapi('RecipeStep')
 
-const RecipeSchema = z.object({
+export const RecipeSchema = z.object({
   id: z.string().uuid(),
   householdId: z.string().uuid().nullable(),
   title: z.string(),
@@ -91,7 +91,7 @@ const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse')
 
 // --- Domain functions -------------------------------------------------------
 
-function toRecipeResponse(row: typeof recipes.$inferSelect, userVote: 'up' | 'down' | null = null) {
+export function toRecipeResponse(row: typeof recipes.$inferSelect, userVote: 'up' | 'down' | null = null) {
   return {
     id: row.id,
     householdId: row.householdId,

@@ -26,12 +26,14 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
+  const [householdSavedRecipesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_saved_recipes') as exists`)
+  if (householdSavedRecipesMarker?.exists) return
+
   const [mealTypeCheckMarker] = await db.execute<{ exists: string | null }>(sql`
     select constraint_name as exists from information_schema.table_constraints
     where table_name = 'household_prep_batch_assignments'
       and constraint_name = 'household_prep_batch_assignments_meal_type_check'
   `)
-  if (mealTypeCheckMarker?.exists) return
 
   const [prepBatchesRlsHardeningMarker] = await db.execute<{ exists: string | null }>(sql`
     select policyname as exists from pg_policies
@@ -63,7 +65,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
-    if (alreadyHasMealTypeCheckMigration && file < '0028_') continue
+    if (alreadyHasMealTypeCheckMigration && file < '0029_') continue
     if (alreadyHasPrepBatchesRlsHardeningMigration && file < '0027_') continue
     if (alreadyHasUserProfilesMigration && file < '0026_') continue
     if (alreadyHasPeerVisibilityMigration && file < '0025_') continue
@@ -106,6 +108,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, update on "shopping_list_projections" to authenticated;
     grant select, insert, update on "recipes" to authenticated;
     grant select, insert, delete on "user_saved_recipes" to authenticated;
+    grant select, insert, delete on "household_saved_recipes" to authenticated;
     grant select, insert, update, delete on "meal_feedback" to authenticated;
     grant select, insert, update, delete on "saved_plans" to authenticated;
     grant select, insert, update on "household_profiles" to authenticated;

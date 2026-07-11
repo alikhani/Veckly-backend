@@ -110,6 +110,16 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
     expect(recap).toEqual({ plannedWeekCount: 0, topRecipeThisMonth: null })
   })
 
+  it('excludes weeks older than the 3-year lookback window from the planned-week count', async () => {
+    const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Pasta' })
+    await seedWeek('2026-06-01', [recipe.id])
+    await seedWeek('2020-01-06', [recipe.id]) // well over 3 years before the reference month
+
+    const recap = await getFamilyRecap(db, fakeAccessToken(userA), householdAId, '2026-07')
+
+    expect(recap.plannedWeekCount).toBe(1)
+  })
+
   it('returns 401 from the route when no bearer token is supplied', async () => {
     const app = buildApp(db)
 
@@ -216,6 +226,18 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userB), userB, householdBId, '2026-07-06')
 
       expect(cookbook).toEqual({ totalFamilyLikedCount: 0, favorites: [], dueAgain: [] })
+    })
+
+    it('treats a liked recipe as never-cooked once its only history is older than the 3-year lookback window', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Pasta' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
+      await seedWeek('2020-01-06', [recipe.id]) // well over 3 years before the reference week
+
+      const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
+
+      expect(cookbook.totalFamilyLikedCount).toBe(1)
+      expect(cookbook.favorites).toEqual([])
+      expect(cookbook.dueAgain).toEqual([])
     })
 
     it('returns 401 from the route when no bearer token is supplied', async () => {

@@ -565,7 +565,7 @@ const finalizeWeekHistoryPlanRoute = createRoute({
 
 const orderedDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
 
-function addDays(yyyyMmDd: string, offset: number) {
+export function addDays(yyyyMmDd: string, offset: number) {
   const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
   date.setUTCDate(date.getUTCDate() + offset)
   return date.toISOString().slice(0, 10)

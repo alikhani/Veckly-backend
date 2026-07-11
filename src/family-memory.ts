@@ -1,14 +1,20 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, gte, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { mealFeedback, recipes, weekPlanProjections } from './schema.js'
-import { isMonday } from './week-plan.js'
+import { addDays, isMonday } from './week-plan.js'
 import type { Db } from './db.js'
 
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
 const WeekStartDateQuerySchema = z.object({ weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
+
+// Both queries below read a household's entire week-plan history with no
+// other bound — harmless today, but it grows forever with a household's
+// age. Capped to a generous 3-year lookback (no real household is anywhere
+// near this yet) so it can never become truly unbounded.
+const HISTORY_LOOKBACK_WEEKS = 156
 
 const FamilyRecapSchema = z.object({
   plannedWeekCount: z.number().int(),
@@ -28,10 +34,14 @@ function mealIdsFromState(state: unknown): string[] {
 // from `Date.now()` so it stays unit-testable without mocking the clock.
 export async function getFamilyRecap(db: Db, accessToken: string, householdId: string, referenceMonth: string) {
   return withRls(db, accessToken, async (tx) => {
+    // `plannedWeekCount` undercounts once a household passes the lookback
+    // window — an accepted tradeoff given how generous it is; revisit if
+    // real households ever get that old.
+    const historyCutoff = addDays(`${referenceMonth}-01`, -7 * HISTORY_LOOKBACK_WEEKS)
     const rows = await tx
       .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
       .from(weekPlanProjections)
-      .where(eq(weekPlanProjections.householdId, householdId))
+      .where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, historyCutoff)))
 
     const plannedWeeks = rows.filter((row) => mealIdsFromState(row.state).length > 0)
     const plannedWeekCount = plannedWeeks.length
@@ -141,13 +151,14 @@ function buildCookbookEntries(
 // generation side.
 export async function getFamilyCookbook(db: Db, accessToken: string, userId: string, householdId: string, currentWeekStartDate: string) {
   return withRls(db, accessToken, async (tx) => {
+    const historyCutoff = addDays(currentWeekStartDate, -7 * HISTORY_LOOKBACK_WEEKS)
     const [feedbackRows, historyRows] = await Promise.all([
       tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote })
         .from(mealFeedback)
         .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId))),
       tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
         .from(weekPlanProjections)
-        .where(eq(weekPlanProjections.householdId, householdId)),
+        .where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, historyCutoff))),
     ])
 
     const likedRecipeIds = new Set(feedbackRows.filter((row) => row.vote === 'up').map((row) => row.mealId))

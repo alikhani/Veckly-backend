@@ -931,10 +931,16 @@ export async function doGenerateWeekPlan(
   const feedback: TFeedbackState = Object.fromEntries(
     feedbackRows.map((row) => [row.mealId, { vote: row.vote, ...(row.signal ? { signal: row.signal } : {}) }]),
   )
-  const weekHistoryRecords = priorWeekProjections.map((row) => ({
-    weekStartDate: row.weekStartDate,
-    mealIds: Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef),
-  }))
+  // Gap-filled over the full 6-week window, not just the weeks that happen
+  // to have a projection row — `detectFatiguedMeals` walks this list
+  // positionally (each entry = "the next week"), so a week the household
+  // never opened must appear as an empty week, not be silently skipped
+  // (which would make the two weeks on either side of the gap look
+  // adjacent and corrupt the streak/break detection).
+  const priorWeeksByDate = new Map(
+    priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
+  )
+  const weekHistoryRecords = priorWeekStartDates.map((date) => ({ weekStartDate: date, mealIds: priorWeeksByDate.get(date) ?? [] }))
   const recentMealIds = extractRecentMealIds(weekHistoryRecords, weekStartDate)
   const fatiguedMealIds = detectFatiguedMeals(weekHistoryRecords)
   const everCookedRecipeIds = new Set(weekHistoryRecords.flatMap((record) => record.mealIds))

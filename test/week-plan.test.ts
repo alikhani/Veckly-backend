@@ -873,6 +873,43 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.reason).toBe('family-recipe')
     })
 
+    it('does not treat a missing week-history row as adjacent to the weeks around it when detecting fatigue', async () => {
+      await insertProfile([{ day: 'monday' }])
+      // The only candidate recipe — guarantees it wins the day's pick
+      // regardless of scoring, so `reason` directly reveals whether fatigue
+      // detection (mis)fired.
+      const recipe = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Salmon', isPublic: true })
+      const filler = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Filler' })
+      const weeks: Array<[string, string | null]> = [
+        ['2026-04-27', recipe.id], // 6 weeks ago — present
+        ['2026-05-04', recipe.id], // 5 weeks ago — present
+        // 4 weeks ago (2026-05-11): no row at all — the household simply
+        // didn't open the app that week. Must read as "not cooked", not be
+        // skipped over as if the surrounding weeks were back-to-back.
+        ['2026-05-18', recipe.id], // 3 weeks ago — present again
+        ['2026-05-25', filler.id], // 2 weeks ago — absent
+        ['2026-06-01', filler.id], // 1 week ago — absent
+      ]
+      for (const [date, recipeRef] of weeks) {
+        await db.insert(weekPlanProjections).values({
+          householdId: householdAId,
+          weekStartDate: date,
+          state: { weekStarted: true, request: null, meals: { monday: { recipeRef: recipeRef! } }, lockedDays: [], skippedDays: [] } satisfies TWeekPlanProjectionState,
+        })
+      }
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      // Without the gap-fill, weeks -6/-5/-3 read as 3 positionally-back-to-
+      // back weeks (the missing -4 just vanishes from the array), then -2/-1
+      // absent reads as a fresh break — producing a false `back-after-break`.
+      // The recipe was never actually cooked 3 *consecutive* calendar weeks,
+      // so it must not be flagged.
+      expect(summary?.days[0]?.recipe?.title).toBe('Salmon')
+      expect(summary?.days[0]?.reason).toBeNull()
+    })
+
     it('leaves reason and confidence null for a manually assigned meal', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Manual Pick' })
       await appendStreamEvent(

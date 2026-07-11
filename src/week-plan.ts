@@ -571,7 +571,7 @@ function addDays(yyyyMmDd: string, offset: number) {
   return date.toISOString().slice(0, 10)
 }
 
-function isMonday(yyyyMmDd: string) {
+export function isMonday(yyyyMmDd: string) {
   return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
 }
 

@@ -98,6 +98,55 @@
           "topRecipeThisMonth"
         ]
       },
+      "FamilyCookbookRecipe": {
+        "type": "object",
+        "properties": {
+          "recipeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "timesCooked": {
+            "type": "integer"
+          },
+          "weeksSinceCooked": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recipeId",
+          "title",
+          "timesCooked",
+          "weeksSinceCooked"
+        ]
+      },
+      "FamilyCookbook": {
+        "type": "object",
+        "properties": {
+          "totalFamilyLikedCount": {
+            "type": "integer"
+          },
+          "favorites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FamilyCookbookRecipe"
+            }
+          },
+          "dueAgain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FamilyCookbookRecipe"
+            }
+          }
+        },
+        "required": [
+          "totalFamilyLikedCount",
+          "favorites",
+          "dueAgain"
+        ]
+      },
       "Household": {
         "type": "object",
         "properties": {
@@ -3711,6 +3760,58 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/family-cookbook": {
+      "get": {
+        "operationId": "getFamilyCookbook",
+        "summary": "The household's liked recipes, framed as a growing family cookbook",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household favorites and recipes due for a repeat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FamilyCookbook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "weekStartDate must be a Monday"
           },
           "401": {
             "description": "Missing or invalid session"

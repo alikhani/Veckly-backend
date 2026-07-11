@@ -42,6 +42,10 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
+
+`migrations/0029_household_saved_recipes.sql` had been committed (2026-07-11, Plan A3) but not yet applied to the Veckly Supabase project — same category of gap as the 2026-06-16 incident below. Verified via `to_regclass('public.household_saved_recipes')` before touching anything, then applied the migration statement-by-statement directly against production `DATABASE_URL` (no Supabase MCP session available in this session; same net effect as `mcp__supabase__apply_migration`). Confirmed after: table exists, RLS enabled, all 3 policies present, and the `authenticated` role already has full grants on the new table via Supabase's project-level default privileges (consistent with every other RLS table in this project — none of the migration files contain explicit `GRANT` statements, confirming grants are handled automatically at the project level here, not per-migration).
+
 ### 2026-07-10 — Fix: skipping a day deleted its assigned recipe instead of preserving it
 
 Found while building Plan D1/D2 (surfacing `reason`/`confidence` in the week view) — see `PLAN-veckoritual-familjeminne-2026-07.md`. The `day_skipped` fold case in `foldEventIntoProjection` (`src/week-plan.ts`) deleted `state.meals[dayOfWeek]` entirely, contradicting the "skip is a state layered on top of the assignment" model the iOS client already assumed (`WeekDayRowViewModel.withSkipped` — added 2026-07-10 as Plan 0.4 — keeps `recipe`/`mealTitle` locally when skipping, expecting the server to do the same). In practice: skip a planned day, then reload from the server (e.g. `scenePhase == .active`) — the day would come back as `state: 'empty'`, silently losing the recipe, reason, and confidence instead of showing them dimmed alongside a "Skipped" badge.

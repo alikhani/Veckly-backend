@@ -68,6 +68,36 @@
           "timezone"
         ]
       },
+      "FamilyRecap": {
+        "type": "object",
+        "properties": {
+          "plannedWeekCount": {
+            "type": "integer"
+          },
+          "topRecipeThisMonth": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "title",
+              "count"
+            ]
+          }
+        },
+        "required": [
+          "plannedWeekCount",
+          "topRecipeThisMonth"
+        ]
+      },
       "Household": {
         "type": "object",
         "properties": {
@@ -3647,6 +3677,46 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/recap": {
+      "get": {
+        "operationId": "getFamilyRecap",
+        "summary": "A lightweight summary of the household's planning history (Sunday retro)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Planned-week count and the most-cooked recipe this calendar month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FamilyRecap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

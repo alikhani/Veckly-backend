@@ -1103,7 +1103,8 @@
                       "liked-before",
                       "back-after-break",
                       "based-on-feedback",
-                      "new-for-variety"
+                      "new-for-variety",
+                      "quick-weekday"
                     ]
                   },
                   "confidence": {
@@ -1460,7 +1461,8 @@
               "liked-before",
               "back-after-break",
               "based-on-feedback",
-              "new-for-variety"
+              "new-for-variety",
+              "quick-weekday"
             ]
           },
           "confidence": {

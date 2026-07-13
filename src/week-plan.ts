@@ -92,7 +92,7 @@ const PlanningRequestUpdatedPayloadSchema = z.object({
 // Populated only for algorithm-assigned meals (see `doGenerateWeekPlan`) —
 // a manual pick via the meal picker has no algorithmic "why", so both are
 // simply omitted for `source: 'user'` events.
-const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety'])
+const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety', 'quick-weekday'])
 const AssignmentConfidenceSchema = z.enum(['ok', 'low'])
 
 // `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
@@ -861,6 +861,8 @@ export async function doGenerateWeekPlan(
       tx.select({
         id: recipes.id,
         title: recipes.title,
+        servings: recipes.servings,
+        prepTimeMinutes: recipes.prepTimeMinutes,
         tags: recipes.tags,
         ingredients: recipes.ingredients,
         cuisine: recipes.cuisine,
@@ -897,6 +899,11 @@ export async function doGenerateWeekPlan(
   const selectedDayNames: z.infer<typeof dayOfWeek>[] = profile
     ? (profile.selectedDays as Array<{ day: string }>).map((d) => d.day as z.infer<typeof dayOfWeek>)
     : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+  const selectedDaysByName = new Map(
+    profile
+      ? (profile.selectedDays as Array<z.infer<typeof PlanningDaySelectionSchema>>).map((selection) => [selection.day, selection])
+      : selectedDayNames.map((day) => [day, { day }]),
+  )
   const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
 
   const projState = readProjectionState(projection?.state)
@@ -927,6 +934,8 @@ export async function doGenerateWeekPlan(
     title: r.title,
     tags: r.tags as string[],
     ingredients: r.ingredients as Array<{ item: string }> | null,
+    servings: r.servings,
+    prepTimeMinutes: r.prepTimeMinutes,
     cuisine: r.cuisine,
     proteinSource: r.proteinSource,
     mealWeight: r.mealWeight,
@@ -990,14 +999,15 @@ export async function doGenerateWeekPlan(
   for (const day of daysToFill) {
     const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
     const scoringPool = unused.length > 0 ? unused : candidates
-    const ranked = rankCandidates(scoringPool, { householdId, feedback, allRecipes: candidates, weekCtx, recentMealIds, fatiguedMealIds })
+    const selection = selectedDaysByName.get(day)
+    const ranked = rankCandidates(scoringPool, { householdId, feedback, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds })
     const next = ranked[0]
     if (!next) continue
 
     // Evaluated against `weekCtx` as it stood *before* this pick — same
     // order as the web engine (evaluateConfidence, then updateWeekContext).
-    const reason = deriveAssignmentReason(next, { householdId, feedback, allRecipes: candidates, fatiguedMealIds, everCookedRecipeIds })
-    const confidence = evaluateAssignmentConfidence(next, weekCtx)
+    const reason = deriveAssignmentReason(next, { householdId, feedback, allRecipes: candidates, selection, fatiguedMealIds, everCookedRecipeIds })
+    const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
 
     alreadyUsed.add(next.id)
     updateWeekContext(weekCtx, next)

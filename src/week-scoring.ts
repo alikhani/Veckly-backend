@@ -10,10 +10,22 @@ export type TScoringRecipe = {
   title: string
   tags: string[]
   ingredients: Array<{ item: string }> | null
+  servings: number
+  prepTimeMinutes: number | null
   cuisine: string | null
   proteinSource: string | null
   mealWeight: string | null
   householdId: string | null
+}
+
+export type TDaySelection = {
+  day?: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
+  occasion?: 'standard' | 'guests' | 'treat'
+  effortLevel?: 'standard' | 'busy'
+  leftoversIntent?: boolean
+  lateEvening?: boolean
+  cookingTolerance?: 'standard' | 'relaxed'
+  servingsOverride?: number
 }
 
 export type TFeedbackVote = 'up' | 'down'
@@ -104,6 +116,50 @@ export function scoreFamilyRecipe(recipe: TScoringRecipe, householdId: string): 
   return recipe.householdId === householdId ? 12 : 0
 }
 
+function scoreOccasion(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
+  if (!selection) return 0
+  let score = 0
+  if (selection.occasion === 'treat' && recipe.tags.includes('treat')) score += 5
+  if (selection.occasion === 'guests' && recipe.tags.includes('guests')) score += 6
+  if (selection.servingsOverride && selection.servingsOverride > recipe.servings && recipe.tags.includes('guests')) score += 2
+  return score
+}
+
+export function scoreEffortAndLeftovers(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
+  if (!selection) return 0
+  let score = 0
+  const prepTime = recipe.prepTimeMinutes ?? 0
+  if (selection.effortLevel === 'busy') {
+    if (recipe.tags.includes('quick')) score += 6
+    if (recipe.tags.includes('meal-prep')) score += 1.5
+    score -= Math.max(0, prepTime - 30) / 4
+  }
+  if (selection.leftoversIntent) {
+    if (recipe.tags.includes('leftovers')) score += 5
+    if (recipe.tags.includes('meal-prep')) score += 2
+  }
+  return score
+}
+
+export function scoreLateEvening(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
+  if (!selection?.lateEvening) return 0
+  const prepTime = recipe.prepTimeMinutes ?? 0
+  let score = 0
+  if (recipe.tags.includes('quick')) score += 5
+  if (recipe.tags.includes('meal-prep')) score += 1
+  if (recipe.tags.includes('treat') || recipe.tags.includes('guests')) score -= 2
+  score -= Math.max(0, prepTime - 25) / 4
+  return score
+}
+
+export function scoreCookingTolerance(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
+  if (selection?.cookingTolerance !== 'relaxed') return 0
+  let score = 0
+  if (recipe.tags.includes('treat') || recipe.tags.includes('guests')) score += 3
+  if ((recipe.prepTimeMinutes ?? 0) >= 35) score += 2
+  return score
+}
+
 export type TWeekContext = {
   placedCuisines: Record<string, number>
   placedProteins: Record<string, number>
@@ -146,6 +202,7 @@ export type TScoringContext = {
   feedback: TFeedbackState
   allRecipes: TScoringRecipe[]
   weekCtx: TWeekContext
+  selection?: TDaySelection
   recentMealIds?: TRecentMealIds
   fatiguedMealIds?: string[]
 }
@@ -153,6 +210,10 @@ export type TScoringContext = {
 export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number {
   let score = 0
   score += scoreFamilyRecipe(recipe, ctx.householdId)
+  score += scoreOccasion(recipe, ctx.selection)
+  score += scoreEffortAndLeftovers(recipe, ctx.selection)
+  score += scoreLateEvening(recipe, ctx.selection)
+  score += scoreCookingTolerance(recipe, ctx.selection)
   score += scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes)
   score += scoreWeekConstraints(recipe, ctx.weekCtx)
   score += scoreRecency(recipe, ctx.recentMealIds)
@@ -204,13 +265,14 @@ function processWeekRecord(state: TMealStreakState, present: boolean): TMealStre
   return { streak: 0, streakBroke: state.streakBroke, weeksSinceBreak: state.streakBroke ? state.weeksSinceBreak + 1 : state.weeksSinceBreak }
 }
 
-export type TAssignmentReason = 'family-recipe' | 'liked-before' | 'back-after-break' | 'based-on-feedback' | 'new-for-variety'
+export type TAssignmentReason = 'family-recipe' | 'liked-before' | 'back-after-break' | 'based-on-feedback' | 'new-for-variety' | 'quick-weekday'
 export type TAssignmentConfidence = 'ok' | 'low'
 
 export type TReasonContext = {
   householdId: string
   feedback: TFeedbackState
   allRecipes: TScoringRecipe[]
+  selection?: TDaySelection
   fatiguedMealIds?: string[]
   everCookedRecipeIds?: Set<string>
 }
@@ -220,24 +282,24 @@ export type TReasonContext = {
  * user, not how strongly it scored. An explicit vote outranks mere
  * ownership: "you liked this" is more meaningful than "it's your own
  * recipe" when both are true (the latter is redundant — they already know
- * it's theirs). Day-level signals (busy/lateEvening/occasion — see web's
- * `deriveReasonTags`) aren't ported: the backend has no day-selection data
- * yet (see A4 in the plan doc), so a pick with none of these signals simply
- * has no `reason`. */
+ * it's theirs). Day-level signals are intentionally reduced to the one
+ * user-facing reason this backend exposes today: a quick fit for a busy or
+ * late evening. */
 export function deriveAssignmentReason(recipe: TScoringRecipe, ctx: TReasonContext): TAssignmentReason | undefined {
   if (ctx.feedback[recipe.id]?.vote === 'up') return 'liked-before'
   if (recipe.householdId === ctx.householdId) return 'family-recipe'
+  if ((ctx.selection?.effortLevel === 'busy' || ctx.selection?.lateEvening) && recipe.tags.includes('quick')) return 'quick-weekday'
   if (ctx.fatiguedMealIds?.includes(recipe.id)) return 'back-after-break'
   if (scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes) > 0) return 'based-on-feedback'
   if (ctx.everCookedRecipeIds && !ctx.everCookedRecipeIds.has(recipe.id)) return 'new-for-variety'
   return undefined
 }
 
-/** Ported from `evaluateConfidence` in week-constraint-scoring.ts, minus the
- * `hearty-on-busy-day` branch (needs day-selection data the backend doesn't
- * have yet). Must be called with the week context as it stood *before* this
- * recipe was placed — same call order as the web engine. */
-export function evaluateAssignmentConfidence(recipe: TScoringRecipe, weekCtx: TWeekContext): TAssignmentConfidence {
+/** Ported from `evaluateConfidence` in week-constraint-scoring.ts. Must be
+ * called with the week context as it stood *before* this recipe was placed —
+ * same call order as the web engine. */
+export function evaluateAssignmentConfidence(recipe: TScoringRecipe, weekCtx: TWeekContext, selection?: TDaySelection): TAssignmentConfidence {
+  if (recipe.mealWeight === 'hearty' && selection?.effortLevel === 'busy') return 'low'
   const lastWeight = weekCtx.placedWeights[weekCtx.placedWeights.length - 1]
   if (recipe.mealWeight === 'hearty' && lastWeight === 'hearty') return 'low'
   if (recipe.cuisine && (weekCtx.placedCuisines[recipe.cuisine] ?? 0) >= 2) return 'low'

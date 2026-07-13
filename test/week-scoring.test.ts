@@ -7,8 +7,11 @@ import {
   evaluateAssignmentConfidence,
   extractRecentMealIds,
   rankCandidates,
+  scoreCookingTolerance,
+  scoreEffortAndLeftovers,
   scoreFamilyRecipe,
   scoreFatigue,
+  scoreLateEvening,
   scoreMeal,
   scoreMealFromFeedback,
   scoreRecency,
@@ -25,6 +28,8 @@ function recipe(overrides: Partial<TScoringRecipe> & { id: string }): TScoringRe
     title: overrides.id,
     tags: [],
     ingredients: null,
+    servings: 4,
+    prepTimeMinutes: null,
     cuisine: null,
     proteinSource: null,
     mealWeight: null,
@@ -132,6 +137,36 @@ describe('scoreFamilyRecipe', () => {
   })
 })
 
+describe('day-level scoring', () => {
+  it('boosts quick and meal-prep recipes on busy days and penalizes long prep', () => {
+    const quick = recipe({ id: 'quick', tags: ['quick', 'meal-prep'], prepTimeMinutes: 20 })
+    const slow = recipe({ id: 'slow', prepTimeMinutes: 50 })
+
+    expect(scoreEffortAndLeftovers(quick, { effortLevel: 'busy' })).toBe(7.5)
+    expect(scoreEffortAndLeftovers(slow, { effortLevel: 'busy' })).toBe(-5)
+  })
+
+  it('boosts leftovers-friendly recipes when leftovers are intended', () => {
+    const batch = recipe({ id: 'batch', tags: ['leftovers', 'meal-prep'] })
+
+    expect(scoreEffortAndLeftovers(batch, { leftoversIntent: true })).toBe(7)
+  })
+
+  it('boosts quick late-evening recipes and penalizes long or guest/treat recipes', () => {
+    const quick = recipe({ id: 'quick', tags: ['quick'], prepTimeMinutes: 20 })
+    const guest = recipe({ id: 'guest', tags: ['guests'], prepTimeMinutes: 45 })
+
+    expect(scoreLateEvening(quick, { lateEvening: true })).toBe(5)
+    expect(scoreLateEvening(guest, { lateEvening: true })).toBe(-7)
+  })
+
+  it('boosts relaxed cooking matches', () => {
+    const project = recipe({ id: 'project', tags: ['treat'], prepTimeMinutes: 45 })
+
+    expect(scoreCookingTolerance(project, { cookingTolerance: 'relaxed' })).toBe(5)
+  })
+})
+
 describe('week constraint scoring', () => {
   it('does not penalize the first two occurrences of a cuisine', () => {
     const ctx = createWeekContext()
@@ -200,17 +235,18 @@ describe('rankCandidates', () => {
 
 describe('scoreMeal', () => {
   it('combines feedback, recency, fatigue, week-constraints, and family-recipe boost', () => {
-    const meal = recipe({ id: 'a', householdId: 'household-1', cuisine: 'italian' })
+    const meal = recipe({ id: 'a', householdId: 'household-1', cuisine: 'italian', tags: ['quick'], prepTimeMinutes: 20 })
     const ctx = baseContext({
       householdId: 'household-1',
       feedback: { a: { vote: 'up' } },
       allRecipes: [meal],
+      selection: { effortLevel: 'busy' },
       recentMealIds: { lastWeek: ['a'], twoWeeksAgo: [] },
       fatiguedMealIds: ['a'],
     })
 
-    // +12 family recipe, +8 liked, -8 recency (last week), -10 fatigue, +0 week-constraints (first cuisine placement)
-    expect(scoreMeal(meal, ctx)).toBe(12 + 8 - 8 - 10)
+    // +12 family recipe, +6 quick busy-day fit, +8 liked, -8 recency (last week), -10 fatigue, +0 week-constraints
+    expect(scoreMeal(meal, ctx)).toBe(12 + 6 + 8 - 8 - 10)
   })
 })
 
@@ -308,6 +344,13 @@ describe('deriveAssignmentReason', () => {
     expect(deriveAssignmentReason(pasta, ctx)).toBe('family-recipe')
   })
 
+  it('picks quick-weekday for a quick recipe on a busy day', () => {
+    const soup = recipe({ id: 'soup', tags: ['quick'], householdId: null })
+    const ctx = baseReasonContext({ selection: { effortLevel: 'busy' } })
+
+    expect(deriveAssignmentReason(soup, ctx)).toBe('quick-weekday')
+  })
+
   it('picks back-after-break for a fatigued meal that still won its slot', () => {
     const pasta = recipe({ id: 'pasta', householdId: null })
     const ctx = baseReasonContext({ fatiguedMealIds: ['pasta'] })
@@ -339,6 +382,13 @@ describe('deriveAssignmentReason', () => {
 })
 
 describe('evaluateAssignmentConfidence', () => {
+  it('flags low confidence for a hearty meal on a busy day', () => {
+    const ctx = createWeekContext()
+    const stew = recipe({ id: 'stew', mealWeight: 'hearty' })
+
+    expect(evaluateAssignmentConfidence(stew, ctx, { effortLevel: 'busy' })).toBe('low')
+  })
+
   it('flags low confidence for a hearty meal placed right after another hearty meal', () => {
     const ctx = createWeekContext()
     ctx.placedWeights.push('hearty')

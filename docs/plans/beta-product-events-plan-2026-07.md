@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — Supabase-backed event log implemented 2026-07-14.
+In progress — Supabase-backed event log, iOS event wiring, and 2-week beta script ready 2026-07-14.
 
 ## Goal
 
@@ -83,6 +83,10 @@ group by household_id
 order by onboarded_at desc nulls last;
 ```
 
+## Beta Script
+
+Use `docs/plans/beta-research-script-2026-07.md` for the first 5-10 TestFlight households. The script maps household tasks directly to the v1 events above so qualitative notes can be compared with Supabase funnel data.
+
 ## Next Step
 
-Wire iOS to send the V1 events at the moments already implemented in onboarding, week generation/completion, shopping handoff, partner invite, and retro.
+Add a lightweight feedback channel after retro so families can report where the plan failed without needing a separate interview.

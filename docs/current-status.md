@@ -49,6 +49,8 @@ Phase 7 beta measurement now has a backend-owned event log instead of relying on
 
 The v1 event vocabulary is intentionally small: onboarding completed, first week generated, week completed, shopping opened after completion, shopping shared, partner invite clicked, shopping main list completed, and retro completed. Results are read from Supabase SQL/dashboard; the public client API only writes events. See `docs/plans/beta-product-events-plan-2026-07.md`.
 
+The first 2-week family beta script is ready in `docs/plans/beta-research-script-2026-07.md`. It maps onboarding, first planning, shopping handoff, household sharing, week-2 return, and retro prompts to the v1 event funnel so qualitative notes and Supabase data can be reviewed together after the first 5 households.
+
 ### 2026-07-14 — Household meal signals complete for v1 (Phase 5)
 
 Phase 5 of the iOS family-experience work needs a real household-level signal for "this works for us" without exposing partner-private feedback. Decision preserved: keep `meal_feedback` private and per-user exactly as-is, and add a separate shared household model: `household_meal_signals` with `works_for_family` / `not_for_us`, active-member RLS, and no partner vote exposure.

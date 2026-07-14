@@ -243,7 +243,7 @@ Ask after week 2:
 
 ## Output After First 5 Families
 
-Create a short synthesis with:
+Fill in `docs/plans/beta-first-five-review-template-2026-07.md` with:
 
 - Funnel table from Supabase.
 - 5 strongest quotes.

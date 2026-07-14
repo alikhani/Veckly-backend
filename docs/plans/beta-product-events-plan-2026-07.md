@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — Supabase-backed event log, iOS event wiring, and 2-week beta script ready 2026-07-14.
+In progress — Supabase-backed event log, iOS event wiring, 2-week beta script, and first-five review template ready 2026-07-14.
 
 ## Goal
 
@@ -87,6 +87,10 @@ order by onboarded_at desc nulls last;
 
 Use `docs/plans/beta-research-script-2026-07.md` for the first 5-10 TestFlight households. The script maps household tasks directly to the v1 events above so qualitative notes can be compared with Supabase funnel data.
 
+## First-Five Review
+
+Use `docs/plans/beta-first-five-review-template-2026-07.md` after the first five households complete or drop from the two-week test. The template forces one decision before Phase 8: fix the core loop, improve shopping/feedback handoff, or proceed to advanced intelligence.
+
 ## Next Step
 
-Add a lightweight feedback channel after retro so families can report where the plan failed without needing a separate interview.
+Run the first five household beta and fill in the review template before starting Phase 8.

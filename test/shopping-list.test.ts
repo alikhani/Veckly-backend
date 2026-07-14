@@ -619,5 +619,34 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       ])
     })
+
+    it('deduplicates custom shopping items by label and category in summary and state reads', async () => {
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          listStarted: true,
+          checkedItems: {},
+          pantryStock: {},
+          customItems: [
+            { itemKey: 'custom:first-servetter', label: 'Servetter', category: 'Other' },
+            { itemKey: 'custom:second-servetter', label: ' servetter ', category: 'Other' },
+          ],
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Other',
+          items: [{ itemKey: 'custom:first-servetter', label: 'Servetter', amount: null, unit: null, checked: false, isCustom: true }],
+        },
+      ])
+      expect(state.state?.customItems).toEqual([
+        { itemKey: 'custom:first-servetter', label: 'Servetter', category: 'Other' },
+      ])
+    })
   })
 })

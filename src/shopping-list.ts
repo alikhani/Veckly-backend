@@ -410,6 +410,20 @@ function normalizeKeyPart(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
 }
 
+function customItemIdentity(item: { label: string; category: string }) {
+  return `${normalizeKeyPart(item.category)}:${(item.label ?? '').trim().toLowerCase().replace(/\s+/g, ' ')}`
+}
+
+function deduplicateCustomItems(items: Array<{ itemKey: string; label: string; category: string }>) {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key = customItemIdentity(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 function buildItemKey(ingredient: TRecipeIngredient) {
   const category = normalizeKeyPart(ingredient.category || 'Other')
   const item = normalizeKeyPart(ingredient.item)
@@ -483,21 +497,22 @@ function readShoppingProjectionState(state: unknown): TShoppingListProjectionSta
     listStarted: candidate?.listStarted === true,
     checkedItems,
     pantryStock,
-    customItems,
+    customItems: deduplicateCustomItems(customItems),
   }
 }
 
 function toShoppingStatePayload(state: TShoppingListProjectionState): z.infer<typeof ShoppingStatePayloadSchema> | null {
+  const customItems = deduplicateCustomItems(state.customItems)
   if (
     !state.listStarted
     && Object.keys(state.checkedItems).length === 0
     && Object.keys(state.pantryStock).length === 0
-    && state.customItems.length === 0
+    && customItems.length === 0
   ) return null
   return {
     checkedItems: checkedItemsMapToArray(state.checkedItems),
     pantryStock: state.pantryStock,
-    customItems: state.customItems,
+    customItems,
   }
 }
 
@@ -548,9 +563,12 @@ async function replaceShoppingListState(
       .orderBy(desc(shoppingListEvents.sequenceNumber))
       .limit(1)
 
-    const payload: z.infer<typeof ShoppingListEventPayloadSchema> = args.state === null
+    const sanitizedState = args.state
+      ? { ...args.state, customItems: deduplicateCustomItems(args.state.customItems ?? []) }
+      : null
+    const payload: z.infer<typeof ShoppingListEventPayloadSchema> = sanitizedState === null
       ? { eventType: 'shopping_list_cleared' }
-      : { eventType: 'shopping_state_replaced', state: args.state }
+      : { eventType: 'shopping_state_replaced', state: sanitizedState }
     const { eventType, ...payloadFields } = payload
     const nextSequenceNumber = (latest?.sequenceNumber ?? 0) + 1
 

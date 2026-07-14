@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
   computeCurrentStreak,
@@ -16,6 +16,7 @@ import {
   rankCandidates,
   updateWeekContext,
   type TFeedbackState,
+  type THouseholdMealSignalState,
   type TScoringRecipe,
 } from './week-scoring.js'
 
@@ -851,7 +852,7 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, priorWeekProjections] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
@@ -887,6 +888,11 @@ export async function doGenerateWeekPlan(
       tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })
         .from(mealFeedback)
         .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId)))
+    ),
+    withRls(db, accessToken, (tx) =>
+      tx.select({ mealId: householdMealSignals.mealId, signal: householdMealSignals.signal })
+        .from(householdMealSignals)
+        .where(eq(householdMealSignals.householdId, householdId))
     ),
     withRls(db, accessToken, (tx) =>
       tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
@@ -950,6 +956,7 @@ export async function doGenerateWeekPlan(
   const feedback: TFeedbackState = Object.fromEntries(
     feedbackRows.map((row) => [row.mealId, { vote: row.vote, ...(row.signal ? { signal: row.signal } : {}) }]),
   )
+  const householdSignals: THouseholdMealSignalState = Object.fromEntries(householdSignalRows.map((row) => [row.mealId, row.signal]))
   // Gap-filled over the full 6-week window, not just the weeks that happen
   // to have a projection row — `detectFatiguedMeals` walks this list
   // positionally (each entry = "the next week"), so a week the household
@@ -1000,7 +1007,7 @@ export async function doGenerateWeekPlan(
     const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
     const scoringPool = unused.length > 0 ? unused : candidates
     const selection = selectedDaysByName.get(day)
-    const ranked = rankCandidates(scoringPool, { householdId, feedback, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds })
+    const ranked = rankCandidates(scoringPool, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds })
     const next = ranked[0]
     if (!next) continue
 

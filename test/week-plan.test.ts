@@ -5,6 +5,7 @@ import { createDb } from '../src/db.js'
 import { appendStreamEvent } from '../src/event-stream.js'
 import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
+import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
@@ -39,6 +40,7 @@ describeWithDb('Week-plan event log + projection', () => {
   // before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
@@ -61,6 +63,7 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_saved_recipes"`)
     await db.execute(sql`delete from "recipes"`)
@@ -894,6 +897,43 @@ describeWithDb('Week-plan event log + projection', () => {
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Household Recipe')
       expect(summary?.days[0]?.reason).toBe('family-recipe')
+    })
+
+    it('prefers a recipe marked works for family over an otherwise-equal neutral recipe', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const familyPick = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Family Works Pasta' })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Neutral Pasta' })
+      await upsertHouseholdMealSignal(db, fakeAccessToken(userA), userA, householdAId, familyPick.id, 'works_for_family')
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Family Works Pasta')
+    })
+
+    it('penalizes a recipe marked not for us but still uses it when it is the only candidate', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const vetoed = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Only Possible Pasta' })
+      await upsertHouseholdMealSignal(db, fakeAccessToken(userA), userA, householdAId, vetoed.id, 'not_for_us')
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Only Possible Pasta')
+    })
+
+    it('lets a not-for-us household signal outrank a personal up-vote from the generating user', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const vetoedLiked = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Liked But Not For Us' })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Neutral Pasta' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, vetoedLiked.id, { vote: 'up' })
+      await upsertHouseholdMealSignal(db, fakeAccessToken(userA), userA, householdAId, vetoedLiked.id, 'not_for_us')
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Neutral Pasta')
     })
 
     it('lets a regenerate re-pick the best recipe even if it was already assigned to a day being regenerated', async () => {

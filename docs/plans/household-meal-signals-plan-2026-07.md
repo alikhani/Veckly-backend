@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — backend schema/API slice complete 2026-07-14. iOS product UI and generation scoring are not started.
+In progress — backend schema/API and generation scoring slices complete 2026-07-14. iOS product UI is not started.
 
 ## Why this exists
 
@@ -108,17 +108,21 @@ Do not include partner-private vote data in this response.
 - OpenAPI regenerated in backend and iOS; Swift OpenAPI client regenerated.
 - `test/household-meal-signals.test.ts` covers shared visibility, cross-household isolation, private feedback isolation, direct RLS writes, removal, and unauthenticated route behavior.
 - `test/migrations.ts` now recognizes post-0029 migrations and grants authenticated access to `household_meal_signals`.
+- `doGenerateWeekPlan` now reads `household_meal_signals` and passes them into `rankCandidates`.
+- `week-scoring.ts` now scores household signals separately from private `meal_feedback`.
+- `test/week-scoring.test.ts` covers the scoring weights.
+- `test/week-plan.test.ts` covers works-for-family preference, not-for-us penalty, and not-for-us as non-absolute when it is the only candidate.
 
 ## Scoring Rules
 
-Initial generation behavior should be simple and explainable:
+Implemented generation behavior is simple and explainable:
 
-- `works_for_family`: meaningful positive boost across the household.
-- `not_for_us`: strong negative penalty across the household.
+- `works_for_family`: +10 positive boost across the household.
+- `not_for_us`: -20 strong negative penalty across the household.
 - Personal `meal_feedback` still applies for the generating user.
 - Allergy/avoid-ingredient filtering remains stronger than household signal scoring.
 
-`not_for_us` should not be an absolute exclusion in v1. Families may change their mind, and the product copy should avoid implying safety/allergy semantics.
+`not_for_us` is not an absolute exclusion in v1. Families may change their mind, and the product copy should avoid implying safety/allergy semantics. If it is the only available candidate, generation can still use it; if there is a reasonable neutral alternative, the neutral meal should win.
 
 ## iOS Placement
 
@@ -150,4 +154,4 @@ iOS:
 
 ## Next Slice
 
-Add generation scoring support so `works_for_family` boosts candidates and `not_for_us` strongly penalizes candidates without becoming an absolute allergy-style exclusion. Then add the smallest iOS store/UI surface in retro or DayDetailSheet.
+Add the smallest iOS store/UI surface in retro or DayDetailSheet, keeping private thumbs up/down visually separate from the shared household signal.

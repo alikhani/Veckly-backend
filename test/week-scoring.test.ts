@@ -12,6 +12,7 @@ import {
   scoreFamilyRecipe,
   scoreFatigue,
   scoreLateEvening,
+  scoreHouseholdMealSignal,
   scoreMeal,
   scoreMealFromFeedback,
   scoreRecency,
@@ -137,6 +138,20 @@ describe('scoreFamilyRecipe', () => {
   })
 })
 
+describe('scoreHouseholdMealSignal', () => {
+  it('boosts a meal that works for the family', () => {
+    expect(scoreHouseholdMealSignal(recipe({ id: 'tacos' }), { tacos: 'works_for_family' })).toBe(10)
+  })
+
+  it('strongly penalizes a meal marked not for us without excluding it absolutely', () => {
+    expect(scoreHouseholdMealSignal(recipe({ id: 'tacos' }), { tacos: 'not_for_us' })).toBe(-20)
+  })
+
+  it('is neutral when the household has no signal for the meal', () => {
+    expect(scoreHouseholdMealSignal(recipe({ id: 'tacos' }), { pasta: 'works_for_family' })).toBe(0)
+  })
+})
+
 describe('day-level scoring', () => {
   it('boosts quick and meal-prep recipes on busy days and penalizes long prep', () => {
     const quick = recipe({ id: 'quick', tags: ['quick', 'meal-prep'], prepTimeMinutes: 20 })
@@ -239,14 +254,15 @@ describe('scoreMeal', () => {
     const ctx = baseContext({
       householdId: 'household-1',
       feedback: { a: { vote: 'up' } },
+      householdSignals: { a: 'works_for_family' },
       allRecipes: [meal],
       selection: { effortLevel: 'busy' },
       recentMealIds: { lastWeek: ['a'], twoWeeksAgo: [] },
       fatiguedMealIds: ['a'],
     })
 
-    // +12 family recipe, +6 quick busy-day fit, +8 liked, -8 recency (last week), -10 fatigue, +0 week-constraints
-    expect(scoreMeal(meal, ctx)).toBe(12 + 6 + 8 - 8 - 10)
+    // +12 family recipe, +6 quick busy-day fit, +10 household signal, +8 liked, -8 recency (last week), -10 fatigue, +0 week-constraints
+    expect(scoreMeal(meal, ctx)).toBe(12 + 6 + 10 + 8 - 8 - 10)
   })
 })
 

@@ -39,6 +39,8 @@ export type TFeedbackSignal =
 
 export type TFeedbackEntry = { vote: TFeedbackVote; signal?: TFeedbackSignal }
 export type TFeedbackState = Record<string, TFeedbackEntry>
+export type THouseholdMealSignal = 'works_for_family' | 'not_for_us'
+export type THouseholdMealSignalState = Record<string, THouseholdMealSignal>
 
 export type TRecentMealIds = { lastWeek: string[]; twoWeeksAgo: string[] }
 
@@ -114,6 +116,13 @@ export function scoreFatigue(recipe: TScoringRecipe, fatiguedMealIds: string[] |
  * scratch) is preferred over the shared curated library. */
 export function scoreFamilyRecipe(recipe: TScoringRecipe, householdId: string): number {
   return recipe.householdId === householdId ? 12 : 0
+}
+
+export function scoreHouseholdMealSignal(recipe: TScoringRecipe, householdSignals: THouseholdMealSignalState | undefined): number {
+  const signal = householdSignals?.[recipe.id]
+  if (signal === 'works_for_family') return 10
+  if (signal === 'not_for_us') return -20
+  return 0
 }
 
 function scoreOccasion(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
@@ -200,6 +209,7 @@ export function updateWeekContext(ctx: TWeekContext, recipe: TScoringRecipe): vo
 export type TScoringContext = {
   householdId: string
   feedback: TFeedbackState
+  householdSignals?: THouseholdMealSignalState
   allRecipes: TScoringRecipe[]
   weekCtx: TWeekContext
   selection?: TDaySelection
@@ -214,6 +224,7 @@ export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number 
   score += scoreEffortAndLeftovers(recipe, ctx.selection)
   score += scoreLateEvening(recipe, ctx.selection)
   score += scoreCookingTolerance(recipe, ctx.selection)
+  score += scoreHouseholdMealSignal(recipe, ctx.householdSignals)
   score += scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes)
   score += scoreWeekConstraints(recipe, ctx.weekCtx)
   score += scoreRecency(recipe, ctx.recentMealIds)

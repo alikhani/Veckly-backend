@@ -482,6 +482,48 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
     })
 
+    it('localizes common builtin ingredient labels for Swedish shopping summaries', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Rice bowl',
+        ingredients: [
+          { item: 'chicken breast', amount: '150', unit: 'g', category: 'Protein' },
+          { item: 'bell peppers', amount: '1', unit: 'pc', category: 'Produce' },
+          { item: 'soy sauce', amount: '1.5', unit: 'tbsp', category: 'Pantry' },
+        ],
+      })
+      await db.update(recipes)
+        .set({ householdId: null, source: 'builtin', isPublic: true })
+        .where(eq(recipes.id, recipe.id))
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: { 'protein:chicken-breast:g': true }, pantryStock: {}, customItems: [] },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { language: 'sv' })
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Pantry',
+          items: [{ itemKey: 'pantry:soy-sauce:tbsp', label: 'soja', amount: '1.5', unit: 'msk', checked: false, isCustom: false }],
+        },
+        {
+          category: 'Produce',
+          items: [{ itemKey: 'produce:bell-peppers:pc', label: 'paprika', amount: '1', unit: 'st', checked: false, isCustom: false }],
+        },
+        {
+          category: 'Protein',
+          items: [{ itemKey: 'protein:chicken-breast:g', label: 'kycklingfilé', amount: '150', unit: 'g', checked: true, isCustom: false }],
+        },
+      ])
+    })
+
     it('does not expose another household shopping summary across RLS', async () => {
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
 

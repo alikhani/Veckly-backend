@@ -295,6 +295,103 @@ type TWeekPlanProjectionState = {
   meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string }>>
 }
 
+type TShoppingListLanguage = 'en' | 'sv'
+
+const SWEDISH_INGREDIENT_LABELS: Record<string, string> = {
+  avocado: 'avokado',
+  'bacon or pancetta': 'bacon eller pancetta',
+  'basil pesto': 'basilikapesto',
+  'basmati rice': 'basmatiris',
+  'beef mince': 'nötfärs',
+  'beef stew meat': 'grytbitar av nöt',
+  'beef stock': 'köttbuljong',
+  'beef strips': 'strimlat nötkött',
+  'bell peppers': 'paprika',
+  'black beans': 'svarta bönor',
+  broccoli: 'broccoli',
+  butter: 'smör',
+  cabbage: 'kål',
+  carrot: 'morot',
+  carrots: 'morötter',
+  'cherry tomatoes': 'körsbärstomater',
+  'chicken breast': 'kycklingfilé',
+  'chicken stock': 'kycklingbuljong',
+  chickpeas: 'kikärtor',
+  'coconut milk': 'kokosmjölk',
+  'cooked rice': 'kokt ris',
+  'cooking cream': 'matlagningsgrädde',
+  corn: 'majs',
+  'crushed tomatoes': 'krossade tomater',
+  cucumber: 'gurka',
+  'curry paste': 'currypasta',
+  egg: 'ägg',
+  eggs: 'ägg',
+  feta: 'fetaost',
+  flour: 'mjöl',
+  'flour tortillas': 'tortillabröd',
+  'frozen vegetables': 'frysta grönsaker',
+  garlic: 'vitlök',
+  'grated cheese': 'riven ost',
+  'green beans': 'gröna bönor',
+  'green curry paste': 'grön currypasta',
+  ham: 'skinka',
+  honey: 'honung',
+  leek: 'purjolök',
+  leeks: 'purjolök',
+  lemon: 'citron',
+  lime: 'lime',
+  mayonnaise: 'majonnäs',
+  milk: 'mjölk',
+  mushrooms: 'svamp',
+  'olive oil': 'olivolja',
+  onion: 'lök',
+  parmesan: 'parmesan',
+  pasta: 'pasta',
+  peas: 'ärtor',
+  potatoes: 'potatis',
+  'red lentils': 'röda linser',
+  rice: 'ris',
+  'rice noodles': 'risnudlar',
+  'rice vinegar': 'risvinäger',
+  'risotto rice': 'risottoris',
+  salsa: 'salsa',
+  'sesame oil': 'sesamolja',
+  'sesame seeds': 'sesamfrön',
+  shrimp: 'räkor',
+  'soy sauce': 'soja',
+  spaghetti: 'spaghetti',
+  spinach: 'spenat',
+  'sweet potato': 'sötpotatis',
+  tomato: 'tomat',
+  tomatoes: 'tomater',
+  tofu: 'tofu',
+  'vegetable oil': 'vegetabilisk olja',
+  'vegetable stock': 'grönsaksbuljong',
+  zucchini: 'zucchini',
+}
+
+const SWEDISH_UNIT_LABELS: Record<string, string> = {
+  can: 'burk',
+  cloves: 'klyftor',
+  pc: 'st',
+  tbsp: 'msk',
+  tsp: 'tsk',
+}
+
+function shoppingListLanguageFromAcceptLanguage(value: string | undefined): TShoppingListLanguage {
+  return value?.toLowerCase().split(',').some((part) => part.trim().startsWith('sv')) ? 'sv' : 'en'
+}
+
+function localizeShoppingIngredientLabel(label: string, language: TShoppingListLanguage) {
+  if (language !== 'sv') return label
+  return SWEDISH_INGREDIENT_LABELS[label.trim().toLowerCase()] ?? label
+}
+
+function localizeShoppingUnit(unit: string | null, language: TShoppingListLanguage) {
+  if (!unit || language !== 'sv') return unit
+  return SWEDISH_UNIT_LABELS[unit.trim().toLowerCase()] ?? unit
+}
+
 function normalizeKeyPart(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
 }
@@ -468,7 +565,14 @@ async function replaceShoppingListState(
   })
 }
 
-export async function getShoppingListSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+export async function getShoppingListSummary(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  weekStartDate: string,
+  options: { language?: TShoppingListLanguage } = {},
+) {
+  const language = options.language ?? 'en'
   return withRls(db, accessToken, async (tx) => {
     const [household] = await tx
       .select({ id: households.id, name: households.name })
@@ -498,7 +602,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
 
     const recipeRows = recipeIds.length
       ? await tx
-        .select({ id: recipes.id, ingredients: recipes.ingredients })
+        .select({ id: recipes.id, ingredients: recipes.ingredients, source: recipes.source })
         .from(recipes)
         .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
       : []
@@ -510,6 +614,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
           ingredient,
           rawItemKey: buildItemKey(ingredient),
           canonicalItemKey: buildCanonicalItemKey(ingredient),
+          shouldLocalize: recipe.source === 'builtin',
         })),
     )
     const canonicalKeyVariants = new Map<string, Set<string>>()
@@ -523,13 +628,14 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
       category: string
       label: string
       originalItemKeys: Set<string>
+      shouldLocalize: boolean
       totalAmount: number | null
       canSum: boolean
       unit: string | null
     }
     const accumulator = new Map<string, TItemAccumulator>()
 
-    for (const { ingredient, rawItemKey, canonicalItemKey } of ingredientRows) {
+    for (const { ingredient, rawItemKey, canonicalItemKey, shouldLocalize } of ingredientRows) {
       const itemKey = (canonicalKeyVariants.get(canonicalItemKey)?.size ?? 0) > 1 ? canonicalItemKey : rawItemKey
       const rawAmount = ingredient.amount?.trim() || null
       const parsed = rawAmount ? parseFloat(rawAmount) : null
@@ -538,6 +644,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
       const existing = accumulator.get(itemKey)
       if (existing) {
         existing.originalItemKeys.add(rawItemKey)
+        existing.shouldLocalize ||= shouldLocalize
         existing.label = preferredShoppingLabel(existing.label, ingredient.item)
         if (existing.canSum && validNum) {
           existing.totalAmount = (existing.totalAmount ?? 0) + parsed!
@@ -550,6 +657,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
           category: ingredient.category?.trim() || 'Other',
           label: ingredient.item.trim(),
           originalItemKeys: new Set([rawItemKey]),
+          shouldLocalize,
           totalAmount: validNum ? parsed! : null,
           canSum: validNum,
           unit: ingredient.unit?.trim() || null,
@@ -568,9 +676,9 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
     for (const [itemKey, item] of accumulator) {
       itemsByKey.set(itemKey, {
         category: item.category,
-        label: item.label,
+        label: item.shouldLocalize ? localizeShoppingIngredientLabel(item.label, language) : item.label,
         amount: item.totalAmount !== null ? formatAggregatedAmount(item.totalAmount) : null,
-        unit: item.unit,
+        unit: item.shouldLocalize ? localizeShoppingUnit(item.unit, language) : item.unit,
         checked: shoppingState.checkedItems[itemKey] === true || [...item.originalItemKeys].some((originalKey) => shoppingState.checkedItems[originalKey] === true),
         isCustom: false,
       })
@@ -687,7 +795,9 @@ export function buildShoppingListRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
-    const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate)
+    const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate, {
+      language: shoppingListLanguageFromAcceptLanguage(c.req.header('Accept-Language')),
+    })
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
     c.header('Cache-Control', 'private, max-age=300')

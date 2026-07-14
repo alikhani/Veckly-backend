@@ -71,7 +71,7 @@ Production deploy note: the backend was manually deployed to Vercel on 2026-07-1
 
 Shopping list summary now excludes meals whose dinner date is before today. This keeps week history intact in the plan while preventing yesterday's ingredients from staying in the active shopping basket. Tests pin the behavior with `today` injected so date-sensitive cases remain deterministic. Deployed to production on 2026-07-14 as `dpl_HCR2vMwAeaDse41Qz2nXN32gXkJv` (`https://veckly-backend.vercel.app`).
 
-Follow-up fix: iOS now sends `X-Veckly-Today: YYYY-MM-DD` from the device's local day, and shopping summary uses that value when present. This avoids server-clock drift in simulator/TestFlight: yesterday's meals can be excluded while a newly added future meal, such as Wednesday carbonara, still contributes ingredients immediately.
+Follow-up fix: iOS now sends `X-Veckly-Today: YYYY-MM-DD` from the device's local day, and shopping summary uses that value when present. This avoids server-clock drift in simulator/TestFlight: yesterday's meals can be excluded while a newly added future meal, such as Wednesday carbonara, still contributes ingredients immediately. Deployed to production on 2026-07-14 as `dpl_GHcWbP68amBmfMx1Hmso3n6yZL9m` (`https://veckly-backend.vercel.app`).
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

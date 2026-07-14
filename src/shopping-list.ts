@@ -392,6 +392,16 @@ function localizeShoppingUnit(unit: string | null, language: TShoppingListLangua
   return SWEDISH_UNIT_LABELS[unit.trim().toLowerCase()] ?? unit
 }
 
+function isoDateUTC(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function addDaysUTC(dateString: string, offset: number) {
+  const date = new Date(`${dateString}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + offset)
+  return isoDateUTC(date)
+}
+
 function normalizeKeyPart(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
 }
@@ -570,9 +580,10 @@ export async function getShoppingListSummary(
   accessToken: string,
   householdId: string,
   weekStartDate: string,
-  options: { language?: TShoppingListLanguage } = {},
+  options: { language?: TShoppingListLanguage; today?: string } = {},
 ) {
   const language = options.language ?? 'en'
+  const today = options.today ?? isoDateUTC(new Date())
   return withRls(db, accessToken, async (tx) => {
     const [household] = await tx
       .select({ id: households.id, name: households.name })
@@ -597,7 +608,9 @@ export async function getShoppingListSummary(
     const shoppingState = readShoppingProjectionState(shoppingProjection?.state)
     const weekState = (weekProjection?.state ?? {}) as TWeekPlanProjectionState
     const recipeIds = weekDays
-      .map((day) => weekState.meals?.[day]?.recipeRef)
+      .map((day, index) => ({ recipeRef: weekState.meals?.[day]?.recipeRef, date: addDaysUTC(weekStartDate, index) }))
+      .filter((meal) => meal.date >= today)
+      .map((meal) => meal.recipeRef)
       .filter((id): id is string => Boolean(id))
 
     const recipeRows = recipeIds.length

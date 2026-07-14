@@ -69,6 +69,8 @@ For Swedish iOS clients, shopping list summary applies a small response-level lo
 
 Production deploy note: the backend was manually deployed to Vercel on 2026-07-14 (`dpl_A9zjwkpL3RugZFW2UzhB2UEHZVqA`) so production now includes the builtin JSON hardening, shopping singular/plural normalization, and Swedish shopping-summary localization changes that were ahead of the previous GitHub-triggered production deployment (`00bb6b6`).
 
+Shopping list summary now excludes meals whose dinner date is before today. This keeps week history intact in the plan while preventing yesterday's ingredients from staying in the active shopping basket. Tests pin the behavior with `today` injected so date-sensitive cases remain deterministic.
+
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 
 `migrations/0029_household_saved_recipes.sql` had been committed (2026-07-11, Plan A3) but not yet applied to the Veckly Supabase project — same category of gap as the 2026-06-16 incident below. Verified via `to_regclass('public.household_saved_recipes')` before touching anything, then applied the migration statement-by-statement directly against production `DATABASE_URL` (no Supabase MCP session available in this session; same net effect as `mcp__supabase__apply_migration`). Confirmed after: table exists, RLS enabled, all 3 policies present, and the `authenticated` role already has full grants on the new table via Supabase's project-level default privileges (consistent with every other RLS table in this project — none of the migration files contain explicit `GRANT` statements, confirming grants are handled automatically at the project level here, not per-migration).

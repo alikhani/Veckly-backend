@@ -414,7 +414,7 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
 
     it('returns an empty shopping summary when no week plan exists', async () => {
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
 
       expect(summary).not.toBeNull()
       expect(summary!.updatedAt).toBeNull()
@@ -434,7 +434,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'pantry:spaghetti:g': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -469,7 +469,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'produce:carrots:pc': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -506,7 +506,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'protein:chicken-breast:g': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { language: 'sv' })
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { language: 'sv', today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -520,6 +520,39 @@ describeWithDb('Shopping-list event log + projection', () => {
         {
           category: 'Protein',
           items: [{ itemKey: 'protein:chicken-breast:g', label: 'kycklingfilé', amount: '150', unit: 'g', checked: true, isCustom: false }],
+        },
+      ])
+    })
+
+    it('excludes meals that are already in the past from the shopping summary', async () => {
+      const mondayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Monday dinner',
+        ingredients: [{ item: 'spaghetti', amount: '400', unit: 'g', category: 'Pantry' }],
+      })
+      const wednesdayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Wednesday dinner',
+        ingredients: [{ item: 'rice', amount: '300', unit: 'g', category: 'Pantry' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          meals: {
+            monday: { recipeRef: mondayRecipe.id },
+            wednesday: { recipeRef: wednesdayRecipe.id },
+          },
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: '2026-06-10' })
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Pantry',
+          items: [{ itemKey: 'pantry:rice:g', label: 'rice', amount: '300', unit: 'g', checked: false, isCustom: false }],
         },
       ])
     })

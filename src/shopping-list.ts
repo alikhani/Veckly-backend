@@ -818,7 +818,7 @@ export function buildShoppingListRoutes(db: Db) {
     })
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
-    c.header('Cache-Control', 'private, max-age=300')
+    c.header('Cache-Control', 'no-store')
     return c.json(summary, 200)
   })
 

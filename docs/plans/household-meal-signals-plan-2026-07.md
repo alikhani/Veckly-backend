@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — backend schema/API and generation scoring slices complete 2026-07-14. iOS product UI is not started.
+In progress — backend schema/API, generation scoring, and iOS DayDetail UI slices complete 2026-07-14. Retro prompt is not started.
 
 ## Why this exists
 
@@ -126,10 +126,13 @@ Implemented generation behavior is simple and explainable:
 
 ## iOS Placement
 
-Preferred first UI surface:
+First UI surface implemented:
+
+- Day detail sheet: shows a calm shared-memory row for the selected meal, separate from private thumbs up/down.
+
+Potential follow-up:
 
 - Sunday retro: after a meal gets a thumbs-up, optionally let the user mark "Works for the family".
-- Day detail sheet: show a calm shared-memory row for the selected meal.
 
 Avoid putting this on every recipe card in v1. The signal should feel like household memory, not a voting dashboard.
 
@@ -154,4 +157,4 @@ iOS:
 
 ## Next Slice
 
-Add the smallest iOS store/UI surface in retro or DayDetailSheet, keeping private thumbs up/down visually separate from the shared household signal.
+Evaluate whether Sunday retro should get a mild "Works for the family?" follow-up after thumbs up, or move on to Phase 6 shopping handoff if DayDetail is enough for v1 beta.

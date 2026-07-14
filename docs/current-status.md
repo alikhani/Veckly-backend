@@ -46,7 +46,7 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 Phase 5 of the iOS family-experience work needs a real household-level signal for "this works for us" without exposing partner-private feedback. Decision preserved: keep `meal_feedback` private and per-user exactly as-is, and add a separate shared household model: `household_meal_signals` with `works_for_family` / `not_for_us`, active-member RLS, and no partner vote exposure.
 
-Implemented so far: migration `0030_household_meal_signals.sql`, Drizzle schema, public `GET/PUT /households/{householdId}/meal-signals`, OpenAPI regeneration, Swift client regeneration, RLS tests, and generation scoring support. `works_for_family` now gives a shared household boost; `not_for_us` strongly penalizes but does not absolutely exclude a meal. iOS product UI remains next. The backend plan is captured in `docs/plans/household-meal-signals-plan-2026-07.md`.
+Implemented so far: migration `0030_household_meal_signals.sql`, Drizzle schema, public `GET/PUT /households/{householdId}/meal-signals`, OpenAPI regeneration, Swift client regeneration, RLS tests, generation scoring support, and a first iOS DayDetail surface. `works_for_family` now gives a shared household boost; `not_for_us` strongly penalizes but does not absolutely exclude a meal. The backend plan is captured in `docs/plans/household-meal-signals-plan-2026-07.md`.
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

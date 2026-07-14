@@ -48,7 +48,7 @@ Used when working through the Supabase MCP tool directly against the project (th
    ```sql
    select count(*) from information_schema.tables where table_schema = 'public';
    ```
-   Compare against the expected table count (currently 17 as of migration 0025 — update this number when you add a migration that creates a new table).
+   Compare against the expected table count (currently 20 as of migration 0031 — update this number when you add a migration that creates a new table).
 5. Verify RLS policies exist on any new table:
    ```sql
    select tablename, policyname from pg_policies where schemaname = 'public' order by tablename;

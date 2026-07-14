@@ -51,11 +51,15 @@ The v1 event vocabulary is intentionally small: onboarding completed, first week
 
 The first 2-week family beta script is ready in `docs/plans/beta-research-script-2026-07.md`. It maps onboarding, first planning, shopping handoff, household sharing, week-2 return, and retro prompts to the v1 event funnel so qualitative notes and Supabase data can be reviewed together after the first 5 households. The first-five synthesis template is in `docs/plans/beta-first-five-review-template-2026-07.md`.
 
+Production note: `0031_product_events.sql` was applied directly against the Veckly Supabase project on 2026-07-14 after Vercel runtime logs exposed the adjacent missing `0030` table. Verified with `to_regclass('public.product_events')` and RLS policy inspection.
+
 ### 2026-07-14 — Household meal signals complete for v1 (Phase 5)
 
 Phase 5 of the iOS family-experience work needs a real household-level signal for "this works for us" without exposing partner-private feedback. Decision preserved: keep `meal_feedback` private and per-user exactly as-is, and add a separate shared household model: `household_meal_signals` with `works_for_family` / `not_for_us`, active-member RLS, and no partner vote exposure.
 
 Implemented for v1: migration `0030_household_meal_signals.sql`, Drizzle schema, public `GET/PUT /households/{householdId}/meal-signals`, OpenAPI regeneration, Swift client regeneration, RLS tests, generation scoring support, and a first iOS DayDetail surface. `works_for_family` now gives a shared household boost; `not_for_us` strongly penalizes but does not absolutely exclude a meal. The backend plan is captured in `docs/plans/household-meal-signals-plan-2026-07.md`.
+
+Production note: `0030_household_meal_signals.sql` was applied directly against the Veckly Supabase project on 2026-07-14 after iOS week generation returned `HTTP 500`. Vercel runtime logs showed `PostgresError: relation "household_meal_signals" does not exist` on `POST /households/{id}/week-plans/{weekStartDate}/generate` and `GET /households/{id}/meal-signals`. Verified after applying: `to_regclass('public.household_meal_signals')` returns the table and all four active-member RLS policies are present.
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

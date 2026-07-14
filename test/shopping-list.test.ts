@@ -557,6 +557,39 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
     })
 
+    it('includes newly planned future meals while filtering older meals from the active shopping basket', async () => {
+      const tuesdayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Tuesday bowl',
+        ingredients: [{ item: 'chicken breast', amount: '150', unit: 'g', category: 'Protein' }],
+      })
+      const wednesdayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Wednesday carbonara',
+        ingredients: [{ item: 'bacon or pancetta', amount: '200', unit: 'g', category: 'Protein' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          meals: {
+            tuesday: { recipeRef: tuesdayRecipe.id },
+            wednesday: { recipeRef: wednesdayRecipe.id },
+          },
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: '2026-06-10' })
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Protein',
+          items: [{ itemKey: 'protein:bacon-or-pancetta:g', label: 'bacon or pancetta', amount: '200', unit: 'g', checked: false, isCustom: false }],
+        },
+      ])
+    })
+
     it('does not expose another household shopping summary across RLS', async () => {
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
 

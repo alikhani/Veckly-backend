@@ -396,6 +396,10 @@ function isoDateUTC(date: Date) {
   return date.toISOString().slice(0, 10)
 }
 
+function validISODateString(value: string | undefined) {
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
+}
+
 function addDaysUTC(dateString: string, offset: number) {
   const date = new Date(`${dateString}T00:00:00.000Z`)
   date.setUTCDate(date.getUTCDate() + offset)
@@ -810,6 +814,7 @@ export function buildShoppingListRoutes(db: Db) {
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate, {
       language: shoppingListLanguageFromAcceptLanguage(c.req.header('Accept-Language')),
+      today: validISODateString(c.req.header('X-Veckly-Today')),
     })
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)

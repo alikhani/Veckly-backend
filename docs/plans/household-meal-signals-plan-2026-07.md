@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — backend schema/API, generation scoring, and iOS DayDetail UI slices complete 2026-07-14. Retro prompt is not started.
+Complete for v1 — backend schema/API, generation scoring, and iOS DayDetail UI slices completed 2026-07-14.
 
 ## Why this exists
 
@@ -130,7 +130,7 @@ First UI surface implemented:
 
 - Day detail sheet: shows a calm shared-memory row for the selected meal, separate from private thumbs up/down.
 
-Potential follow-up:
+Deferred follow-up, not part of v1:
 
 - Sunday retro: after a meal gets a thumbs-up, optionally let the user mark "Works for the family".
 
@@ -155,6 +155,6 @@ iOS:
 - Keeps private thumbs up/down UI separate from household signal UI.
 - Does not block retro completion if household-signal write fails.
 
-## Next Slice
+## Closure
 
-Evaluate whether Sunday retro should get a mild "Works for the family?" follow-up after thumbs up, or move on to Phase 6 shopping handoff if DayDetail is enough for v1 beta.
+Phase 5 is closed for v1. DayDetail is the first household-signal surface because it is contextual and low-risk. If beta families do not discover or use the signal, revisit a mild Sunday retro follow-up later; otherwise move on to Phase 6 shopping handoff.

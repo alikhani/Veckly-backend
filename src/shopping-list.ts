@@ -306,6 +306,30 @@ function buildItemKey(ingredient: TRecipeIngredient) {
   return [category, item, unit].join(':')
 }
 
+function singularizeShoppingItem(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ')
+  if (normalized.endsWith('ies') && normalized.length > 4) return `${normalized.slice(0, -3)}y`
+  if (normalized.endsWith('oes') && normalized.length > 4) return normalized.slice(0, -2)
+  if (normalized.endsWith('s') && !normalized.endsWith('ss') && normalized.length > 3) return normalized.slice(0, -1)
+  return normalized
+}
+
+function buildCanonicalItemKey(ingredient: TRecipeIngredient) {
+  const category = normalizeKeyPart(ingredient.category || 'Other')
+  const item = normalizeKeyPart(singularizeShoppingItem(ingredient.item))
+  const unit = normalizeKeyPart(ingredient.unit)
+  return [category, item, unit].join(':')
+}
+
+function preferredShoppingLabel(current: string, candidate: string) {
+  const currentTrimmed = current.trim()
+  const candidateTrimmed = candidate.trim()
+  const currentIsPlural = singularizeShoppingItem(currentTrimmed) !== currentTrimmed.toLowerCase()
+  const candidateIsPlural = singularizeShoppingItem(candidateTrimmed) !== candidateTrimmed.toLowerCase()
+  if (currentIsPlural !== candidateIsPlural) return currentIsPlural ? currentTrimmed : candidateTrimmed
+  return currentTrimmed.localeCompare(candidateTrimmed) <= 0 ? currentTrimmed : candidateTrimmed
+}
+
 function formatAggregatedAmount(n: number): string {
   return Number.isInteger(n) ? String(n) : parseFloat(n.toFixed(2)).toString()
 }
@@ -479,34 +503,57 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
         .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
       : []
 
-    type TItemAccumulator = { category: string; label: string; totalAmount: number | null; canSum: boolean; unit: string | null }
+    const ingredientRows = recipeRows.flatMap((recipe) =>
+      (recipe.ingredients as TRecipeIngredient[])
+        .filter((ingredient) => ingredient.item.trim())
+        .map((ingredient) => ({
+          ingredient,
+          rawItemKey: buildItemKey(ingredient),
+          canonicalItemKey: buildCanonicalItemKey(ingredient),
+        })),
+    )
+    const canonicalKeyVariants = new Map<string, Set<string>>()
+    for (const row of ingredientRows) {
+      const variants = canonicalKeyVariants.get(row.canonicalItemKey) ?? new Set<string>()
+      variants.add(row.rawItemKey)
+      canonicalKeyVariants.set(row.canonicalItemKey, variants)
+    }
+
+    type TItemAccumulator = {
+      category: string
+      label: string
+      originalItemKeys: Set<string>
+      totalAmount: number | null
+      canSum: boolean
+      unit: string | null
+    }
     const accumulator = new Map<string, TItemAccumulator>()
 
-    for (const recipe of recipeRows) {
-      for (const ingredient of recipe.ingredients as TRecipeIngredient[]) {
-        if (!ingredient.item.trim()) continue
-        const itemKey = buildItemKey(ingredient)
-        const rawAmount = ingredient.amount?.trim() || null
-        const parsed = rawAmount ? parseFloat(rawAmount) : null
-        const validNum = parsed !== null && !isNaN(parsed) && isFinite(parsed)
+    for (const { ingredient, rawItemKey, canonicalItemKey } of ingredientRows) {
+      const itemKey = (canonicalKeyVariants.get(canonicalItemKey)?.size ?? 0) > 1 ? canonicalItemKey : rawItemKey
+      const rawAmount = ingredient.amount?.trim() || null
+      const parsed = rawAmount ? parseFloat(rawAmount) : null
+      const validNum = parsed !== null && !isNaN(parsed) && isFinite(parsed)
 
-        const existing = accumulator.get(itemKey)
-        if (existing) {
-          if (existing.canSum && validNum) {
-            existing.totalAmount = (existing.totalAmount ?? 0) + parsed!
-          } else {
-            existing.canSum = false
-            existing.totalAmount = null
-          }
+      const existing = accumulator.get(itemKey)
+      if (existing) {
+        existing.originalItemKeys.add(rawItemKey)
+        existing.label = preferredShoppingLabel(existing.label, ingredient.item)
+        if (existing.canSum && validNum) {
+          existing.totalAmount = (existing.totalAmount ?? 0) + parsed!
         } else {
-          accumulator.set(itemKey, {
-            category: ingredient.category?.trim() || 'Other',
-            label: ingredient.item.trim(),
-            totalAmount: validNum ? parsed! : null,
-            canSum: validNum,
-            unit: ingredient.unit?.trim() || null,
-          })
+          existing.canSum = false
+          existing.totalAmount = null
         }
+      } else {
+        accumulator.set(itemKey, {
+          category: ingredient.category?.trim() || 'Other',
+          label: ingredient.item.trim(),
+          originalItemKeys: new Set([rawItemKey]),
+          totalAmount: validNum ? parsed! : null,
+          canSum: validNum,
+          unit: ingredient.unit?.trim() || null,
+        })
       }
     }
 
@@ -524,7 +571,7 @@ export async function getShoppingListSummary(db: Db, accessToken: string, househ
         label: item.label,
         amount: item.totalAmount !== null ? formatAggregatedAmount(item.totalAmount) : null,
         unit: item.unit,
-        checked: shoppingState.checkedItems[itemKey] === true,
+        checked: shoppingState.checkedItems[itemKey] === true || [...item.originalItemKeys].some((originalKey) => shoppingState.checkedItems[originalKey] === true),
         isCustom: false,
       })
     }

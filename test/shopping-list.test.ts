@@ -448,6 +448,40 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
     })
 
+    it('merges singular and plural variants only when both are present', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Vegetable sides',
+        ingredients: [
+          { item: 'carrot', amount: '0.3', unit: 'pc', category: 'Produce' },
+          { item: 'carrots', amount: '0.8', unit: 'pc', category: 'Produce' },
+          { item: 'tomatoes', amount: '2', unit: 'can', category: 'Produce' },
+        ],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: { 'produce:carrots:pc': true }, pantryStock: {}, customItems: [] },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Produce',
+          items: [
+            { itemKey: 'produce:carrot:pc', label: 'carrots', amount: '1.1', unit: 'pc', checked: true, isCustom: false },
+            { itemKey: 'produce:tomatoes:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false, isCustom: false },
+          ],
+        },
+      ])
+    })
+
     it('does not expose another household shopping summary across RLS', async () => {
       const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
 

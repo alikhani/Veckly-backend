@@ -69,7 +69,7 @@ For Swedish iOS clients, shopping list summary applies a small response-level lo
 
 Production deploy note: the backend was manually deployed to Vercel on 2026-07-14 (`dpl_A9zjwkpL3RugZFW2UzhB2UEHZVqA`) so production now includes the builtin JSON hardening, shopping singular/plural normalization, and Swedish shopping-summary localization changes that were ahead of the previous GitHub-triggered production deployment (`00bb6b6`).
 
-Shopping list summary now excludes meals whose dinner date is before today. This keeps week history intact in the plan while preventing yesterday's ingredients from staying in the active shopping basket. Tests pin the behavior with `today` injected so date-sensitive cases remain deterministic.
+Shopping list summary now excludes meals whose dinner date is before today. This keeps week history intact in the plan while preventing yesterday's ingredients from staying in the active shopping basket. Tests pin the behavior with `today` injected so date-sensitive cases remain deterministic. Deployed to production on 2026-07-14 as `dpl_HCR2vMwAeaDse41Qz2nXN32gXkJv` (`https://veckly-backend.vercel.app`).
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

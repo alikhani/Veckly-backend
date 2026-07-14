@@ -603,6 +603,27 @@ function readProjectionState(state: unknown): TWeekPlanProjectionState {
   }
 }
 
+function readJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return []
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function readStringArray(value: unknown): string[] {
+  return readJsonArray(value).filter((item): item is string => typeof item === 'string')
+}
+
+function readIngredientArray(value: unknown): Array<{ item: string }> {
+  return readJsonArray(value).filter((item): item is { item: string } =>
+    Boolean(item && typeof item === 'object' && 'item' in item && typeof item.item === 'string'),
+  )
+}
+
 function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {
   return {
     householdId: row.householdId,
@@ -829,7 +850,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
             servings: recipe.servings,
             prepTimeMinutes: recipe.prepTimeMinutes ?? null,
             cookTimeMinutes: recipe.cookTimeMinutes ?? null,
-            tags: recipe.tags as string[],
+            tags: readStringArray(recipe.tags),
           } : null,
         }
       }),
@@ -928,8 +949,8 @@ export async function doGenerateWeekPlan(
       !avoidIngredients.some((a) => {
         const lower = a.toLowerCase()
         if (r.title.toLowerCase().includes(lower)) return true
-        if ((r.tags as string[]).some((t) => t.toLowerCase().includes(lower))) return true
-        const ings = r.ingredients as Array<{ item: string }> | null
+        if (readStringArray(r.tags).some((t) => t.toLowerCase().includes(lower))) return true
+        const ings = readIngredientArray(r.ingredients)
         if (ings?.some((i) => i.item.toLowerCase().includes(lower))) return true
         return false
       })
@@ -938,8 +959,8 @@ export async function doGenerateWeekPlan(
   ).map((r) => ({
     id: r.id,
     title: r.title,
-    tags: r.tags as string[],
-    ingredients: r.ingredients as Array<{ item: string }> | null,
+    tags: readStringArray(r.tags),
+    ingredients: readIngredientArray(r.ingredients),
     servings: r.servings,
     prepTimeMinutes: r.prepTimeMinutes,
     cuisine: r.cuisine,

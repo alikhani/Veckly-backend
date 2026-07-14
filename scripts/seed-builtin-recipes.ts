@@ -88,9 +88,9 @@ async function run() {
     title: meal.title,
     description: meal.description ?? '',
     servings: meal.servings,
-    ingredients: JSON.stringify(meal.ingredients.map(toIngredient)),
-    steps: JSON.stringify((meal.steps ?? []).map(toStep)),
-    tags: JSON.stringify(meal.tags),
+    ingredients: meal.ingredients.map(toIngredient),
+    steps: (meal.steps ?? []).map(toStep),
+    tags: meal.tags,
     prep_time_minutes: meal.prepTimeMinutes,
     cook_time_minutes: null,
     cuisine: meal.cuisine ?? null,
@@ -116,7 +116,7 @@ async function run() {
         created_at, updated_at
       ) VALUES (
         ${row.id}, ${row.household_id}, ${row.title}, ${row.description}, ${row.servings},
-        ${row.ingredients}::jsonb, ${row.steps}::jsonb, ${row.tags}::jsonb,
+        ${sql.json(row.ingredients)}, ${sql.json(row.steps)}, ${sql.json(row.tags)},
         ${row.prep_time_minutes}, ${row.cook_time_minutes},
         ${row.cuisine}, ${row.protein_source}, ${row.meal_weight}, ${row.source_url},
         ${row.source}, ${row.is_public}, ${row.is_archived}, ${row.created_by},

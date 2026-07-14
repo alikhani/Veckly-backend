@@ -825,6 +825,30 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.recipe?.title).toBe('Builtin Chili')
     })
 
+    it('summarizes legacy builtin recipes whose JSONB arrays were seeded as strings', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const recipeId = '99999999-9999-4999-8999-999999999999'
+      await db.execute(sql`
+        insert into recipes (
+          id, household_id, created_by, title, description, servings,
+          ingredients, steps, tags, is_public, source
+        ) values (
+          ${recipeId}, null, ${userB}, 'Legacy Builtin Chili', ${baseRecipe.description}, ${baseRecipe.servings},
+          to_jsonb(${JSON.stringify(baseRecipe.ingredients)}::text),
+          to_jsonb(${JSON.stringify(baseRecipe.steps)}::text),
+          to_jsonb(${JSON.stringify(baseRecipe.tags)}::text),
+          true, 'builtin'
+        )
+      `)
+
+      const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.title).toBe('Legacy Builtin Chili')
+      expect(summary?.days[0]?.recipe?.tags).toEqual(baseRecipe.tags)
+    })
+
     it('picks a public community recipe the household bookmarked', async () => {
       await insertProfile([{ day: 'monday' }])
       const bookmarked = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Bookmarked Curry', isPublic: true })

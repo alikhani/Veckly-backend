@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress — product and technical contract decided 2026-07-14. Implementation not started.
+In progress — backend schema/API slice complete 2026-07-14. iOS product UI and generation scoring are not started.
 
 ## Why this exists
 
@@ -30,7 +30,7 @@ Private meal feedback remains private:
 
 ## Proposed Backend Model
 
-Create a new table instead of extending `meal_feedback`.
+Implemented as migration `0030_household_meal_signals.sql`, with a new table instead of extending `meal_feedback`.
 
 ```sql
 CREATE TYPE household_meal_signal AS ENUM ('works_for_family', 'not_for_us');
@@ -63,7 +63,7 @@ This is intentionally different from `meal_feedback`, where SELECT is additional
 
 ## API Shape
 
-Add public OpenAPI routes under households:
+Public OpenAPI routes under households:
 
 - `GET /households/{householdId}/meal-signals`
 - `PUT /households/{householdId}/meal-signals`
@@ -96,6 +96,18 @@ type UpsertHouseholdMealSignal = {
 `signal: null` removes the household signal.
 
 Do not include partner-private vote data in this response.
+
+## Implemented 2026-07-14
+
+- `household_meal_signal` enum with `works_for_family` and `not_for_us`.
+- `household_meal_signals` table keyed by `(household_id, meal_id)`.
+- Active-member RLS for SELECT/INSERT/UPDATE/DELETE.
+- `updated_by = auth.uid()` enforced on INSERT/UPDATE.
+- `src/household-meal-signals.ts` repository/routes.
+- Public operations: `listHouseholdMealSignals`, `upsertHouseholdMealSignal`.
+- OpenAPI regenerated in backend and iOS; Swift OpenAPI client regenerated.
+- `test/household-meal-signals.test.ts` covers shared visibility, cross-household isolation, private feedback isolation, direct RLS writes, removal, and unauthenticated route behavior.
+- `test/migrations.ts` now recognizes post-0029 migrations and grants authenticated access to `household_meal_signals`.
 
 ## Scoring Rules
 
@@ -138,4 +150,4 @@ iOS:
 
 ## Next Slice
 
-Implement the backend migration, schema, routes, OpenAPI generation, and RLS tests first. Then regenerate the iOS client and add the smallest iOS store/UI surface.
+Add generation scoring support so `works_for_family` boosts candidates and `not_for_us` strongly penalizes candidates without becoming an absolute allergy-style exclusion. Then add the smallest iOS store/UI surface in retro or DayDetailSheet.

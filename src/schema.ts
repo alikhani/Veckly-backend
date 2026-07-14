@@ -207,6 +207,22 @@ export const householdSavedRecipes = pgTable('household_saved_recipes', {
   index('household_saved_recipes_household_added_idx').on(table.householdId, table.addedAt),
 ])
 
+export const householdMealSignal = pgEnum('household_meal_signal', ['works_for_family', 'not_for_us'])
+
+// Shared household memory, distinct from private per-user `mealFeedback`.
+// Any active member may update this single household-level signal for a meal;
+// partner-private thumbs up/down stay in `mealFeedback`.
+export const householdMealSignals = pgTable('household_meal_signals', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  mealId: text('meal_id').notNull(),
+  signal: householdMealSignal('signal').notNull(),
+  updatedBy: uuid('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.mealId], name: 'household_meal_signals_pk' }),
+  index('household_meal_signals_household_updated_idx').on(table.householdId, table.updatedAt),
+])
+
 export const mealFeedbackVote = pgEnum('meal_feedback_vote', ['up', 'down'])
 export const mealFeedbackSignal = pgEnum('meal_feedback_signal', [
   'easy-weeknight',

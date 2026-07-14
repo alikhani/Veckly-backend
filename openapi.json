@@ -147,6 +147,97 @@
           "dueAgain"
         ]
       },
+      "HouseholdMealSignal": {
+        "type": "string",
+        "enum": [
+          "works_for_family",
+          "not_for_us"
+        ]
+      },
+      "HouseholdMealSignalState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/HouseholdMealSignal"
+        }
+      },
+      "HouseholdMealSignalRecord": {
+        "type": "object",
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mealId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "signal": {
+            "$ref": "#/components/schemas/HouseholdMealSignal"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "householdId",
+          "mealId",
+          "signal",
+          "updatedAt"
+        ]
+      },
+      "ListHouseholdMealSignalsResponse": {
+        "type": "object",
+        "properties": {
+          "signals": {
+            "$ref": "#/components/schemas/HouseholdMealSignalState"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HouseholdMealSignalRecord"
+            }
+          }
+        },
+        "required": [
+          "signals",
+          "items"
+        ]
+      },
+      "OkResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "UpsertHouseholdMealSignal": {
+        "type": "object",
+        "properties": {
+          "mealId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "signal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HouseholdMealSignal"
+              },
+              {}
+            ]
+          }
+        },
+        "required": [
+          "mealId",
+          "signal"
+        ]
+      },
       "RecipeIngredient": {
         "type": "object",
         "properties": {
@@ -329,20 +420,6 @@
         },
         "required": [
           "recipes"
-        ]
-      },
-      "OkResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          }
-        },
-        "required": [
-          "ok"
         ]
       },
       "Household": {
@@ -3828,6 +3905,93 @@
           },
           "400": {
             "description": "weekStartDate must be a Monday"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/meal-signals": {
+      "get": {
+        "operationId": "listHouseholdMealSignals",
+        "summary": "List the household's shared meal signals",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household meal signals keyed by meal id, plus ordered records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListHouseholdMealSignalsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      },
+      "put": {
+        "operationId": "upsertHouseholdMealSignal",
+        "summary": "Upsert or remove a shared household meal signal",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertHouseholdMealSignal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Household signal saved or removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"

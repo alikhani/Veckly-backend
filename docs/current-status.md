@@ -42,11 +42,11 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
-### 2026-07-14 — Household meal signals contract (Phase 5 planning)
+### 2026-07-14 — Household meal signals backend/API slice (Phase 5)
 
-Phase 5 of the iOS family-experience work needs a real household-level signal for "this works for us" without exposing partner-private feedback. Decision: keep `meal_feedback` private and per-user exactly as-is, and add a separate shared household model next: `household_meal_signals` with `works_for_family` / `not_for_us`, active-member RLS, and no partner vote exposure.
+Phase 5 of the iOS family-experience work needs a real household-level signal for "this works for us" without exposing partner-private feedback. Decision preserved: keep `meal_feedback` private and per-user exactly as-is, and add a separate shared household model: `household_meal_signals` with `works_for_family` / `not_for_us`, active-member RLS, and no partner vote exposure.
 
-Implementation is not started in this commit. The backend plan is captured in `docs/plans/household-meal-signals-plan-2026-07.md`; next slice should add migration/schema/routes/OpenAPI/RLS tests before any iOS UI depends on it.
+Implemented in this slice: migration `0030_household_meal_signals.sql`, Drizzle schema, public `GET/PUT /households/{householdId}/meal-signals`, OpenAPI regeneration, Swift client regeneration, and RLS tests. Generation scoring and iOS product UI remain next. The backend plan is captured in `docs/plans/household-meal-signals-plan-2026-07.md`.
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

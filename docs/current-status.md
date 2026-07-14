@@ -73,7 +73,7 @@ Shopping list summary now excludes meals whose dinner date is before today. This
 
 Follow-up fix: iOS now sends `X-Veckly-Today: YYYY-MM-DD` from the device's local day, and shopping summary uses that value when present. This avoids server-clock drift in simulator/TestFlight: yesterday's meals can be excluded while a newly added future meal, such as Wednesday carbonara, still contributes ingredients immediately. Deployed to production on 2026-07-14 as `dpl_GHcWbP68amBmfMx1Hmso3n6yZL9m` (`https://veckly-backend.vercel.app`).
 
-Follow-up fix: shopping summary responses now use `Cache-Control: no-store`. The previous `private, max-age=300` allowed URLSession to reuse a stale grouped summary for up to five minutes, so pull-to-refresh could still show removed Carbonara ingredients or miss a newly added Thursday dinner even after the app-level cache had been invalidated.
+Follow-up fix: shopping summary responses now use `Cache-Control: no-store`. The previous `private, max-age=300` allowed URLSession to reuse a stale grouped summary for up to five minutes, so pull-to-refresh could still show removed Carbonara ingredients or miss a newly added Thursday dinner even after the app-level cache had been invalidated. Deployed to production on 2026-07-14 as `dpl_AVKTmygGrJfMgcTmDNARE1DQCtWT` (`https://veckly-backend.vercel.app`).
 
 ### 2026-07-12 — Household-shared recipe bookmarks (Plan A3), migration applied to production
 

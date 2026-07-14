@@ -39,8 +39,15 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 - Recipe URL import
 - Recipe recommendations (Claude Haiku)
 - Meal prep batches
+- Product events: beta funnel event writes
 
 ## Recent changes
+
+### 2026-07-14 — Supabase-backed beta product events
+
+Phase 7 beta measurement now has a backend-owned event log instead of relying on a third-party analytics SDK. Added migration `0031_product_events.sql`, Drizzle schema, active-member RLS, and public `POST /households/{householdId}/product-events`.
+
+The v1 event vocabulary is intentionally small: onboarding completed, first week generated, week completed, shopping opened after completion, shopping shared, partner invite clicked, shopping main list completed, and retro completed. Results are read from Supabase SQL/dashboard; the public client API only writes events. See `docs/plans/beta-product-events-plan-2026-07.md`.
 
 ### 2026-07-14 — Household meal signals complete for v1 (Phase 5)
 

@@ -246,6 +246,31 @@ export const mealFeedback = pgTable('meal_feedback', {
   index('meal_feedback_user_updated_idx').on(table.userId, table.updatedAt),
 ])
 
+export const productEventName = pgEnum('product_event_name', [
+  'onboarding_completed',
+  'first_week_generated',
+  'week_completed',
+  'shopping_opened_after_week_completed',
+  'shopping_shared',
+  'partner_invite_clicked',
+  'shopping_main_list_completed',
+  'retro_completed',
+])
+
+export const productEvents = pgTable('product_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull(),
+  eventName: productEventName('event_name').notNull(),
+  weekStartDate: date('week_start_date', { mode: 'string' }),
+  properties: jsonb('properties').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('product_events_household_occurred_idx').on(table.householdId, table.occurredAt),
+  index('product_events_name_occurred_idx').on(table.eventName, table.occurredAt),
+  index('product_events_user_occurred_idx').on(table.userId, table.occurredAt),
+])
+
 export const savedPlans = pgTable('saved_plans', {
   id: uuid('id').primaryKey(),
   userId: uuid('user_id').notNull(),

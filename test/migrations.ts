@@ -27,6 +27,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
   const [householdMealSignalsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_meal_signals') as exists`)
+  const [productEventsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.product_events') as exists`)
   const [householdSavedRecipesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_saved_recipes') as exists`)
   const [mealTypeCheckMarker] = await db.execute<{ exists: string | null }>(sql`
     select constraint_name as exists from information_schema.table_constraints
@@ -51,6 +52,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
+  const alreadyHasProductEventsMigration = Boolean(productEventsMarker?.exists)
   const alreadyHasHouseholdMealSignalsMigration = Boolean(householdMealSignalsMarker?.exists)
   const alreadyHasHouseholdSavedRecipesMigration = Boolean(householdSavedRecipesMarker?.exists)
   const alreadyHasPrepBatchesRlsHardeningMigration = Boolean(prepBatchesRlsHardeningMarker?.exists)
@@ -66,6 +68,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasProductEventsMigration && file < '0032_') continue
     if (alreadyHasHouseholdMealSignalsMigration && file < '0031_') continue
     if (alreadyHasHouseholdSavedRecipesMigration && file < '0030_') continue
     if (alreadyHasMealTypeCheckMigration && file < '0029_') continue
@@ -113,6 +116,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, delete on "user_saved_recipes" to authenticated;
     grant select, insert, delete on "household_saved_recipes" to authenticated;
     grant select, insert, update, delete on "household_meal_signals" to authenticated;
+    grant select, insert on "product_events" to authenticated;
     grant select, insert, update, delete on "meal_feedback" to authenticated;
     grant select, insert, update, delete on "saved_plans" to authenticated;
     grant select, insert, update on "household_profiles" to authenticated;

@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
-import { households, householdMemberships, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from '../src/schema.js'
+import { households, householdMemberships, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from '../src/schema.js'
 import {
   foldEventIntoProjection,
   emptyProjectionState,
@@ -646,6 +646,193 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
       expect(state.state?.customItems).toEqual([
         { itemKey: 'custom:first-servetter', label: 'Servetter', category: 'Other' },
+      ])
+    })
+  })
+
+  describe('(f) per-meal portion scaling before aggregation (Fas 2)', () => {
+    const baseRecipe = {
+      title: 'Base recipe',
+      description: 'Fast family dinner',
+      servings: 4,
+      ingredients: [{ item: 'placeholder', amount: '1', unit: 'g', category: 'Pantry' }],
+      steps: [{ text: 'Cook' }],
+      tags: ['weekday'],
+      prepTimeMinutes: 10,
+      cookTimeMinutes: 15,
+      cuisine: 'Italian',
+      proteinSource: 'cheese',
+      mealWeight: 'medium',
+      source: 'user_created' as const,
+      isPublic: false,
+    }
+
+    async function insertProfile(adults: number, children: number) {
+      await db.insert(householdProfiles).values({
+        householdId: householdAId,
+        adults,
+        children,
+        priorities: [],
+        avoidIngredients: [],
+        selectedDays: [{ day: 'monday' }],
+        updatedBy: userA,
+      })
+    }
+
+    it('scales recipes with different base servings (2, 4, 6) to the household size before summing', async () => {
+      await insertProfile(2, 2) // householdSize = 4
+
+      const twoServing = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Two-serving pasta',
+        servings: 2,
+        ingredients: [{ item: 'pasta', amount: '100', unit: 'g', category: 'Pantry' }],
+      })
+      const fourServing = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Four-serving salad',
+        servings: 4,
+        ingredients: [{ item: 'lettuce', amount: '50', unit: 'g', category: 'Produce' }],
+      })
+      const sixServing = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Six-serving soup',
+        servings: 6,
+        ingredients: [{ item: 'broth', amount: '300', unit: 'ml', category: 'Pantry' }],
+      })
+
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          meals: {
+            monday: { recipeRef: twoServing.id },
+            tuesday: { recipeRef: fourServing.id },
+            wednesday: { recipeRef: sixServing.id },
+          },
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      // pasta: 100 * (4 / 2) = 200 ; broth: 300 * (4 / 6) = 200 ; lettuce: 50 * (4 / 4) = 50
+      expect(summary?.groups).toEqual([
+        {
+          category: 'Pantry',
+          items: [
+            { itemKey: 'pantry:broth:ml', label: 'broth', amount: '200', unit: 'ml', checked: false, isCustom: false },
+            { itemKey: 'pantry:pasta:g', label: 'pasta', amount: '200', unit: 'g', checked: false, isCustom: false },
+          ],
+        },
+        {
+          category: 'Produce',
+          items: [{ itemKey: 'produce:lettuce:g', label: 'lettuce', amount: '50', unit: 'g', checked: false, isCustom: false }],
+        },
+      ])
+    })
+
+    it('prefers the meal servings override over the household size', async () => {
+      await insertProfile(2, 2) // householdSize = 4, would otherwise apply
+
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Rice bowl',
+        servings: 4,
+        ingredients: [{ item: 'rice', amount: '100', unit: 'g', category: 'Pantry' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id, servings: 8 } } },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      // 100 * (8 / 4) = 200 — the override (8), not the household size (4), drives the scale.
+      expect(summary?.groups).toEqual([
+        { category: 'Pantry', items: [{ itemKey: 'pantry:rice:g', label: 'rice', amount: '200', unit: 'g', checked: false, isCustom: false }] },
+      ])
+    })
+
+    it('falls back to the household size when no meal servings override is set', async () => {
+      await insertProfile(3, 1) // householdSize = 4
+
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Flour bake',
+        servings: 2,
+        ingredients: [{ item: 'flour', amount: '50', unit: 'g', category: 'Pantry' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      // 50 * (4 / 2) = 100
+      expect(summary?.groups).toEqual([
+        { category: 'Pantry', items: [{ itemKey: 'pantry:flour:g', label: 'flour', amount: '100', unit: 'g', checked: false, isCustom: false }] },
+      ])
+    })
+
+    it('leaves the amount unscaled when there is no override and no household profile', async () => {
+      // No insertProfile call — no household_profiles row exists for this household.
+
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Oat porridge',
+        servings: 6,
+        ingredients: [{ item: 'oats', amount: '60', unit: 'g', category: 'Pantry' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      // plannedMealServings falls back all the way to recipeBaseServings (6) → scale factor 1.
+      expect(summary?.groups).toEqual([
+        { category: 'Pantry', items: [{ itemKey: 'pantry:oats:g', label: 'oats', amount: '60', unit: 'g', checked: false, isCustom: false }] },
+      ])
+    })
+
+    it('regression: the same recipe planned on two days contributes twice, each scaled by that day\'s own servings', async () => {
+      await insertProfile(2, 0) // householdSize = 2
+
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Repeated butter chicken',
+        servings: 4,
+        ingredients: [{ item: 'butter', amount: '100', unit: 'g', category: 'Pantry' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          meals: {
+            // Monday: no override → falls back to household size (2). Scale 2/4 = 0.5 → 50.
+            monday: { recipeRef: recipe.id },
+            // Thursday: explicit override (10). Scale 10/4 = 2.5 → 250.
+            thursday: { recipeRef: recipe.id, servings: 10 },
+          },
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      // Before the Fas 2 fix, `recipeIds` deduplicated to a single row via the
+      // SQL `IN` clause and `ingredientRows` flatMapped over recipe rows (not
+      // day occurrences) — so the second planned occurrence of the same
+      // recipe never contributed at all. This must be 300 (50 + 250) in a
+      // single merged row, not 50 or 250 alone, and not two separate rows.
+      expect(summary?.groups).toEqual([
+        { category: 'Pantry', items: [{ itemKey: 'pantry:butter:g', label: 'butter', amount: '300', unit: 'g', checked: false, isCustom: false }] },
       ])
     })
   })

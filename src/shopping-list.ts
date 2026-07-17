@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { households, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
+import { households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes -----------------------------------------------------------
@@ -292,7 +292,7 @@ type TRecipeIngredient = {
 }
 
 type TWeekPlanProjectionState = {
-  meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string }>>
+  meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string; servings?: number }>>
 }
 
 type TShoppingListLanguage = 'en' | 'sv'
@@ -627,31 +627,60 @@ export async function getShoppingListSummary(
       .where(and(eq(shoppingListProjections.householdId, householdId), eq(shoppingListProjections.weekStartDate, weekStartDate)))
       .limit(1)
 
+    const [profileRow] = await tx
+      .select({ adults: householdProfiles.adults, children: householdProfiles.children })
+      .from(householdProfiles)
+      .where(eq(householdProfiles.householdId, householdId))
+      .limit(1)
+    // No profile row at all → no household size to scale to; each meal falls
+    // back to the recipe's own base servings (i.e. unscaled) per decision 17.
+    const householdSize = profileRow ? profileRow.adults + profileRow.children : undefined
+
     const shoppingState = readShoppingProjectionState(shoppingProjection?.state)
     const weekState = (weekProjection?.state ?? {}) as TWeekPlanProjectionState
-    const recipeIds = weekDays
-      .map((day, index) => ({ recipeRef: weekState.meals?.[day]?.recipeRef, date: addDaysUTC(weekStartDate, index) }))
+    // One entry per (day, recipeRef) *occurrence* — not deduplicated by
+    // recipe id. The same recipe can be planned on more than one day in the
+    // same week (e.g. Monday and Thursday), each occurrence potentially
+    // scaled to a different `plannedMealServings` (a per-day servings
+    // override applies to one day, not the recipe). Deduplicating here would
+    // silently drop a real ingredient contribution from the list.
+    const mealOccurrences = weekDays
+      .map((day, index) => ({
+        recipeRef: weekState.meals?.[day]?.recipeRef,
+        date: addDaysUTC(weekStartDate, index),
+        servingsOverride: weekState.meals?.[day]?.servings,
+      }))
       .filter((meal) => meal.date >= today)
-      .map((meal) => meal.recipeRef)
-      .filter((id): id is string => Boolean(id))
+      .filter((meal): meal is typeof meal & { recipeRef: string } => Boolean(meal.recipeRef))
 
+    // Fetch each distinct recipe exactly once — the per-day scaling below
+    // reads from this map per occurrence, so there's no need to query the
+    // same recipe row twice just because it's planned on two days.
+    const recipeIds = [...new Set(mealOccurrences.map((meal) => meal.recipeRef))]
     const recipeRows = recipeIds.length
       ? await tx
-        .select({ id: recipes.id, ingredients: recipes.ingredients, source: recipes.source })
+        .select({ id: recipes.id, ingredients: recipes.ingredients, source: recipes.source, servings: recipes.servings })
         .from(recipes)
         .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
       : []
+    const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
 
-    const ingredientRows = recipeRows.flatMap((recipe) =>
-      (recipe.ingredients as TRecipeIngredient[])
+    const ingredientRows = mealOccurrences.flatMap((meal) => {
+      const recipe = recipesById.get(meal.recipeRef)
+      if (!recipe) return []
+      const recipeBaseServings = recipe.servings
+      const plannedMealServings = meal.servingsOverride ?? householdSize ?? recipeBaseServings
+      const scaleFactor = plannedMealServings / recipeBaseServings
+      return (recipe.ingredients as TRecipeIngredient[])
         .filter((ingredient) => ingredient.item.trim())
         .map((ingredient) => ({
           ingredient,
+          scaleFactor,
           rawItemKey: buildItemKey(ingredient),
           canonicalItemKey: buildCanonicalItemKey(ingredient),
           shouldLocalize: recipe.source === 'builtin',
-        })),
-    )
+        }))
+    })
     const canonicalKeyVariants = new Map<string, Set<string>>()
     for (const row of ingredientRows) {
       const variants = canonicalKeyVariants.get(row.canonicalItemKey) ?? new Set<string>()
@@ -670,11 +699,12 @@ export async function getShoppingListSummary(
     }
     const accumulator = new Map<string, TItemAccumulator>()
 
-    for (const { ingredient, rawItemKey, canonicalItemKey, shouldLocalize } of ingredientRows) {
+    for (const { ingredient, scaleFactor, rawItemKey, canonicalItemKey, shouldLocalize } of ingredientRows) {
       const itemKey = (canonicalKeyVariants.get(canonicalItemKey)?.size ?? 0) > 1 ? canonicalItemKey : rawItemKey
       const rawAmount = ingredient.amount?.trim() || null
       const parsed = rawAmount ? parseFloat(rawAmount) : null
       const validNum = parsed !== null && !isNaN(parsed) && isFinite(parsed)
+      const scaledAmount = validNum ? parsed! * scaleFactor : null
 
       const existing = accumulator.get(itemKey)
       if (existing) {
@@ -682,7 +712,7 @@ export async function getShoppingListSummary(
         existing.shouldLocalize ||= shouldLocalize
         existing.label = preferredShoppingLabel(existing.label, ingredient.item)
         if (existing.canSum && validNum) {
-          existing.totalAmount = (existing.totalAmount ?? 0) + parsed!
+          existing.totalAmount = (existing.totalAmount ?? 0) + scaledAmount!
         } else {
           existing.canSum = false
           existing.totalAmount = null
@@ -693,7 +723,7 @@ export async function getShoppingListSummary(
           label: ingredient.item.trim(),
           originalItemKeys: new Set([rawItemKey]),
           shouldLocalize,
-          totalAmount: validNum ? parsed! : null,
+          totalAmount: validNum ? scaledAmount! : null,
           canSum: validNum,
           unit: ingredient.unit?.trim() || null,
         })

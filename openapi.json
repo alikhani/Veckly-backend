@@ -3701,6 +3701,89 @@
         "required": [
           "givenName"
         ]
+      },
+      "ProductEventName": {
+        "type": "string",
+        "enum": [
+          "onboarding_completed",
+          "first_week_generated",
+          "week_completed",
+          "shopping_opened_after_week_completed",
+          "shopping_shared",
+          "partner_invite_clicked",
+          "shopping_main_list_completed",
+          "retro_completed"
+        ]
+      },
+      "ProductEventProperties": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProductEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventName": {
+            "$ref": "#/components/schemas/ProductEventName"
+          },
+          "weekStartDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "properties": {
+            "$ref": "#/components/schemas/ProductEventProperties"
+          },
+          "occurredAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "householdId",
+          "userId",
+          "eventName",
+          "weekStartDate",
+          "properties",
+          "occurredAt"
+        ]
+      },
+      "CreateProductEvent": {
+        "type": "object",
+        "properties": {
+          "eventName": {
+            "$ref": "#/components/schemas/ProductEventName"
+          },
+          "weekStartDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "properties": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProductEventProperties"
+              },
+              {
+                "default": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "eventName"
+        ]
       }
     },
     "parameters": {}
@@ -6733,6 +6816,55 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/product-events": {
+      "post": {
+        "operationId": "createProductEvent",
+        "summary": "Record a beta product analytics event for a household",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Product event recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

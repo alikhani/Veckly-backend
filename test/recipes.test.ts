@@ -170,7 +170,7 @@ describeWithDb('Recipes + RLS', () => {
       const archived = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Old recipe' })
       await updateRecipe(db, fakeAccessToken(userA), householdAId, archived.id, { isArchived: true })
 
-      const list = await listRecipes(db, fakeAccessToken(userA), householdAId, false)
+      const list = await listRecipes(db, fakeAccessToken(userA), householdAId, userA, false)
 
       expect(list).toHaveLength(1)
       expect(list[0]?.title).toBe('Pasta Carbonara')
@@ -181,7 +181,7 @@ describeWithDb('Recipes + RLS', () => {
       const archived = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Old recipe' })
       await updateRecipe(db, fakeAccessToken(userA), householdAId, archived.id, { isArchived: true })
 
-      const list = await listRecipes(db, fakeAccessToken(userA), householdAId, true)
+      const list = await listRecipes(db, fakeAccessToken(userA), householdAId, userA, true)
 
       expect(list).toHaveLength(2)
     })
@@ -203,7 +203,7 @@ describeWithDb('Recipes + RLS', () => {
     it('returns null from getRecipe when recipe is not in the household', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, baseRecipe)
 
-      const result = await getRecipe(db, fakeAccessToken(userA), householdAId, recipe.id)
+      const result = await getRecipe(db, fakeAccessToken(userA), householdAId, userA, recipe.id)
 
       expect(result).toBeNull()
     })
@@ -213,8 +213,8 @@ describeWithDb('Recipes + RLS', () => {
 
       await updateRecipe(db, fakeAccessToken(userA), householdAId, recipe.id, { isArchived: true })
 
-      const withoutArchived = await listRecipes(db, fakeAccessToken(userA), householdAId, false)
-      const withArchived = await listRecipes(db, fakeAccessToken(userA), householdAId, true)
+      const withoutArchived = await listRecipes(db, fakeAccessToken(userA), householdAId, userA, false)
+      const withArchived = await listRecipes(db, fakeAccessToken(userA), householdAId, userA, true)
 
       expect(withoutArchived).toHaveLength(0)
       expect(withArchived).toHaveLength(1)

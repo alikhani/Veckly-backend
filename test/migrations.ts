@@ -26,6 +26,11 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
+  const [householdsDeleteRlsMarker] = await db.execute<{ exists: string | null }>(sql`
+    select policyname as exists from pg_policies
+    where tablename = 'households'
+      and policyname = 'households_delete_owner_only'
+  `)
   const [householdMealSignalsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_meal_signals') as exists`)
   const [productEventsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.product_events') as exists`)
   const [householdSavedRecipesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_saved_recipes') as exists`)
@@ -51,6 +56,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
+  const alreadyHasHouseholdsDeleteRlsMigration = Boolean(householdsDeleteRlsMarker?.exists)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
   const alreadyHasProductEventsMigration = Boolean(productEventsMarker?.exists)
   const alreadyHasHouseholdMealSignalsMigration = Boolean(householdMealSignalsMarker?.exists)
@@ -68,6 +74,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasHouseholdsDeleteRlsMigration && file < '0033_') continue
     if (alreadyHasProductEventsMigration && file < '0032_') continue
     if (alreadyHasHouseholdMealSignalsMigration && file < '0031_') continue
     if (alreadyHasHouseholdSavedRecipesMigration && file < '0030_') continue
@@ -104,7 +111,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
       end if;
     end $$;
     grant usage on schema public to authenticated;
-    grant select, insert, update on "households" to authenticated;
+    grant select, insert, update, delete on "households" to authenticated;
     grant select, insert, update on "household_memberships" to authenticated;
     grant select, insert, update on "household_invites" to authenticated;
     grant select, insert on "week_plan_events" to authenticated;

@@ -203,13 +203,13 @@ describeWithDb('Household invites + token-gated RLS', () => {
     // userB is an active owner of household B — a real member, just not of
     // THIS household. The canary: membership alone isn't the gate, membership
     // *in the right household* is.
-    const deniedByOutsideMember = await revokeInvite(db, fakeAccessToken(userB), inviteA.id)
+    const deniedByOutsideMember = await revokeInvite(db, fakeAccessToken(userB), householdAId, inviteA.id)
     expect(deniedByOutsideMember).toEqual({ revoked: false })
 
     const stillPending = await db.select({ status: householdInvites.status }).from(householdInvites).where(eq(householdInvites.id, inviteA.id))
     expect(stillPending[0]?.status).toBe('pending')
 
-    const revokedByOwner = await revokeInvite(db, fakeAccessToken(userA), inviteA.id)
+    const revokedByOwner = await revokeInvite(db, fakeAccessToken(userA), householdAId, inviteA.id)
     expect(revokedByOwner).toEqual({ revoked: true })
 
     const final = await db.select({ status: householdInvites.status }).from(householdInvites).where(eq(householdInvites.id, inviteA.id))

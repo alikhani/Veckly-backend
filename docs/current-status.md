@@ -43,6 +43,18 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-22 — Meal recommendations: correct language, server-side weekly cache
+
+Two related fixes, both from a user report that the "Suggestions for you" AI reason text in the iOS meal picker loaded slowly and appeared in English even on a Swedish device.
+
+**Language**: the recommendation prompt previously told Claude to write `reason` "in the same language as the meal title" — but built-in recipe titles are always English regardless of the caller's app language, so `reason` was always English too. `src/recipe-recommendations.ts` now derives the caller's language from `Accept-Language` (new shared `src/locale.ts`, also adopted by `shopping-list.ts` in place of its own local copy of the same header-parsing logic) and instructs Claude explicitly to respond in that language.
+
+**Cost/latency**: nothing previously capped how often this ~10s Claude call ran — every iOS cold launch triggered it fresh (client-side caching was in-memory only, reset on every app relaunch), and nothing survived across serverless invocations on the backend either. Since a household's taste profile and feedback history don't meaningfully change week to week (and the product's own planning cadence is "once a week"), added a server-side cache: `migrations/0033_household_recipe_recommendations.sql` (active-member RLS, keyed by `household_id` + `language`, ~1 week TTL). `RecommendBodySchema` gained an optional `householdId` field — optional so MealPlanner's existing internal-route caller (which doesn't send it yet) keeps working unchanged, uncached; iOS now sends it. A `householdId` the caller isn't an active member of is silently treated as absent (skip caching) rather than failing the request, since it's a performance key, not a data-access parameter.
+
+Migration `0033` applied directly to production via `mcp__supabase__apply_migration`, verified via `list_tables` (RLS enabled) and `get_advisors` (no new security warnings). Deployed to production on 2026-07-22 as `dpl_8g8EnZs9Fza3tyeUA6HgepGnpkpf` (`https://veckly-backend.vercel.app`) — verified serving the updated OpenAPI spec (`householdId` present on `MealRecommendationsRequest`) immediately after.
+
+iOS also gained its own independent fix for the same user report: `WeekStore` now caches each week's summary independently by `weekStartDate` instead of a single mutable "currently displayed" slot, so switching between This/Last/Next week shows cached data instantly instead of re-fetching every time — see `Veckly-ios` history, no backend change involved.
+
 ### 2026-07-14 — Supabase-backed beta product events
 
 Phase 7 beta measurement now has a backend-owned event log instead of relying on a third-party analytics SDK. Added migration `0031_product_events.sql`, Drizzle schema, active-member RLS, and public `POST /households/{householdId}/product-events`.

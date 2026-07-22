@@ -26,6 +26,7 @@ export const AUTH_SCHEMA_SHIM = `
 export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   await db.execute(sql.raw(AUTH_SCHEMA_SHIM))
 
+  const [householdRecipeRecommendationsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_recipe_recommendations') as exists`)
   const [householdsDeleteRlsMarker] = await db.execute<{ exists: string | null }>(sql`
     select policyname as exists from pg_policies
     where tablename = 'households'
@@ -56,6 +57,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
+  const alreadyHasHouseholdRecipeRecommendationsMigration = Boolean(householdRecipeRecommendationsMarker?.exists)
   const alreadyHasHouseholdsDeleteRlsMigration = Boolean(householdsDeleteRlsMarker?.exists)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
   const alreadyHasProductEventsMigration = Boolean(productEventsMarker?.exists)
@@ -74,6 +76,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasHouseholdRecipeRecommendationsMigration && file < '0034_') continue
     if (alreadyHasHouseholdsDeleteRlsMigration && file < '0033_') continue
     if (alreadyHasProductEventsMigration && file < '0032_') continue
     if (alreadyHasHouseholdMealSignalsMigration && file < '0031_') continue
@@ -131,5 +134,6 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, delete on "household_prep_batches" to authenticated;
     grant select, insert, delete on "household_prep_batch_assignments" to authenticated;
     grant select, insert, update on "user_profiles" to authenticated;
+    grant select, insert, update on "household_recipe_recommendations" to authenticated;
   `))
 }

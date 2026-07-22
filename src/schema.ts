@@ -223,6 +223,21 @@ export const householdMealSignals = pgTable('household_meal_signals', {
   index('household_meal_signals_household_updated_idx').on(table.householdId, table.updatedAt),
 ])
 
+// Server-side cache for `/recipes/recommend` (see recipe-recommendations.ts)
+// — a household's taste profile and feedback history don't meaningfully
+// shift week to week, so recomputing this AI call on every app launch
+// doesn't buy anything beyond cost and latency. Keyed by `language` too
+// (not just `householdId`) since a cached English response wouldn't satisfy
+// a Swedish-language caller.
+export const householdRecipeRecommendations = pgTable('household_recipe_recommendations', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  language: text('language').notNull(),
+  recommendations: jsonb('recommendations').notNull(),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.language], name: 'household_recipe_recommendations_pk' }),
+])
+
 export const mealFeedbackVote = pgEnum('meal_feedback_vote', ['up', 'down'])
 export const mealFeedbackSignal = pgEnum('meal_feedback_signal', [
   'easy-weeknight',

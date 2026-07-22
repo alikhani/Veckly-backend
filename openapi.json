@@ -3229,6 +3229,10 @@
       "MealRecommendationsRequest": {
         "type": "object",
         "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "householdProfile": {
             "type": "object",
             "properties": {

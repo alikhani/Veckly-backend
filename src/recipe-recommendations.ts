@@ -1,7 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
+import { and, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
+import { assertMembership } from './membership.js'
+import { withRls } from './rls.js'
+import { householdRecipeRecommendations } from './schema.js'
+import type { Db } from './db.js'
 
 const RecommendationSchema = z.object({
   mealId: z.string().min(1),
@@ -20,6 +25,11 @@ const FeedbackItemSchema = z.object({
 })
 
 const RecommendBodySchema = z.object({
+  // Optional for backward compatibility with the MealPlanner strangle route,
+  // which doesn't send it yet — caching only engages when it's present.
+  // When present, it's verified against the caller's own membership before
+  // being trusted as a cache key (see `resolveCacheableHouseholdId`).
+  householdId: z.string().uuid().optional(),
   householdProfile: z.object({
     adults: z.number(),
     children: z.number(),
@@ -74,6 +84,70 @@ Rules:
 - ${languageInstruction}
 - 8 to 12 recommendations total
 - Do not include meals with explicit negative feedback unless no better option exists`
+}
+
+// A household's taste profile and feedback history don't meaningfully shift
+// week to week, and the product's own planning cadence is "once a week" (see
+// vision.md) — so a week is the natural TTL: recomputing this ~10s AI call on
+// every app launch bought nothing beyond cost and latency for something that
+// was already correct a day, or several days, ago.
+const RECOMMENDATION_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+type TCachedRecommendation = { mealId: string; reason: string }
+
+async function getCachedRecommendations(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  language: AppLanguage,
+): Promise<TCachedRecommendation[] | null> {
+  return withRls(db, accessToken, async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(householdRecipeRecommendations)
+      .where(and(
+        eq(householdRecipeRecommendations.householdId, householdId),
+        eq(householdRecipeRecommendations.language, language),
+      ))
+    if (!row) return null
+    const isFresh = Date.now() - row.computedAt.getTime() <= RECOMMENDATION_CACHE_TTL_MS
+    if (!isFresh) return null
+    return row.recommendations as TCachedRecommendation[]
+  })
+}
+
+async function saveRecommendationsToCache(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  language: AppLanguage,
+  recommendations: TCachedRecommendation[],
+) {
+  await withRls(db, accessToken, async (tx) => {
+    await tx
+      .insert(householdRecipeRecommendations)
+      .values({ householdId, language, recommendations, computedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [householdRecipeRecommendations.householdId, householdRecipeRecommendations.language],
+        set: { recommendations, computedAt: new Date() },
+      })
+  })
+}
+
+// A `householdId` the caller supplied is only trustworthy as a cache key
+// once we've confirmed they're actually a member — otherwise treat it as
+// absent (skip caching) rather than erroring the whole recommendation
+// request over what is fundamentally a performance optimization, not a
+// data-access parameter.
+async function resolveCacheableHouseholdId(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string | undefined,
+): Promise<string | null> {
+  if (!householdId) return null
+  const member = await assertMembership(db, accessToken, householdId, userId)
+  return member ? householdId : null
 }
 
 function isRateLimited(userId: string, now = Date.now()) {
@@ -134,7 +208,17 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   return text
 }
 
-async function handleRecommend(userId: string, body: TRecommendBody, language: AppLanguage) {
+async function handleRecommend(db: Db, accessToken: string, userId: string, body: TRecommendBody, language: AppLanguage) {
+  const cacheableHouseholdId = await resolveCacheableHouseholdId(db, accessToken, userId, body.householdId)
+
+  if (cacheableHouseholdId) {
+    const cached = await getCachedRecommendations(db, accessToken, cacheableHouseholdId, language)
+    if (cached) {
+      const validIds = new Set(body.candidateMeals.map((m) => m.id))
+      return { body: { recommendations: cached.filter((r) => validIds.has(r.mealId)) }, status: 200 as const }
+    }
+  }
+
   if (isRateLimited(userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   let aiText: string
@@ -160,10 +244,13 @@ async function handleRecommend(userId: string, body: TRecommendBody, language: A
   }
 
   const validIds = new Set(body.candidateMeals.map((m) => m.id))
-  return {
-    body: { recommendations: validated.data.recommendations.filter((r) => validIds.has(r.mealId)) },
-    status: 200 as const,
+  const recommendations = validated.data.recommendations.filter((r) => validIds.has(r.mealId))
+
+  if (cacheableHouseholdId) {
+    await saveRecommendationsToCache(db, accessToken, cacheableHouseholdId, language, recommendations)
   }
+
+  return { body: { recommendations }, status: 200 as const }
 }
 
 const recommendRoute = createRoute({
@@ -185,36 +272,38 @@ const recommendRoute = createRoute({
   },
 })
 
-export function buildRecipeRecommendationRoutes() {
+export function buildRecipeRecommendationRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/recipes/*', requireAuth)
 
   app.openapi(recommendRoute, async (c) => {
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
     const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
-    const result = await handleRecommend(user.id, body, language)
+    const result = await handleRecommend(db, accessToken, user.id, body, language)
     return c.json(result.body as never, result.status)
   })
 
   return app
 }
 
-export function buildInternalRecipeRecommendationRoutes() {
+export function buildInternalRecipeRecommendationRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/internal/*', requireInternalAuth)
 
   app.post('/internal/recipes/recommend', async (c) => {
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const parsed = RecommendBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
     // MealPlanner (the caller of this strangle route) doesn't currently
     // forward its own Accept-Language, so this defaults to 'en' — same as
     // before this language fix, no behavior change for the web app.
     const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
-    const result = await handleRecommend(user.id, parsed.data, language)
+    const result = await handleRecommend(db, accessToken, user.id, parsed.data, language)
     return c.json(result.body, result.status)
   })
 

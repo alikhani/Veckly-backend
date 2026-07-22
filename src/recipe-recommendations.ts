@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
 
 const RecommendationSchema = z.object({
   mealId: z.string().min(1),
@@ -46,7 +47,16 @@ export function setRecipeRecommendationGeneratorForTests(next: TGenerator | null
   recommendationRateLimitHits.clear()
 }
 
-const SYSTEM_PROMPT = `You are a meal recommendation assistant for a family meal planning app.
+// Built-in recipe titles are stored in English regardless of the caller's
+// app language, so "match the meal title's language" (what this used to
+// say) meant the reason was always English too — even for a Swedish-language
+// caller. The reason is the only free-text part of this response the user
+// actually reads; it should follow the caller's language explicitly instead.
+function systemPrompt(language: AppLanguage): string {
+  const languageInstruction = language === 'sv'
+    ? '"reason" must be one concise sentence, max 12 words, written in Swedish — regardless of what language the meal title itself is in'
+    : '"reason" must be one concise sentence, max 12 words, written in English — regardless of what language the meal title itself is in'
+  return `You are a meal recommendation assistant for a family meal planning app.
 Your only job is to return a single valid JSON object — no explanation, no markdown, no preamble.
 
 Given a household profile, their feedback history, and a list of available meals, return a ranked shortlist of 8–12 meals that best fit this family.
@@ -61,9 +71,10 @@ Return this exact JSON structure:
 Rules:
 - Only use mealIds from the provided candidate list — never invent IDs
 - Rank best match first
-- "reason" must be one concise sentence, max 12 words, in the same language as the meal title
+- ${languageInstruction}
 - 8 to 12 recommendations total
 - Do not include meals with explicit negative feedback unless no better option exists`
+}
 
 function isRateLimited(userId: string, now = Date.now()) {
   const previous = recommendationRateLimitHits.get(userId)
@@ -123,12 +134,12 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   return text
 }
 
-async function handleRecommend(userId: string, body: TRecommendBody) {
+async function handleRecommend(userId: string, body: TRecommendBody, language: AppLanguage) {
   if (isRateLimited(userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   let aiText: string
   try {
-    aiText = await generator(SYSTEM_PROMPT, buildUserMessage(body))
+    aiText = await generator(systemPrompt(language), buildUserMessage(body))
   } catch (error) {
     console.error('[recommend] AI generation failed', error)
     return { body: { error: 'AI_UNAVAILABLE' }, status: 500 as const }
@@ -182,7 +193,8 @@ export function buildRecipeRecommendationRoutes() {
   app.openapi(recommendRoute, async (c) => {
     const user = c.get('user')
     const body = c.req.valid('json')
-    const result = await handleRecommend(user.id, body)
+    const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
+    const result = await handleRecommend(user.id, body, language)
     return c.json(result.body as never, result.status)
   })
 
@@ -198,7 +210,11 @@ export function buildInternalRecipeRecommendationRoutes() {
     const user = c.get('user')
     const parsed = RecommendBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
-    const result = await handleRecommend(user.id, parsed.data)
+    // MealPlanner (the caller of this strangle route) doesn't currently
+    // forward its own Accept-Language, so this defaults to 'en' — same as
+    // before this language fix, no behavior change for the web app.
+    const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
+    const result = await handleRecommend(user.id, parsed.data, language)
     return c.json(result.body, result.status)
   })
 

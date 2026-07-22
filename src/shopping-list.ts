@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, inArray, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
+import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
@@ -295,7 +296,7 @@ type TWeekPlanProjectionState = {
   meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string; servings?: number }>>
 }
 
-type TShoppingListLanguage = 'en' | 'sv'
+type TShoppingListLanguage = AppLanguage
 
 const SWEDISH_INGREDIENT_LABELS: Record<string, string> = {
   avocado: 'avokado',
@@ -376,10 +377,6 @@ const SWEDISH_UNIT_LABELS: Record<string, string> = {
   pc: 'st',
   tbsp: 'msk',
   tsp: 'tsk',
-}
-
-function shoppingListLanguageFromAcceptLanguage(value: string | undefined): TShoppingListLanguage {
-  return value?.toLowerCase().split(',').some((part) => part.trim().startsWith('sv')) ? 'sv' : 'en'
 }
 
 function localizeShoppingIngredientLabel(label: string, language: TShoppingListLanguage) {
@@ -861,7 +858,7 @@ export function buildShoppingListRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate, {
-      language: shoppingListLanguageFromAcceptLanguage(c.req.header('Accept-Language')),
+      language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
       today: validISODateString(c.req.header('X-Veckly-Today')),
     })
 

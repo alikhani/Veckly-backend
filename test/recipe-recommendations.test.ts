@@ -137,6 +137,41 @@ describeWithDb('Recipe recommendation routes', () => {
     expect(userMessage).toContain('batch cook day')
   })
 
+  it('writes recommendation reasons in Swedish when the caller sends Accept-Language: sv', async () => {
+    let capturedSystemPrompt = ''
+    setRecipeRecommendationGeneratorForTests(async (systemPrompt) => {
+      capturedSystemPrompt = systemPrompt
+      return validAiResponse
+    })
+
+    const app = buildApp(db)
+    await app.request('/internal/recipes/recommend', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.VECKLY_INTERNAL_API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-User-Id': 'user-swedish',
+        'Accept-Language': 'sv-SE,sv;q=0.9,en;q=0.8',
+      },
+      body: JSON.stringify(validBody),
+    })
+
+    expect(capturedSystemPrompt).toContain('written in Swedish')
+    expect(capturedSystemPrompt).not.toContain('written in English')
+  })
+
+  it('defaults recommendation reasons to English when no Accept-Language is sent', async () => {
+    let capturedSystemPrompt = ''
+    setRecipeRecommendationGeneratorForTests(async (systemPrompt) => {
+      capturedSystemPrompt = systemPrompt
+      return validAiResponse
+    })
+
+    await request(validBody, 'user-default-language')
+
+    expect(capturedSystemPrompt).toContain('written in English')
+  })
+
   it('requires internal auth on the MealPlanner strangle route', async () => {
     const app = buildApp(db)
     const response = await app.request('/internal/recipes/recommend', {

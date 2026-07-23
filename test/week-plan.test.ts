@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
@@ -16,6 +16,7 @@ import {
   getWeekHistoryPlan,
   getWeekPlanSummary,
   listWeekHistoryPlans,
+  requestToday,
   upsertWeekHistoryPlan,
   type TWeekPlanProjectionState,
 } from '../src/week-plan.js'
@@ -707,6 +708,55 @@ describeWithDb('Week-plan event log + projection', () => {
         updatedBy: userA,
       })
     }
+
+    it('only fills today and upcoming selected days in the current week', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }, { day: 'wednesday' }, { day: 'thursday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Weeknight Pasta' })
+
+      const result = await doGenerateWeekPlan(
+        db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-10',
+      )
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'empty' })
+      expect(summary?.days[1]).toMatchObject({ dayOfWeek: 'tuesday', state: 'empty' })
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'planned' })
+      expect(summary?.days[3]).toMatchObject({ dayOfWeek: 'thursday', state: 'planned' })
+    })
+
+    it('ignores impossible X-Veckly-Today headers instead of treating every day as past', async () => {
+      const currentWeekStartDate = '2026-07-20'
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }, { day: 'wednesday' }, { day: 'thursday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Header Fallback Pasta' })
+
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-07-22T12:00:00.000Z'))
+      const resolvedToday = requestToday('9999-99-99')
+      vi.useRealTimers()
+
+      await expect(doGenerateWeekPlan(
+        db, fakeAccessToken(userA), userA, householdAId, currentWeekStartDate, false, resolvedToday,
+      )).resolves.toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, currentWeekStartDate)
+      expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'empty' })
+      expect(summary?.days[1]).toMatchObject({ dayOfWeek: 'tuesday', state: 'empty' })
+      expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'planned' })
+      expect(summary?.days[3]).toMatchObject({ dayOfWeek: 'thursday', state: 'planned' })
+    })
+
+    it('fills every selected day for a future week', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }, { day: 'wednesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Future Pasta' })
+
+      const result = await doGenerateWeekPlan(
+        db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03',
+      )
+
+      expect(result).toEqual({ ok: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days.slice(0, 3).every((day) => day.state === 'planned')).toBe(true)
+    })
 
     it('never assigns a meal to a day the household has explicitly skipped', async () => {
       await insertProfile([{ day: 'monday' }, { day: 'wednesday' }])

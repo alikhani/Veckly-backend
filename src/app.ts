@@ -27,7 +27,7 @@ export function buildApp(db: Db) {
   app.use(cors({
     origin: process.env.ALLOWED_ORIGIN ?? 'http://localhost:3000',
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'Authorization', 'Accept-Language', 'X-Veckly-Today'],
   }))
   app.use(secureHeaders())
 

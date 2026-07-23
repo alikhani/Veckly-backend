@@ -576,6 +576,23 @@ export function isMonday(yyyyMmDd: string) {
   return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
 }
 
+function isValidISODateString(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+export function requestToday(value: string | undefined) {
+  return isValidISODateString(value) ? value : new Date().toISOString().slice(0, 10)
+}
+
+function defaultTodayForWeek(weekStartDate: string) {
+  const currentDate = requestToday(undefined)
+  return currentDate >= weekStartDate && currentDate <= addDays(weekStartDate, 6)
+    ? currentDate
+    : weekStartDate
+}
+
 function getIsoWeekIdentity(yyyyMmDd: string) {
   const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
   const day = date.getUTCDay() || 7
@@ -865,6 +882,7 @@ export async function doGenerateWeekPlan(
   householdId: string,
   weekStartDate: string,
   regenerate: boolean,
+  today = defaultTodayForWeek(weekStartDate),
 ): Promise<{ ok: true } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
   const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
@@ -936,6 +954,7 @@ export async function doGenerateWeekPlan(
   const projState = readProjectionState(projection?.state)
   const daysToFill = orderedDays.filter((day) => {
     if (!selectedDayNames.includes(day)) return false
+    if (addDays(weekStartDate, orderedDays.indexOf(day)) < today) return false
     if (projState.lockedDays.includes(day)) return false
     if (projState.skippedDays.includes(day)) return false
     return regenerate ? true : !projState.meals[day]
@@ -1065,7 +1084,15 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const { regenerate } = c.req.valid('json')
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
-    const result = await doGenerateWeekPlan(db, accessToken, user.id, householdId, weekStartDate, regenerate)
+    const result = await doGenerateWeekPlan(
+      db,
+      accessToken,
+      user.id,
+      householdId,
+      weekStartDate,
+      regenerate,
+      requestToday(c.req.header('X-Veckly-Today')),
+    )
     if ('error' in result && result.error === 'NOT_MEMBER') return c.json({ error: 'NOT_MEMBER' }, 404)
     if ('error' in result) return c.json(result, 422)
     return c.json(result, 200)

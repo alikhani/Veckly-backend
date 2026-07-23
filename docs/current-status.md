@@ -47,6 +47,10 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 Recipe import, recipe create/update, and shopping-list aggregation now share deterministic ingredient category inference when a category is missing or invalid. Explicit valid extractor categories remain authoritative. Existing household-owned recipes can be repaired idempotently through authenticated `POST /households/{householdId}/recipes/repair-ingredient-categories`; membership is checked before the RLS-scoped update, and recipes in other households or the public library are never included.
 
+### 2026-07-22 — Current-week generation skips past days
+
+Week generation now uses the existing device-local `X-Veckly-Today` signal to leave selected days before today empty. Today and upcoming selected days are still generated, and future weeks continue to generate every selected day.
+
 ### 2026-07-22 — Meal recommendations: correct language, server-side weekly cache
 
 Two related fixes, both from a user report that the "Suggestions for you" AI reason text in the iOS meal picker loaded slowly and appeared in English even on a Swedish device.

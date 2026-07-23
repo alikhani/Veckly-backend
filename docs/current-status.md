@@ -43,6 +43,10 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-22 — Ingredient category inference and repair
+
+Recipe import, recipe create/update, and shopping-list aggregation now share deterministic ingredient category inference when a category is missing or invalid. Explicit valid extractor categories remain authoritative. Existing household-owned recipes can be repaired idempotently through authenticated `POST /households/{householdId}/recipes/repair-ingredient-categories`; membership is checked before the RLS-scoped update, and recipes in other households or the public library are never included.
+
 ### 2026-07-22 — Meal recommendations: correct language, server-side weekly cache
 
 Two related fixes, both from a user report that the "Suggestions for you" AI reason text in the iOS meal picker loaded slowly and appeared in English even on a Swedish device.

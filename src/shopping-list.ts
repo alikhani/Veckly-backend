@@ -7,6 +7,7 @@ import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
+import { normalizeIngredientCategory, readRecipeIngredients } from './ingredient-categories.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -393,8 +394,14 @@ function isoDateUTC(date: Date) {
   return date.toISOString().slice(0, 10)
 }
 
+function isValidISODateString(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
 function validISODateString(value: string | undefined) {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
+  return isValidISODateString(value) ? value : undefined
 }
 
 function addDaysUTC(dateString: string, offset: number) {
@@ -422,7 +429,7 @@ function deduplicateCustomItems(items: Array<{ itemKey: string; label: string; c
 }
 
 function buildItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(ingredient.category || 'Other')
+  const category = normalizeKeyPart(normalizeIngredientCategory(ingredient.item, ingredient.category))
   const item = normalizeKeyPart(ingredient.item)
   const unit = normalizeKeyPart(ingredient.unit)
   return [category, item, unit].join(':')
@@ -437,10 +444,33 @@ function singularizeShoppingItem(value: string) {
 }
 
 function buildCanonicalItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(ingredient.category || 'Other')
+  const category = normalizeKeyPart(normalizeIngredientCategory(ingredient.item, ingredient.category))
   const item = normalizeKeyPart(singularizeShoppingItem(ingredient.item))
   const unit = normalizeKeyPart(ingredient.unit)
   return [category, item, unit].join(':')
+}
+
+function buildLegacyItemKey(ingredient: TRecipeIngredient) {
+  const category = normalizeKeyPart(ingredient.category) || 'other'
+  const item = normalizeKeyPart(ingredient.item)
+  const unit = normalizeKeyPart(ingredient.unit)
+  return [category, item, unit].join(':')
+}
+
+function buildLegacyCanonicalItemKey(ingredient: TRecipeIngredient) {
+  const category = normalizeKeyPart(ingredient.category) || 'other'
+  const item = normalizeKeyPart(singularizeShoppingItem(ingredient.item))
+  const unit = normalizeKeyPart(ingredient.unit)
+  return [category, item, unit].join(':')
+}
+
+function buildStateItemKeys(ingredient: TRecipeIngredient) {
+  return new Set([
+    buildItemKey(ingredient),
+    buildCanonicalItemKey(ingredient),
+    buildLegacyItemKey(ingredient),
+    buildLegacyCanonicalItemKey(ingredient),
+  ])
 }
 
 function preferredShoppingLabel(current: string, candidate: string) {
@@ -668,13 +698,14 @@ export async function getShoppingListSummary(
       const recipeBaseServings = recipe.servings
       const plannedMealServings = meal.servingsOverride ?? householdSize ?? recipeBaseServings
       const scaleFactor = plannedMealServings / recipeBaseServings
-      return (recipe.ingredients as TRecipeIngredient[])
+      return readRecipeIngredients<TRecipeIngredient>(recipe.ingredients)
         .filter((ingredient) => ingredient.item.trim())
         .map((ingredient) => ({
           ingredient,
           scaleFactor,
           rawItemKey: buildItemKey(ingredient),
           canonicalItemKey: buildCanonicalItemKey(ingredient),
+          stateItemKeys: buildStateItemKeys(ingredient),
           shouldLocalize: recipe.source === 'builtin',
         }))
     })
@@ -696,7 +727,7 @@ export async function getShoppingListSummary(
     }
     const accumulator = new Map<string, TItemAccumulator>()
 
-    for (const { ingredient, scaleFactor, rawItemKey, canonicalItemKey, shouldLocalize } of ingredientRows) {
+    for (const { ingredient, scaleFactor, rawItemKey, canonicalItemKey, stateItemKeys, shouldLocalize } of ingredientRows) {
       const itemKey = (canonicalKeyVariants.get(canonicalItemKey)?.size ?? 0) > 1 ? canonicalItemKey : rawItemKey
       const rawAmount = ingredient.amount?.trim() || null
       const parsed = rawAmount ? parseFloat(rawAmount) : null
@@ -705,7 +736,7 @@ export async function getShoppingListSummary(
 
       const existing = accumulator.get(itemKey)
       if (existing) {
-        existing.originalItemKeys.add(rawItemKey)
+        for (const key of stateItemKeys) existing.originalItemKeys.add(key)
         existing.shouldLocalize ||= shouldLocalize
         existing.label = preferredShoppingLabel(existing.label, ingredient.item)
         if (existing.canSum && validNum) {
@@ -716,9 +747,9 @@ export async function getShoppingListSummary(
         }
       } else {
         accumulator.set(itemKey, {
-          category: ingredient.category?.trim() || 'Other',
+          category: normalizeIngredientCategory(ingredient.item, ingredient.category),
           label: ingredient.item.trim(),
-          originalItemKeys: new Set([rawItemKey]),
+          originalItemKeys: stateItemKeys,
           shouldLocalize,
           totalAmount: validNum ? scaledAmount! : null,
           canSum: validNum,

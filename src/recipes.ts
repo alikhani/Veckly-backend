@@ -5,6 +5,7 @@ import { bootstrapHousehold } from './households.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, mealFeedback, recipes, userSavedRecipes } from './schema.js'
+import { categorizeRecipeIngredients, readRecipeIngredients } from './ingredient-categories.js'
 import type { Db } from './db.js'
 
 // --- Wire shapes ------------------------------------------------------------
@@ -98,7 +99,7 @@ export function toRecipeResponse(row: typeof recipes.$inferSelect, userVote: 'up
     title: row.title,
     description: row.description,
     servings: row.servings,
-    ingredients: row.ingredients as z.infer<typeof RecipeIngredientSchema>[],
+    ingredients: categorizeRecipeIngredients(row.ingredients),
     steps: row.steps as z.infer<typeof RecipeStepSchema>[],
     tags: row.tags as string[],
     prepTimeMinutes: row.prepTimeMinutes ?? null,
@@ -133,7 +134,7 @@ export async function createRecipe(
         title: input.title,
         description: input.description,
         servings: input.servings,
-        ingredients: input.ingredients,
+        ingredients: categorizeRecipeIngredients(input.ingredients),
         steps: input.steps,
         tags: input.tags,
         prepTimeMinutes: input.prepTimeMinutes ?? null,
@@ -237,7 +238,7 @@ export async function updateRecipe(
     if (input.title !== undefined) set.title = input.title
     if (input.description !== undefined) set.description = input.description
     if (input.servings !== undefined) set.servings = input.servings
-    if (input.ingredients !== undefined) set.ingredients = input.ingredients
+    if (input.ingredients !== undefined) set.ingredients = categorizeRecipeIngredients(input.ingredients)
     if (input.steps !== undefined) set.steps = input.steps
     if (input.tags !== undefined) set.tags = input.tags
     if (input.prepTimeMinutes !== undefined) set.prepTimeMinutes = input.prepTimeMinutes
@@ -256,6 +257,37 @@ export async function updateRecipe(
       .returning()
 
     return updated ? toRecipeResponse(updated) : null
+  })
+}
+
+export async function repairIngredientCategories(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+) {
+  return withRls(db, accessToken, async (tx) => {
+    const rows = await tx
+      .select({ id: recipes.id, ingredients: recipes.ingredients })
+      .from(recipes)
+      .where(eq(recipes.householdId, householdId))
+
+    let recipesUpdated = 0
+    let ingredientsUpdated = 0
+    for (const row of rows) {
+      const existing = readRecipeIngredients<z.infer<typeof RecipeIngredientSchema>>(row.ingredients)
+      const repaired = categorizeRecipeIngredients(existing)
+      const changedCount = repaired.filter((ingredient, index) => ingredient.category !== existing[index]?.category).length
+      if (changedCount === 0) continue
+
+      await tx
+        .update(recipes)
+        .set({ ingredients: repaired })
+        .where(and(eq(recipes.id, row.id), eq(recipes.householdId, householdId)))
+      recipesUpdated += 1
+      ingredientsUpdated += changedCount
+    }
+
+    return { recipesUpdated, ingredientsUpdated }
   })
 }
 
@@ -423,6 +455,25 @@ const updateRecipeRoute = createRoute({
   },
 })
 
+const RepairIngredientCategoriesResponseSchema = z.object({
+  recipesUpdated: z.number().int().min(0),
+  ingredientsUpdated: z.number().int().min(0),
+}).openapi('RepairIngredientCategoriesResponse')
+
+const repairIngredientCategoriesRoute = createRoute({
+  method: 'post',
+  path: '/households/{householdId}/recipes/repair-ingredient-categories',
+  operationId: 'repairIngredientCategories',
+  summary: 'Repair missing or invalid ingredient categories in household-owned recipes',
+  security: [{ bearerAuth: [] }],
+  request: { params: HouseholdParamsSchema },
+  responses: {
+    200: { description: 'Ingredient categories repaired', content: { 'application/json': { schema: RepairIngredientCategoriesResponseSchema } } },
+    404: { description: 'Household not found or caller is not a member' },
+    401: { description: 'Missing or invalid session' },
+  },
+})
+
 const listPublicRecipesRoute = createRoute({
   method: 'get',
   path: '/recipes/public',
@@ -525,6 +576,16 @@ export function buildRecipesRoutes(db: Db) {
     const recipe = await updateRecipe(db, accessToken, householdId, recipeId, body)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)
     return c.json(recipe, 200)
+  })
+
+  app.openapi(repairIngredientCategoriesRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId } = c.req.valid('param')
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+    const result = await repairIngredientCategories(db, accessToken, householdId)
+    return c.json(result, 200)
   })
 
   app.openapi(listPublicRecipesRoute, async (c) => {

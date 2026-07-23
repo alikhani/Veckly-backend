@@ -99,7 +99,7 @@ describeWithDb('Recipe URL import routes', () => {
       recipe: {
         title: 'Kycklinggryta',
         prepTimeMinutes: 30,
-        ingredients: [{ name: 'kycklingfilé', amount: 400, unit: 'g', category: null }],
+        ingredients: [{ name: 'kycklingfilé', amount: 400, unit: 'g', category: 'protein' }],
         tags: ['middag', 'gryta'],
         sourceUrl: VALID_URL,
       },

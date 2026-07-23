@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import { normalizeIngredientCategory } from './ingredient-categories.js'
 
 const PRIVATE_IP_PATTERN =
   /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
@@ -63,8 +64,6 @@ const RecipeImportErrorSchema = z.object({
     'CAPTION_REQUIRED',
   ]),
 }).openapi('RecipeImportError')
-
-const VALID_INGREDIENT_CATEGORIES = new Set(['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other'])
 
 const ImportIngredientSchema = z.object({
   // Accept any non-negative number — the AI occasionally returns 0 for trace amounts
@@ -410,11 +409,12 @@ function parseIngredientString(raw: unknown): TRawRecipeIngredient | null {
   const match = raw.trim().match(/^([\d.,/½¼¾]+)\s*([a-zA-ZåäöÅÄÖ]+\.?)\s+(.+)$/)
   if (match) {
     const [, rawAmount, rawUnit, rawName] = match
-    if (!rawAmount || !rawUnit || !rawName) return { name: raw.trim(), amount: null, unit: null, category: null }
+    if (!rawAmount || !rawUnit || !rawName) return { name: raw.trim(), amount: null, unit: null, category: normalizeIngredientCategory(raw.trim(), null) }
     const amount = parseFloat(rawAmount.replace(',', '.'))
-    return { name: rawName.trim(), amount: isNaN(amount) ? null : amount, unit: rawUnit.replace(/\.$/, ''), category: null }
+    const name = rawName.trim()
+    return { name, amount: isNaN(amount) ? null : amount, unit: rawUnit.replace(/\.$/, ''), category: normalizeIngredientCategory(name, null) }
   }
-  return { name: raw.trim(), amount: null, unit: null, category: null }
+  return { name: raw.trim(), amount: null, unit: null, category: normalizeIngredientCategory(raw.trim(), null) }
 }
 
 function extractJsonLdBlocks(html: string): TSchemaOrgBlock[] {
@@ -549,7 +549,17 @@ function toIngredient(i: z.infer<typeof ImportIngredientSchema>): TRawRecipeIngr
     name: i.name,
     amount: i.amount ?? null,
     unit: i.unit ?? null,
-    category: i.category && VALID_INGREDIENT_CATEGORIES.has(i.category) ? i.category : null,
+    category: normalizeIngredientCategory(i.name, i.category),
+  }
+}
+
+function categorizeImportedRecipe(recipe: TRawRecipe): TRawRecipe {
+  return {
+    ...recipe,
+    ingredients: recipe.ingredients.map((ingredient) => ({
+      ...ingredient,
+      category: normalizeIngredientCategory(ingredient.name, ingredient.category),
+    })),
   }
 }
 
@@ -727,6 +737,7 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
       return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
     }
 
+    recipe = categorizeImportedRecipe(recipe)
     const { confidence, warnings } = computeTikTokConfidenceAndWarnings(result, recipe)
     const source = {
       kind: 'tiktok' as const,
@@ -753,7 +764,7 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   if (schemaOrgResult) {
     return {
       body: {
-        recipe: schemaOrgResult,
+        recipe: categorizeImportedRecipe(schemaOrgResult),
         source: { kind: 'web' as const, url: validated.url },
         warnings: [],
         confidence: 'high' as const,
@@ -763,7 +774,7 @@ async function handleRecipeImport(userId: string, rawUrl: unknown) {
   }
 
   try {
-    const recipe = await aiExtractor(html, validated.url)
+    const recipe = categorizeImportedRecipe(await aiExtractor(html, validated.url))
     return {
       body: {
         recipe,
@@ -818,7 +829,7 @@ async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourc
   if ('error' in sourceUrl) return { body: { error: 'INVALID_URL' }, status: 400 as const }
 
   try {
-    const recipe = await textAiExtractor(rawText, sourceUrl.url)
+    const recipe = categorizeImportedRecipe(await textAiExtractor(rawText, sourceUrl.url))
     const { confidence, warnings } = computeTextConfidenceAndWarnings(rawText, recipe)
     return { body: { recipe, warnings, confidence }, status: 200 as const }
   } catch {

@@ -2778,6 +2778,23 @@
           }
         }
       },
+      "RepairIngredientCategoriesResponse": {
+        "type": "object",
+        "properties": {
+          "recipesUpdated": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ingredientsUpdated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "recipesUpdated",
+          "ingredientsUpdated"
+        ]
+      },
       "RecipesEnvelope": {
         "type": "object",
         "properties": {
@@ -5748,6 +5765,46 @@
           },
           "404": {
             "description": "Recipe not found or not in this household"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/recipes/repair-ingredient-categories": {
+      "post": {
+        "operationId": "repairIngredientCategories",
+        "summary": "Repair missing or invalid ingredient categories in household-owned recipes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ingredient categories repaired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairIngredientCategoriesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

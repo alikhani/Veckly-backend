@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships, recipes, userSavedRecipes } from '../src/schema.js'
-import { createRecipe, listRecipes, getRecipe, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
+import { createRecipe, listRecipes, getRecipe, repairIngredientCategories, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -21,7 +21,10 @@ describeWithDb('Recipes + RLS', () => {
     title: 'Pasta Carbonara',
     description: 'A classic Roman pasta dish',
     servings: 4,
-    ingredients: [{ item: 'spaghetti', amount: '400', unit: 'g' }, { item: 'eggs', amount: '4' }],
+    ingredients: [
+      { item: 'spaghetti', amount: '400', unit: 'g', category: 'pantry' },
+      { item: 'eggs', amount: '4', category: 'dairy' },
+    ],
     steps: [{ text: 'Boil pasta' }, { text: 'Mix eggs and cheese' }],
     tags: ['italian', 'pasta'],
     prepTimeMinutes: 10,
@@ -219,6 +222,68 @@ describeWithDb('Recipes + RLS', () => {
       expect(withoutArchived).toHaveLength(0)
       expect(withArchived).toHaveLength(1)
       expect(withArchived[0]?.isArchived).toBe(true)
+    })
+
+    it('repairs legacy missing categories only for household-owned recipes and is idempotent', async () => {
+      const own = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const other = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, baseRecipe)
+      await db.update(recipes).set({
+        ingredients: [{ item: 'kycklingfilé', amount: '400', unit: 'g' }],
+        updatedAt: new Date('2026-06-01T10:00:00.000Z'),
+      }).where(eq(recipes.id, own.id))
+      await db.update(recipes).set({
+        ingredients: [{ item: 'tomat', amount: '2' }],
+      }).where(eq(recipes.id, other.id))
+
+      await expect(repairIngredientCategories(db, fakeAccessToken(userA), householdAId)).resolves.toEqual({
+        recipesUpdated: 1,
+        ingredientsUpdated: 1,
+      })
+      await expect(repairIngredientCategories(db, fakeAccessToken(userA), householdAId)).resolves.toEqual({
+        recipesUpdated: 0,
+        ingredientsUpdated: 0,
+      })
+      await expect(repairIngredientCategories(db, fakeAccessToken(userA), householdBId)).resolves.toEqual({
+        recipesUpdated: 0,
+        ingredientsUpdated: 0,
+      })
+
+      const [persistedOwn] = await db.select({ ingredients: recipes.ingredients }).from(recipes).where(eq(recipes.id, own.id))
+      const [persistedOther] = await db.select({ ingredients: recipes.ingredients }).from(recipes).where(eq(recipes.id, other.id))
+      expect(persistedOwn?.ingredients).toEqual([{ item: 'kycklingfilé', amount: '400', unit: 'g', category: 'protein' }])
+      expect(persistedOther?.ingredients).toEqual([{ item: 'tomat', amount: '2' }])
+      const [persistedTimestamp] = await db.select({ updatedAt: recipes.updatedAt }).from(recipes).where(eq(recipes.id, own.id))
+      expect(persistedTimestamp?.updatedAt.toISOString()).toBe('2026-06-01T10:00:00.000Z')
+    })
+
+    it('reads and repairs stringified legacy ingredient JSON', async () => {
+      const own = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      const legacyIngredients = JSON.stringify([{ item: 'tomat', amount: '2' }])
+      await db.execute(sql`
+        update "recipes"
+        set "ingredients" = ${JSON.stringify(legacyIngredients)}::jsonb
+        where "id" = ${own.id}
+      `)
+
+      const listedBeforeRepair = await listRecipes(db, fakeAccessToken(userA), householdAId, userA, false)
+      expect(listedBeforeRepair[0]?.ingredients).toEqual([{ item: 'tomat', amount: '2', category: 'produce' }])
+
+      await expect(repairIngredientCategories(db, fakeAccessToken(userA), householdAId)).resolves.toEqual({
+        recipesUpdated: 1,
+        ingredientsUpdated: 1,
+      })
+
+      const [persisted] = await db.select({ ingredients: recipes.ingredients }).from(recipes).where(eq(recipes.id, own.id))
+      expect(persisted?.ingredients).toEqual([{ item: 'tomat', amount: '2', category: 'produce' }])
+    })
+
+    it('requires authentication before category repair', async () => {
+      const app = buildApp(db)
+      const response = await app.request(`/households/${householdAId}/recipes/repair-ingredient-categories`, {
+        method: 'POST',
+      })
+
+      expect(response.status).toBe(401)
     })
   })
 

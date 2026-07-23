@@ -448,6 +448,36 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
     })
 
+    it('keeps checked state when legacy Other category keys are repaired on read', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Carrot soup',
+        ingredients: [{ item: 'carrot', amount: '2', unit: 'pc' }],
+      })
+      await db.update(recipes)
+        .set({ ingredients: [{ item: 'carrot', amount: '2', unit: 'pc', category: 'Other' }] })
+        .where(eq(recipes.id, recipe.id))
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { listStarted: true, checkedItems: { 'other:carrot:pc': true }, pantryStock: {}, customItems: [] },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'produce',
+          items: [{ itemKey: 'produce:carrot:pc', label: 'carrot', amount: '2', unit: 'pc', checked: true, isCustom: false }],
+        },
+      ])
+    })
+
     it('merges singular and plural variants only when both are present', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
         ...baseRecipe,

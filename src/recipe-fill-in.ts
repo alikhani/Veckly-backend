@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import type { Db } from './db.js'
+import { isRateLimited } from './rate-limit.js'
 
 const SYSTEM_PROMPT = `You are a recipe data generator for a family meal planning app.
 Your only job is to return a single valid JSON object — no explanation, no markdown, no preamble.
@@ -84,19 +86,10 @@ const FillInEnvelopeSchema = z.object({ recipe: FillInResponseSchema }).openapi(
 
 type TGenerator = (systemPrompt: string, userMessage: string) => Promise<string>
 
-const rateLimitHits = new Map<string, number>()
 let generator: TGenerator = generateStructuredJSON
 
 export function setRecipeFillInGeneratorForTests(next: TGenerator | null) {
   generator = next ?? generateStructuredJSON
-  rateLimitHits.clear()
-}
-
-function isRateLimited(userId: string, now = Date.now()) {
-  const previous = rateLimitHits.get(userId)
-  if (previous !== undefined && now - previous < 10_000) return true
-  rateLimitHits.set(userId, now)
-  return false
 }
 
 function buildUserMessage(title: string, body: z.infer<typeof FillInBodySchema>): string {
@@ -144,12 +137,12 @@ async function generateStructuredJSON(systemPrompt: string, userMessage: string)
   return text
 }
 
-async function handleFillIn(userId: string, body: z.infer<typeof FillInBodySchema>) {
+async function handleFillIn(db: Db, userId: string, body: z.infer<typeof FillInBodySchema>) {
   if (body.title.trim().length === 0 || body.title.trim().length > 120) {
     return { body: { error: 'INVALID_PAYLOAD' }, status: 400 as const }
   }
 
-  if (isRateLimited(userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+  if (await isRateLimited(db, userId, 'recipe-fill-in', 10)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   let raw: string
   try {
@@ -195,7 +188,7 @@ const fillInRoute = createRoute({
   },
 })
 
-export function buildRecipeFillInRoutes() {
+export function buildRecipeFillInRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/recipes/*', requireAuth)
@@ -203,14 +196,14 @@ export function buildRecipeFillInRoutes() {
   app.openapi(fillInRoute, async (c) => {
     const user = c.get('user')
     const body = c.req.valid('json')
-    const result = await handleFillIn(user.id, body)
+    const result = await handleFillIn(db, user.id, body)
     return c.json(result.body as never, result.status)
   })
 
   return app
 }
 
-export function buildInternalRecipeFillInRoutes() {
+export function buildInternalRecipeFillInRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/internal/*', requireInternalAuth)
@@ -219,7 +212,7 @@ export function buildInternalRecipeFillInRoutes() {
     const user = c.get('user')
     const parsed = FillInBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'INVALID_PAYLOAD' }, 400)
-    const result = await handleFillIn(user.id, parsed.data)
+    const result = await handleFillIn(db, user.id, parsed.data)
     return c.json(result.body, result.status)
   })
 

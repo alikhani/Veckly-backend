@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { setRecipeRecommendationGeneratorForTests } from '../src/recipe-recommendations.js'
@@ -27,9 +28,10 @@ describeWithDb('Recipe recommendation routes', () => {
   const db = createDb(testDatabaseUrl!)
   const previousInternalKey = process.env.VECKLY_INTERNAL_API_KEY
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
     setRecipeRecommendationGeneratorForTests(async () => validAiResponse)
+    await db.execute(sql`delete from "rate_limit_hits"`)
   })
 
   afterEach(() => {

@@ -31,6 +31,7 @@ describeWithDb('Recipe recommendation server-side cache', () => {
   beforeEach(async () => {
     process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
     await db.execute(sql`delete from "household_recipe_recommendations"`)
+    await db.execute(sql`delete from "rate_limit_hits"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
 
@@ -41,6 +42,7 @@ describeWithDb('Recipe recommendation server-side cache', () => {
 
   afterAll(async () => {
     await db.execute(sql`delete from "household_recipe_recommendations"`)
+    await db.execute(sql`delete from "rate_limit_hits"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
     if (previousInternalKey === undefined) {
@@ -124,6 +126,10 @@ describeWithDb('Recipe recommendation server-side cache', () => {
       swedishCallHappened = true
       return aiResponse('Svensk anledning.')
     })
+    // The English call above already consumed this user's rate-limit slot —
+    // clear it so this second, uncached (different language) call isn't
+    // blocked by the 30s throttle. Not what this test is checking.
+    await db.execute(sql`delete from "rate_limit_hits"`)
     const swedishResponse = await app.request('/internal/recipes/recommend', {
       method: 'POST',
       headers: {
@@ -149,13 +155,14 @@ describeWithDb('Recipe recommendation server-side cache', () => {
 
     // Not a member of `otherHousehold`, so caching never engages — a second
     // call still reaches the generator instead of finding a stale cache
-    // entry (`setRecipeRecommendationGeneratorForTests` also resets the
-    // per-user rate limit, isolating this from the 30s throttle).
+    // entry. Clear the rate-limit table so this uncached second call isn't
+    // blocked by the 30s throttle from the first — not what this test checks.
     let secondCallHappened = false
     setRecipeRecommendationGeneratorForTests(async () => {
       secondCallHappened = true
       return aiResponse('Second call.')
     })
+    await db.execute(sql`delete from "rate_limit_hits"`)
     const second = await request({ ...validBody, householdId: otherHousehold!.id })
     expect(second.status).toBe(200)
     expect(secondCallHappened).toBe(true)
@@ -177,6 +184,10 @@ describeWithDb('Recipe recommendation server-side cache', () => {
       refetched = true
       return aiResponse('Refetched reason.')
     })
+    // The first call above already consumed this user's rate-limit slot —
+    // clear it so this refetch (cache is stale, so uncached) isn't blocked
+    // by the 30s throttle. Not what this test is checking.
+    await db.execute(sql`delete from "rate_limit_hits"`)
     const response = await request({ ...validBody, householdId })
 
     expect(refetched).toBe(true)

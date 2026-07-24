@@ -12,7 +12,7 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 | Phase 3 — Web strangler migration | Not started |
 | Phase 4 — iOS foundation | In progress |
 | Phase 5 — iOS product parity | In progress |
-| Phase 6 — TestFlight readiness | In progress — internal TestFlight live; security headers + migration runbook added 2026-06-21; remaining: rate limiting, staging DB, observability, QA pass, external submission |
+| Phase 6 — TestFlight readiness | In progress — internal TestFlight live; security headers + migration runbook added 2026-06-21; persistent rate limiting added 2026-07-24; remaining: staging DB, observability, QA pass, external submission |
 
 ## What is working
 

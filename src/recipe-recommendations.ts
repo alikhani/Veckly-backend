@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
 import { assertMembership } from './membership.js'
+import { isRateLimited } from './rate-limit.js'
 import { withRls } from './rls.js'
 import { householdRecipeRecommendations } from './schema.js'
 import type { Db } from './db.js'
@@ -49,12 +50,10 @@ type TRecommendBody = z.infer<typeof RecommendBodySchema>
 type TFeedbackItem = z.infer<typeof FeedbackItemSchema>
 type TGenerator = (systemPrompt: string, userMessage: string) => Promise<string>
 
-const recommendationRateLimitHits = new Map<string, number>()
 let generator: TGenerator = generateStructuredJSON
 
 export function setRecipeRecommendationGeneratorForTests(next: TGenerator | null) {
   generator = next ?? generateStructuredJSON
-  recommendationRateLimitHits.clear()
 }
 
 // Built-in recipe titles are stored in English regardless of the caller's
@@ -150,13 +149,6 @@ async function resolveCacheableHouseholdId(
   return member ? householdId : null
 }
 
-function isRateLimited(userId: string, now = Date.now()) {
-  const previous = recommendationRateLimitHits.get(userId)
-  if (previous !== undefined && now - previous < 30_000) return true
-  recommendationRateLimitHits.set(userId, now)
-  return false
-}
-
 function formatLikedMeal(f: TFeedbackItem): string {
   const signal = f.signal ? ` (${f.signal})` : ''
   return `"${f.mealTitle}"${signal}`
@@ -219,7 +211,7 @@ async function handleRecommend(db: Db, accessToken: string, userId: string, body
     }
   }
 
-  if (isRateLimited(userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+  if (await isRateLimited(db, userId, 'recipe-recommendations', 30)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   let aiText: string
   try {

@@ -1,7 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
+import type { Db } from './db.js'
 import { normalizeIngredientCategory } from './ingredient-categories.js'
+import { isRateLimited } from './rate-limit.js'
 
 const PRIVATE_IP_PATTERN =
   /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
@@ -116,8 +118,6 @@ type TTikTokOEmbed = {
 
 type TOEmbedFetcher = (canonicalUrl: string) => Promise<TTikTokOEmbed>
 
-const importRateLimitHits = new Map<string, number>()
-const textImportRateLimitHits = new Map<string, number>()
 let pageFetcher: TPageFetcher = fetchRecipePage
 let aiExtractor: TImportExtractor = extractRecipeWithAi
 let textAiExtractor: TTextImportExtractor = extractRecipeFromTextWithAi
@@ -145,15 +145,6 @@ export function setRecipeImportDependenciesForTests(deps: {
   textAiExtractor = deps?.textAiExtractor ?? extractRecipeFromTextWithAi
   socialAiExtractor = deps?.socialAiExtractor ?? extractRecipeFromSocialWithAi
   tiktokOEmbedFetcher = deps?.tiktokOEmbedFetcher ?? fetchTikTokOEmbed
-  importRateLimitHits.clear()
-  textImportRateLimitHits.clear()
-}
-
-function isRateLimited(hits: Map<string, number>, userId: string, now = Date.now()) {
-  const previous = hits.get(userId)
-  if (previous !== undefined && now - previous < 15_000) return true
-  hits.set(userId, now)
-  return false
 }
 
 export function classifyUrlPlatform(url: string): TImportPlatform {
@@ -706,8 +697,8 @@ function computeTikTokConfidenceAndWarnings(
   return { confidence, warnings }
 }
 
-async function handleRecipeImport(userId: string, rawUrl: unknown) {
-  if (isRateLimited(importRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+async function handleRecipeImport(db: Db, userId: string, rawUrl: unknown) {
+  if (await isRateLimited(db, userId, 'recipe-import-url', 15)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
 
   const validated = validateUrl(rawUrl)
   if ('error' in validated) return { body: { error: 'INVALID_URL' }, status: 400 as const }
@@ -819,8 +810,8 @@ function computeTextConfidenceAndWarnings(
   return { confidence, warnings }
 }
 
-async function handleRecipeTextImport(userId: string, rawText: unknown, rawSourceUrl: unknown) {
-  if (isRateLimited(textImportRateLimitHits, userId)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
+async function handleRecipeTextImport(db: Db, userId: string, rawText: unknown, rawSourceUrl: unknown) {
+  if (await isRateLimited(db, userId, 'recipe-import-text', 15)) return { body: { error: 'RATE_LIMITED' }, status: 429 as const }
   if (typeof rawText !== 'string' || rawText.trim().length < 20) {
     return { body: { error: 'NO_RECIPE_FOUND' }, status: 422 as const }
   }
@@ -876,7 +867,7 @@ const textImportRoute = createRoute({
   },
 })
 
-export function buildRecipeImportRoutes() {
+export function buildRecipeImportRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/recipes/*', requireAuth)
@@ -884,21 +875,21 @@ export function buildRecipeImportRoutes() {
   app.openapi(importRoute, async (c) => {
     const user = c.get('user')
     const body = c.req.valid('json')
-    const result = await handleRecipeImport(user.id, body.url)
+    const result = await handleRecipeImport(db, user.id, body.url)
     return c.json(result.body as never, result.status)
   })
 
   app.openapi(textImportRoute, async (c) => {
     const user = c.get('user')
     const body = c.req.valid('json')
-    const result = await handleRecipeTextImport(user.id, body.text, body.sourceUrl)
+    const result = await handleRecipeTextImport(db, user.id, body.text, body.sourceUrl)
     return c.json(result.body as never, result.status)
   })
 
   return app
 }
 
-export function buildInternalRecipeImportRoutes() {
+export function buildInternalRecipeImportRoutes(db: Db) {
   const app = new OpenAPIHono<{ Variables: { user: AuthedUser; accessToken: string } }>()
 
   app.use('/internal/*', requireInternalAuth)
@@ -906,14 +897,14 @@ export function buildInternalRecipeImportRoutes() {
   app.post('/internal/recipes/import-from-url', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => null) as { url?: unknown } | null
-    const result = await handleRecipeImport(user.id, body?.url)
+    const result = await handleRecipeImport(db, user.id, body?.url)
     return c.json(result.body, result.status)
   })
 
   app.post('/internal/recipes/import-from-text', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => null) as { text?: unknown; sourceUrl?: unknown } | null
-    const result = await handleRecipeTextImport(user.id, body?.text, body?.sourceUrl)
+    const result = await handleRecipeTextImport(db, user.id, body?.text, body?.sourceUrl)
     return c.json(result.body, result.status)
   })
 

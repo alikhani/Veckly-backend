@@ -43,6 +43,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-07-26 — Avoid-filter no longer matches recipe titles when ingredients are itemized
+
+The week-generation avoid-filter used substring matching against title + tags + ingredients, which produced false positives on compound-word languages — `avoid="ost"` excluded "Rostad kyckling" because "ost" is a substring of "Rostad". Extracted a tested pure helper `recipeMatchesAvoided` in `src/week-plan.ts` with a signal-quality rule: **itemized ingredients + tags are matched always; the free-prose title is matched only as a fallback when the recipe has no itemized ingredients** (title-only recipes, e.g. onboarding's go-to-dish when AI fill-in doesn't complete).
+
+An initial "ingredients-only, title+tags as fallback" design was caught by the existing `ALL_RECIPES_EXCLUDED` DB test: it stopped excluding "Peanut Noodles" (tagged `peanut`, but peanut not spelled out in the itemized list) — a false *negative* on an allergen, worse than the false positive being fixed. Tags are curated and carry genuine allergen intent, so they must stay always-on; only the title drops to fallback. Regression tests pin both directions (`ost`→Rostad must not match; `peanut`→Peanut Noodles via tag must match; `fisk`→title-only Fiskgratäng must match).
+
+Substring matching remains crude on compound words in the general case — the structural fix (a language-independent ingredient-concept taxonomy) stays deferred backlog; see `PLAN-ingrediens-taxonomi.md` in the workspace root, which now carries this change as its "separat, mindre ändring" and an explicit anti-decision that shopping categories must never be reused as an avoid taxonomy. Pre-change data check (Supabase, Veckly project): 161/161 active recipes have itemized ingredients today, so the title fallback is latent, not currently exercised. No route contract change; OpenAPI unchanged. Not yet deployed to production (code committed on `master`).
+
 ### 2026-07-22 — Ingredient category inference and repair
 
 Recipe import, recipe create/update, and shopping-list aggregation now share deterministic ingredient category inference when a category is missing or invalid. Explicit valid extractor categories remain authoritative. Existing household-owned recipes can be repaired idempotently through authenticated `POST /households/{householdId}/recipes/repair-ingredient-categories`; membership is checked before the RLS-scoped update, and recipes in other households or the public library are never included.

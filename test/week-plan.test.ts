@@ -16,6 +16,7 @@ import {
   getWeekHistoryPlan,
   getWeekPlanSummary,
   listWeekHistoryPlans,
+  recipeMatchesAvoided,
   requestToday,
   upsertWeekHistoryPlan,
   type TWeekPlanProjectionState,
@@ -25,6 +26,63 @@ import { fakeAccessToken } from './fake-access-token.js'
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
+
+describe('recipeMatchesAvoided', () => {
+  it('does not match on the title when the recipe has itemized ingredients', () => {
+    // Regression: `avoid="ost"` used to match "Rostad kyckling" because "ost"
+    // is a substring of "Rostad". A properly itemized recipe must be judged
+    // on its ingredients (and tags), never on substrings of its name.
+    const rostadKyckling = {
+      title: 'Rostad kyckling',
+      tags: ['weekday'],
+      ingredients: [{ item: 'kyckling' }, { item: 'potatis' }, { item: 'citron' }],
+    }
+    expect(recipeMatchesAvoided(rostadKyckling, ['ost'])).toBe(false)
+  })
+
+  it('still matches a genuinely avoided ingredient in the itemized list', () => {
+    const cheesePasta = {
+      title: 'Pasta',
+      tags: [],
+      ingredients: [{ item: 'pasta' }, { item: 'ost' }, { item: 'grädde' }],
+    }
+    expect(recipeMatchesAvoided(cheesePasta, ['ost'])).toBe(true)
+  })
+
+  it('matches on a tag even when the recipe is itemized (tags carry allergen intent)', () => {
+    // "Peanut Noodles" tagged "peanut" but with peanut not spelled out in the
+    // itemized list must still be excluded for a peanut avoid — tags are a
+    // curated signal, so dropping them would be a false negative on an allergen.
+    const peanutNoodles = {
+      title: 'Peanut Noodles',
+      tags: ['weekday', 'peanut'],
+      ingredients: [{ item: 'noodles' }, { item: 'soy sauce' }, { item: 'chili' }],
+    }
+    expect(recipeMatchesAvoided(peanutNoodles, ['peanut'])).toBe(true)
+  })
+
+  it('falls back to the title for a title-only recipe with no ingredients', () => {
+    // Onboarding's go-to-dish fallback creates title-only recipes when AI
+    // fill-in doesn't complete; those must still be filtered on the title.
+    const titleOnly = { title: 'Fiskgratäng', tags: [], ingredients: [] }
+    expect(recipeMatchesAvoided(titleOnly, ['fisk'])).toBe(true)
+  })
+
+  it('matches on tags when there are no ingredients', () => {
+    const taggedOnly = { title: 'Veckans rätt', tags: ['fisk', 'snabb'], ingredients: [] }
+    expect(recipeMatchesAvoided(taggedOnly, ['fisk'])).toBe(true)
+  })
+
+  it('treats an ingredient list of only blank items as empty and falls back to the title', () => {
+    const blankItems = { title: 'Fiskgratäng', tags: [], ingredients: [{ item: '   ' }] }
+    expect(recipeMatchesAvoided(blankItems, ['fisk'])).toBe(true)
+  })
+
+  it('never matches when the avoid list is empty', () => {
+    const anyRecipe = { title: 'Fiskgratäng', tags: ['fisk'], ingredients: [] }
+    expect(recipeMatchesAvoided(anyRecipe, [])).toBe(false)
+  })
+})
 
 describeWithDb('Week-plan event log + projection', () => {
   const db = createDb(testDatabaseUrl!)

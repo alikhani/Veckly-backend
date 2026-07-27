@@ -641,6 +641,43 @@ function readIngredientArray(value: unknown): Array<{ item: string }> {
   )
 }
 
+// Avoid-matching, in order of signal quality:
+//   - Itemized ingredients + tags are matched *always*. Ingredients are the
+//     strongest signal; tags are short curated labels (e.g. a "peanut" tag on
+//     "Peanut Noodles") and carry genuine allergen intent, so dropping them
+//     would turn a real exclusion into a false negative — worse than the bug
+//     we're fixing.
+//   - The free-prose *title* is matched *only* when the recipe has no itemized
+//     ingredients. The title is the false-positive-prone signal: `avoid="ost"`
+//     matched "Rostad kyckling" because "ost" is a substring of "Rostad". A
+//     properly itemized recipe should be judged on its ingredients and tags,
+//     not on substrings of its name. But a title-only recipe still needs the
+//     title as a safety net — onboarding's go-to-dish creates one when AI
+//     fill-in doesn't complete, and a title-only "Fiskgratäng" must stay
+//     filtered for a "fisk" avoid.
+// Substring matching is still crude on compound-word languages (see
+// PLAN-ingrediens-taxonomi.md) — this only removes the *title* false positives
+// for the common case where the recipe is properly itemized.
+export function recipeMatchesAvoided(
+  recipe: { title: string; tags: unknown; ingredients: unknown },
+  avoidIngredients: string[],
+): boolean {
+  if (avoidIngredients.length === 0) return false
+  const ingredientItems = readIngredientArray(recipe.ingredients)
+    .map((i) => i.item.trim().toLowerCase())
+    .filter((item) => item !== '')
+  const haystacks = [...readStringArray(recipe.tags).map((t) => t.toLowerCase())]
+  if (ingredientItems.length > 0) {
+    haystacks.push(...ingredientItems)
+  } else {
+    haystacks.push(recipe.title.toLowerCase())
+  }
+  return avoidIngredients.some((avoided) => {
+    const lower = avoided.toLowerCase()
+    return haystacks.some((h) => h.includes(lower))
+  })
+}
+
 function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {
   return {
     householdId: row.householdId,
@@ -964,16 +1001,7 @@ export async function doGenerateWeekPlan(
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
   const candidates: TScoringRecipe[] = (avoidIngredients.length > 0
-    ? poolRecipes.filter((r) =>
-      !avoidIngredients.some((a) => {
-        const lower = a.toLowerCase()
-        if (r.title.toLowerCase().includes(lower)) return true
-        if (readStringArray(r.tags).some((t) => t.toLowerCase().includes(lower))) return true
-        const ings = readIngredientArray(r.ingredients)
-        if (ings?.some((i) => i.item.toLowerCase().includes(lower))) return true
-        return false
-      })
-    )
+    ? poolRecipes.filter((r) => !recipeMatchesAvoided(r, avoidIngredients))
     : poolRecipes
   ).map((r) => ({
     id: r.id,

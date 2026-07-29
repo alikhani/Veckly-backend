@@ -112,7 +112,10 @@
             "type": "integer"
           },
           "weeksSinceCooked": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [

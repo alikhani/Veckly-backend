@@ -5,7 +5,7 @@ import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { getFamilyCookbook, getFamilyRecap } from '../src/family-memory.js'
-import { households, householdMemberships, recipes, weekPlanProjections } from '../src/schema.js'
+import { households, householdMemberships, mealFeedback, recipes, weekPlanProjections } from '../src/schema.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -182,15 +182,37 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       expect(cookbook).toEqual({ totalFamilyLikedCount: 0, favorites: [], dueAgain: [] })
     })
 
-    it('leaves out a liked recipe that has never actually been cooked', async () => {
+    it('returns a liked recipe that has never been cooked as a favorite with nullable recency', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Wishlist Curry' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
       expect(cookbook.totalFamilyLikedCount).toBe(1)
-      expect(cookbook.favorites).toEqual([])
+      expect(cookbook.favorites).toEqual([
+        { recipeId: recipe.id, title: 'Wishlist Curry', timesCooked: 0, weeksSinceCooked: null },
+      ])
       expect(cookbook.dueAgain).toEqual([])
+    })
+
+    it('counts only liked recipes that are present in the returned lists', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Visible Pasta' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
+      // meal_feedback intentionally has no recipe FK because built-in recipe
+      // identifiers can also be voted on. A stale/missing id must therefore
+      // not inflate the cookbook headline beyond its renderable rows.
+      await db.insert(mealFeedback).values({
+        householdId: householdAId,
+        userId: userA,
+        mealId: '99999999-9999-4999-8999-999999999999',
+        vote: 'up',
+      })
+
+      const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
+
+      expect(cookbook.totalFamilyLikedCount).toBe(1)
+      expect(cookbook.favorites.map((entry) => entry.recipeId)).toEqual([recipe.id])
+      expect(cookbook.favorites.length + cookbook.dueAgain.length).toBe(cookbook.totalFamilyLikedCount)
     })
 
     it('moves a favorite into dueAgain once 6+ weeks have passed since it was last cooked', async () => {
@@ -218,6 +240,22 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       expect(cookbook.favorites.map((f) => f.recipeId)).toEqual([often.id, rarely.id])
     })
 
+    it('sorts favorite and due-again ties consistently by Swedish title', async () => {
+      const zebra = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Zucchini' })
+      const apple = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Äppelpaj' })
+      const meatballs = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Köttbullar' })
+      const stew = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Örtgryta' })
+      for (const recipe of [zebra, apple, meatballs, stew]) {
+        await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
+      }
+      await seedWeek('2026-05-25', [meatballs.id, stew.id])
+
+      const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
+
+      expect(cookbook.favorites.map((recipe) => recipe.title)).toEqual(['Zucchini', 'Äppelpaj'])
+      expect(cookbook.dueAgain.map((recipe) => recipe.title)).toEqual(['Köttbullar', 'Örtgryta'])
+    })
+
     it('does not expose another household\'s cookbook across RLS', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Pasta' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
@@ -236,7 +274,9 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
       expect(cookbook.totalFamilyLikedCount).toBe(1)
-      expect(cookbook.favorites).toEqual([])
+      expect(cookbook.favorites).toEqual([
+        { recipeId: recipe.id, title: 'Pasta', timesCooked: 0, weeksSinceCooked: null },
+      ])
       expect(cookbook.dueAgain).toEqual([])
     })
 

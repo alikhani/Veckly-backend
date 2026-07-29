@@ -77,7 +77,7 @@ const FamilyCookbookRecipeSchema = z.object({
   recipeId: z.string().uuid(),
   title: z.string(),
   timesCooked: z.number().int(),
-  weeksSinceCooked: z.number().int(),
+  weeksSinceCooked: z.number().int().nullable(),
 }).openapi('FamilyCookbookRecipe')
 
 const FamilyCookbookSchema = z.object({
@@ -89,6 +89,7 @@ const FamilyCookbookSchema = z.object({
 // A liked recipe hasn't been cooked "in a while" past this many weeks —
 // mirrors the plan doc's "not eaten in 6 weeks" framing (Plan D3).
 const DUE_AGAIN_THRESHOLD_WEEKS = 6
+const cookbookTitleCollator = new Intl.Collator('sv', { sensitivity: 'base' })
 
 // Clamped to 0 rather than allowed to go negative — `currentWeekStartDate`
 // is client-supplied and only validated as *a* Monday, not as being on or
@@ -117,7 +118,7 @@ function computeCookedStats(historyRows: TWeekHistoryRow[], likedRecipeIds: Set<
 }
 
 function buildCookbookEntries(
-  cookedLikedRecipeIds: string[],
+  likedRecipeIds: string[],
   titleById: Map<string, string>,
   timesCookedById: Map<string, number>,
   lastCookedWeekById: Map<string, string>,
@@ -125,22 +126,26 @@ function buildCookbookEntries(
 ) {
   const favorites: z.infer<typeof FamilyCookbookRecipeSchema>[] = []
   const dueAgain: z.infer<typeof FamilyCookbookRecipeSchema>[] = []
-  for (const recipeId of cookedLikedRecipeIds) {
+  for (const recipeId of likedRecipeIds) {
     const title = titleById.get(recipeId)
     if (!title) continue // recipe deleted since it was cooked/liked
-    const weeksSinceCooked = weeksBetween(lastCookedWeekById.get(recipeId)!, currentWeekStartDate)
-    const entry = { recipeId, title, timesCooked: timesCookedById.get(recipeId)!, weeksSinceCooked }
-    if (weeksSinceCooked >= DUE_AGAIN_THRESHOLD_WEEKS) dueAgain.push(entry)
+    const lastCookedWeek = lastCookedWeekById.get(recipeId)
+    const weeksSinceCooked = lastCookedWeek ? weeksBetween(lastCookedWeek, currentWeekStartDate) : null
+    const entry = { recipeId, title, timesCooked: timesCookedById.get(recipeId) ?? 0, weeksSinceCooked }
+    if (weeksSinceCooked !== null && weeksSinceCooked >= DUE_AGAIN_THRESHOLD_WEEKS) dueAgain.push(entry)
     else favorites.push(entry)
   }
-  favorites.sort((a, b) => b.timesCooked - a.timesCooked)
-  dueAgain.sort((a, b) => b.weeksSinceCooked - a.weeksSinceCooked)
+  const compareByTitle = (a: z.infer<typeof FamilyCookbookRecipeSchema>, b: z.infer<typeof FamilyCookbookRecipeSchema>) =>
+    cookbookTitleCollator.compare(a.title, b.title) || a.title.localeCompare(b.title) || a.recipeId.localeCompare(b.recipeId)
+  favorites.sort((a, b) => b.timesCooked - a.timesCooked || compareByTitle(a, b))
+  dueAgain.sort((a, b) => (b.weeksSinceCooked ?? 0) - (a.weeksSinceCooked ?? 0) || compareByTitle(a, b))
   return { favorites, dueAgain }
 }
 
 // D3 ("Er familj"-panel): frames feedback + planning history as a growing
-// family cookbook — favorites the caller actually cooks again, and a gentle
-// "time again?" nudge for liked recipes that have gone quiet. Feedback is
+// family cookbook — all favorites the caller likes (including recipes not
+// yet cooked), and a gentle "time again?" nudge for liked recipes that have
+// gone quiet. Feedback is
 // read per-user, matching every other consumer of `meal_feedback`
 // (`doGenerateWeekPlan`, the retro) — RLS enforces `user_id = auth.uid()`
 // even on SELECT (see migration 0020), so a household member's votes are
@@ -162,21 +167,17 @@ export async function getFamilyCookbook(db: Db, accessToken: string, userId: str
     ])
 
     const likedRecipeIds = new Set(feedbackRows.filter((row) => row.vote === 'up').map((row) => row.mealId))
-    const totalFamilyLikedCount = likedRecipeIds.size
     if (likedRecipeIds.size === 0) return { totalFamilyLikedCount: 0, favorites: [], dueAgain: [] }
 
     const { timesCookedById, lastCookedWeekById } = computeCookedStats(historyRows, likedRecipeIds)
 
-    // A liked recipe with no history entry yet (voted on but never actually
-    // cooked in a tracked week) has no "when" to build a row around — leave
-    // it out rather than fabricate a cooked date.
-    const cookedLikedRecipeIds = Array.from(timesCookedById.keys())
-    if (cookedLikedRecipeIds.length === 0) return { totalFamilyLikedCount, favorites: [], dueAgain: [] }
-
-    const recipeRows = await tx.select({ id: recipes.id, title: recipes.title }).from(recipes).where(inArray(recipes.id, cookedLikedRecipeIds))
+    const recipeRows = await tx.select({ id: recipes.id, title: recipes.title }).from(recipes).where(inArray(recipes.id, Array.from(likedRecipeIds)))
     const titleById = new Map(recipeRows.map((recipe) => [recipe.id, recipe.title]))
+    // Count only recipes that can actually be rendered. Feedback may outlive
+    // a deleted recipe, and the headline must agree with the returned list.
+    const totalFamilyLikedCount = recipeRows.length
 
-    const { favorites, dueAgain } = buildCookbookEntries(cookedLikedRecipeIds, titleById, timesCookedById, lastCookedWeekById, currentWeekStartDate)
+    const { favorites, dueAgain } = buildCookbookEntries(Array.from(likedRecipeIds), titleById, timesCookedById, lastCookedWeekById, currentWeekStartDate)
 
     return { totalFamilyLikedCount, favorites, dueAgain }
   })

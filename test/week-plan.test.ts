@@ -82,6 +82,24 @@ describe('recipeMatchesAvoided', () => {
     const anyRecipe = { title: 'Fiskgratäng', tags: ['fisk'], ingredients: [] }
     expect(recipeMatchesAvoided(anyRecipe, [])).toBe(false)
   })
+
+  it('treats a blank avoid term as absent instead of matching every recipe', () => {
+    // Regression: `avoidIngredients: [""]` (client bug) used to lowercase to
+    // "" and `haystack.includes("")` is true for every string, so every
+    // recipe matched and week generation died with ALL_RECIPES_EXCLUDED.
+    const anyRecipe = { title: 'Rostad kyckling', tags: [], ingredients: [{ item: 'kyckling' }] }
+    expect(recipeMatchesAvoided(anyRecipe, [''])).toBe(false)
+  })
+
+  it('trims whitespace on avoid terms before matching', () => {
+    const fishRecipe = { title: 'Fisksoppa', tags: [], ingredients: [{ item: 'fisk' }] }
+    expect(recipeMatchesAvoided(fishRecipe, [' fisk '])).toBe(true)
+  })
+
+  it('treats a whitespace-only avoid term as absent', () => {
+    const anyRecipe = { title: 'Rostad kyckling', tags: [], ingredients: [{ item: 'kyckling' }] }
+    expect(recipeMatchesAvoided(anyRecipe, ['   '])).toBe(false)
+  })
 })
 
 describeWithDb('Week-plan event log + projection', () => {

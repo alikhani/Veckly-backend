@@ -788,25 +788,32 @@ export async function getShoppingListSummary(
       })
     }
 
-    const groupsByCategory = new Map<string, Array<{
-      itemKey: string
-      label: string
-      amount: string | null
-      unit: string | null
-      checked: boolean
-      isCustom: boolean
-    }>>()
+    const groupsByCategory = new Map<string, {
+      category: string
+      items: Array<{
+        itemKey: string
+        label: string
+        amount: string | null
+        unit: string | null
+        checked: boolean
+        isCustom: boolean
+      }>
+    }>()
     for (const [itemKey, item] of itemsByKey) {
-      const group = groupsByCategory.get(item.category) ?? []
-      group.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked, isCustom: item.isCustom })
-      groupsByCategory.set(item.category, group)
+      // Category casing historically differs between recipe ingredients
+      // ("other") and custom items ("Other"). Group by the canonical API
+      // value so one aisle never renders as two visually identical sections.
+      const categoryKey = normalizeKeyPart(item.category) || 'other'
+      const group = groupsByCategory.get(categoryKey) ?? { category: item.category || 'other', items: [] }
+      group.items.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked, isCustom: item.isCustom })
+      groupsByCategory.set(categoryKey, group)
     }
 
     const groups = Array.from(groupsByCategory.entries())
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([category, items]) => ({
-        category,
-        items: items.sort((left, right) => left.label.localeCompare(right.label)),
+      .map(([, group]) => ({
+        category: group.category,
+        items: group.items.sort((left, right) => left.label.localeCompare(right.label)),
       }))
 
     return {

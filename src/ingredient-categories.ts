@@ -26,11 +26,11 @@ const PHRASE_KEYWORDS: ReadonlyArray<readonly [TIngredientCategory, readonly str
 
 const CATEGORY_KEYWORDS: ReadonlyArray<readonly [TIngredientCategory, readonly string[]]> = [
   ['frozen', ['frozen', 'fryst', 'frysta']],
-  ['protein', ['bacon', 'beef', 'chicken', 'fish', 'fläsk', 'guanciale', 'ham', 'kalkon', 'korv', 'kyckling', 'kött', 'lamb', 'lax', 'mince', 'pancetta', 'pork', 'räka', 'räkor', 'salmon', 'sausage', 'seafood', 'skinka', 'shrimp', 'tofu', 'torsk', 'turkey']],
-  ['produce', ['apple', 'apelsin', 'aubergine', 'avocado', 'banana', 'basil', 'bean sprout', 'bell pepper', 'broccoli', 'cabbage', 'carrot', 'chili', 'citron', 'cucumber', 'dill', 'eggplant', 'garlic', 'ginger', 'gurka', 'herb', 'koriander', 'leek', 'lemon', 'lime', 'lök', 'mushroom', 'onion', 'paprika', 'persilja', 'potato', 'sallad', 'salad', 'spenat', 'spinach', 'svamp', 'sweet potato', 'tomat', 'tomato', 'vitlök', 'zucchini', 'äpple']],
+  ['protein', ['bacon', 'beef', 'chicken', 'fish', 'fläsk', 'guanciale', 'ham', 'kalkon', 'korv', 'kyckling', 'kött', 'köttfärs', 'lamb', 'lax', 'mince', 'nötfärs', 'pancetta', 'pork', 'räka', 'räkor', 'salmon', 'sausage', 'seafood', 'skinka', 'shrimp', 'tofu', 'torsk', 'turkey']],
+  ['produce', ['apple', 'apelsin', 'aubergine', 'avocado', 'banana', 'basil', 'bean sprout', 'bell pepper', 'broccoli', 'cabbage', 'carrot', 'chili', 'citron', 'cucumber', 'dill', 'eggplant', 'garlic', 'ginger', 'gurka', 'herb', 'koriander', 'leek', 'lemon', 'lime', 'lök', 'majs', 'morot', 'morötter', 'mushroom', 'onion', 'paprika', 'persilja', 'potatis', 'potato', 'rödlök', 'sallad', 'salad', 'spenat', 'spinach', 'svamp', 'sweet potato', 'tomat', 'tomato', 'vitlök', 'zucchini', 'äpple']],
   ['dairy', ['butter', 'cheese', 'cream', 'crème', 'egg', 'eggs', 'feta', 'grädde', 'halloumi', 'milk', 'mozzarella', 'ost', 'parmesan', 'smör', 'yoghurt', 'yogurt', 'ägg']],
   ['bakery', ['bagel', 'baguette', 'brioche', 'bread', 'bröd', 'bun', 'flatbread', 'naan', 'pita', 'roll', 'tortilla']],
-  ['pantry', ['bean', 'böna', 'buljong', 'chickpea', 'choklad', 'coconut milk', 'corn', 'flour', 'fond', 'honey', 'kikärt', 'lentil', 'lins', 'majonnäs', 'mayonnaise', 'mjöl', 'mustard', 'noodle', 'nut', 'oil', 'olja', 'pasta', 'pepper', 'rice', 'salt', 'sauce', 'senap', 'soja', 'soy', 'spaghetti', 'spice', 'sugar', 'tabasco', 'tomato paste', 'vinäger', 'vinegar']],
+  ['pantry', ['bean', 'böna', 'buljong', 'chickpea', 'choklad', 'coconut milk', 'corn', 'flour', 'fond', 'honey', 'kikärt', 'lentil', 'lins', 'majonnäs', 'mayonnaise', 'mjöl', 'mustard', 'noodle', 'nut', 'oil', 'olja', 'pasta', 'pepper', 'rice', 'ris', 'risoni', 'salt', 'sauce', 'senap', 'soja', 'soy', 'spaghetti', 'spice', 'sugar', 'tabasco', 'tomato paste', 'vinäger', 'vinegar']],
 ]
 
 function normalized(value: string | null | undefined) {

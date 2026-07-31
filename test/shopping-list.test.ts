@@ -640,12 +640,47 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
           category: 'Other',
           items: [{ itemKey: 'custom:bananas', label: 'Bananas', amount: null, unit: null, checked: true, isCustom: true }],
+        },
+      ])
+    })
+
+    it('merges recipe and custom items whose Other category differs only by casing', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Uncategorized dinner',
+        ingredients: [{ item: 'mystery ingredient', amount: '1', unit: 'pc', category: 'other' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          listStarted: true,
+          checkedItems: {},
+          pantryStock: {},
+          customItems: [{ itemKey: 'custom:napkins', label: 'Napkins', category: 'Other' }],
+        },
+      })
+
+      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+
+      expect(summary?.groups).toEqual([
+        {
+          category: 'other',
+          items: [
+            { itemKey: 'other:mystery-ingredient:pc', label: 'mystery ingredient', amount: '1', unit: 'pc', checked: false, isCustom: false },
+            { itemKey: 'custom:napkins', label: 'Napkins', amount: null, unit: null, checked: false, isCustom: true },
+          ],
         },
       ])
     })

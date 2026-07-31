@@ -13,6 +13,13 @@ describe('ingredient category inference', () => {
     ['peanut butter', 'pantry'],
     ['egg noodles', 'pantry'],
     ['breaded chicken', 'protein'],
+    ['Köttfärs', 'protein'],
+    ['Morötter', 'produce'],
+    ['Potatis', 'produce'],
+    ['Majs', 'produce'],
+    ['Rödlök', 'produce'],
+    ['Ris', 'pantry'],
+    ['Risoni', 'pantry'],
   ] as const)('categorizes %s as %s', (name, category) => {
     expect(inferIngredientCategory(name)).toBe(category)
   })

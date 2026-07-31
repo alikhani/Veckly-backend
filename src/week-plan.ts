@@ -647,14 +647,17 @@ function readIngredientArray(value: unknown): Array<{ item: string }> {
 //     "Peanut Noodles") and carry genuine allergen intent, so dropping them
 //     would turn a real exclusion into a false negative — worse than the bug
 //     we're fixing.
-//   - The free-prose *title* is matched *only* when the recipe has no itemized
-//     ingredients. The title is the false-positive-prone signal: `avoid="ost"`
-//     matched "Rostad kyckling" because "ost" is a substring of "Rostad". A
-//     properly itemized recipe should be judged on its ingredients and tags,
-//     not on substrings of its name. But a title-only recipe still needs the
-//     title as a safety net — onboarding's go-to-dish creates one when AI
-//     fill-in doesn't complete, and a title-only "Fiskgratäng" must stay
-//     filtered for a "fisk" avoid.
+//   - The free-prose *title* is matched *only* when the recipe has fewer than
+//     two itemized ingredients. The title is the false-positive-prone signal:
+//     `avoid="ost"` matched "Rostad kyckling" because "ost" is a substring of
+//     "Rostad". A properly itemized recipe should be judged on its ingredients
+//     and tags, not on substrings of its name. But a title-only or
+//     partially-itemized recipe (e.g. a URL import that only captured one
+//     ingredient) still needs the title as a safety net — onboarding's
+//     go-to-dish creates a title-only recipe when AI fill-in doesn't
+//     complete, and a title-only "Fiskgratäng" must stay filtered for a
+//     "fisk" avoid. Two itemized ingredients is the threshold for trusting
+//     the ingredient list over the title.
 // Substring matching is still crude on compound-word languages (see
 // PLAN-ingrediens-taxonomi.md) — this only removes the *title* false positives
 // for the common case where the recipe is properly itemized.
@@ -668,9 +671,8 @@ export function recipeMatchesAvoided(
     .map((i) => i.item.trim().toLowerCase())
     .filter((item) => item !== '')
   const haystacks = [...readStringArray(recipe.tags).map((t) => t.trim().toLowerCase())]
-  if (ingredientItems.length > 0) {
-    haystacks.push(...ingredientItems)
-  } else {
+  haystacks.push(...ingredientItems)
+  if (ingredientItems.length < 2) {
     haystacks.push(recipe.title.toLowerCase())
   }
   return avoided.some((lower) => haystacks.some((h) => h.includes(lower)))

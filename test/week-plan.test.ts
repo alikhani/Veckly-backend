@@ -100,6 +100,33 @@ describe('recipeMatchesAvoided', () => {
     const anyRecipe = { title: 'Rostad kyckling', tags: [], ingredients: [{ item: 'kyckling' }] }
     expect(recipeMatchesAvoided(anyRecipe, ['   '])).toBe(false)
   })
+
+  it('still matches on the title when only a single ingredient is itemized', () => {
+    // Regression: a partially-itemized recipe (e.g. a URL import that only
+    // captured one ingredient) used to drop the title as soon as any
+    // ingredient existed. A single stray ingredient must not disable the
+    // title safety net.
+    const partiallyItemized = { title: 'Fiskgratäng', tags: [], ingredients: [{ item: 'salt' }] }
+    expect(recipeMatchesAvoided(partiallyItemized, ['fisk'])).toBe(true)
+  })
+
+  it('does not match on the title once at least two ingredients are itemized', () => {
+    const fullyItemized = {
+      title: 'Fiskgratäng',
+      tags: [],
+      ingredients: [{ item: 'salt' }, { item: 'potatis' }],
+    }
+    expect(recipeMatchesAvoided(fullyItemized, ['fisk'])).toBe(false)
+  })
+
+  it('still matches on the itemized ingredient itself when there are two or more', () => {
+    const fullyItemized = {
+      title: 'Fiskgratäng',
+      tags: [],
+      ingredients: [{ item: 'fisk' }, { item: 'potatis' }],
+    }
+    expect(recipeMatchesAvoided(fullyItemized, ['fisk'])).toBe(true)
+  })
 })
 
 describeWithDb('Week-plan event log + projection', () => {

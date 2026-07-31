@@ -127,6 +127,36 @@ describe('recipeMatchesAvoided', () => {
     }
     expect(recipeMatchesAvoided(fullyItemized, ['fisk'])).toBe(true)
   })
+
+  it('does NOT match a title-named allergen once the recipe is fully itemized under a different vocabulary', () => {
+    // Accepted trade-off, pinned intentionally (see PLAN-ingrediens-taxonomi.md
+    // anti-decision): a fully itemized recipe is judged on its ingredients and
+    // tags, never its title. "Ostpaj" (cheese pie) with mozzarella/egg/cream
+    // itemized and no "ost" tag will NOT be excluded from an "ost" avoid, even
+    // though the title names it. This depends on recipes being tagged for
+    // real allergens; substring title matching is not a safety net once a
+    // recipe clears the itemization threshold. If this test starts failing,
+    // that's a deliberate behavior change, not a regression to silently fix.
+    const cheesePie = {
+      title: 'Ostpaj',
+      tags: [],
+      ingredients: [{ item: 'mozzarella' }, { item: 'ägg' }, { item: 'grädde' }],
+    }
+    expect(recipeMatchesAvoided(cheesePie, ['ost'])).toBe(false)
+  })
+
+  it('falls back to the title when ingredients are present but in an unrecognized shape', () => {
+    // readIngredientArray only recognizes `{ item: string }` entries; a
+    // differently-shaped ingredient array (e.g. `{ name: string }`) is
+    // treated as having zero itemized ingredients, so the title safety net
+    // stays active. This is the fail-safe direction and is intentional.
+    const wrongShape = {
+      title: 'Fiskgratäng',
+      tags: [],
+      ingredients: [{ name: 'fisk' }, { name: 'potatis' }],
+    }
+    expect(recipeMatchesAvoided(wrongShape, ['fisk'])).toBe(true)
+  })
 })
 
 describeWithDb('Week-plan event log + projection', () => {

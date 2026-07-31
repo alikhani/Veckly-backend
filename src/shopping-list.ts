@@ -390,26 +390,6 @@ function localizeShoppingUnit(unit: string | null, language: TShoppingListLangua
   return SWEDISH_UNIT_LABELS[unit.trim().toLowerCase()] ?? unit
 }
 
-function isoDateUTC(date: Date) {
-  return date.toISOString().slice(0, 10)
-}
-
-function isValidISODateString(value: string | undefined): value is string {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
-  const date = new Date(`${value}T00:00:00.000Z`)
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
-}
-
-function validISODateString(value: string | undefined) {
-  return isValidISODateString(value) ? value : undefined
-}
-
-function addDaysUTC(dateString: string, offset: number) {
-  const date = new Date(`${dateString}T00:00:00.000Z`)
-  date.setUTCDate(date.getUTCDate() + offset)
-  return isoDateUTC(date)
-}
-
 function normalizeKeyPart(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
 }
@@ -629,10 +609,12 @@ export async function getShoppingListSummary(
   accessToken: string,
   householdId: string,
   weekStartDate: string,
+  // Kept temporarily for source compatibility with callers/tests that used
+  // to control the rolling-day filter. Shopping summaries are now stable for
+  // the whole selected week, so `today` is deliberately ignored.
   options: { language?: TShoppingListLanguage; today?: string } = {},
 ) {
   const language = options.language ?? 'en'
-  const today = options.today ?? isoDateUTC(new Date())
   return withRls(db, accessToken, async (tx) => {
     const [household] = await tx
       .select({ id: households.id, name: households.name })
@@ -672,12 +654,10 @@ export async function getShoppingListSummary(
     // override applies to one day, not the recipe). Deduplicating here would
     // silently drop a real ingredient contribution from the list.
     const mealOccurrences = weekDays
-      .map((day, index) => ({
+      .map((day) => ({
         recipeRef: weekState.meals?.[day]?.recipeRef,
-        date: addDaysUTC(weekStartDate, index),
         servingsOverride: weekState.meals?.[day]?.servings,
       }))
-      .filter((meal) => meal.date >= today)
       .filter((meal): meal is typeof meal & { recipeRef: string } => Boolean(meal.recipeRef))
 
     // Fetch each distinct recipe exactly once — the per-day scaling below
@@ -897,7 +877,6 @@ export function buildShoppingListRoutes(db: Db) {
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate, {
       language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
-      today: validISODateString(c.req.header('X-Veckly-Today')),
     })
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)

@@ -554,7 +554,7 @@ describeWithDb('Shopping-list event log + projection', () => {
       ])
     })
 
-    it('excludes meals that are already in the past from the shopping summary', async () => {
+    it('keeps past and upcoming meals in a stable whole-week shopping summary', async () => {
       const mondayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
         ...baseRecipe,
         title: 'Monday dinner',
@@ -582,12 +582,15 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(summary?.groups).toEqual([
         {
           category: 'Pantry',
-          items: [{ itemKey: 'pantry:rice:g', label: 'rice', amount: '300', unit: 'g', checked: false, isCustom: false }],
+          items: [
+            { itemKey: 'pantry:rice:g', label: 'rice', amount: '300', unit: 'g', checked: false, isCustom: false },
+            { itemKey: 'pantry:spaghetti:g', label: 'spaghetti', amount: '400', unit: 'g', checked: false, isCustom: false },
+          ],
         },
       ])
     })
 
-    it('includes newly planned future meals while filtering older meals from the active shopping basket', async () => {
+    it('keeps existing meal ingredients when another meal is added later in the week', async () => {
       const tuesdayRecipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
         ...baseRecipe,
         title: 'Tuesday bowl',
@@ -615,7 +618,10 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(summary?.groups).toEqual([
         {
           category: 'Protein',
-          items: [{ itemKey: 'protein:bacon-or-pancetta:g', label: 'bacon or pancetta', amount: '200', unit: 'g', checked: false, isCustom: false }],
+          items: [
+            { itemKey: 'protein:bacon-or-pancetta:g', label: 'bacon or pancetta', amount: '200', unit: 'g', checked: false, isCustom: false },
+            { itemKey: 'protein:chicken-breast:g', label: 'chicken breast', amount: '150', unit: 'g', checked: false, isCustom: false },
+          ],
         },
       ])
     })

@@ -662,20 +662,18 @@ export function recipeMatchesAvoided(
   recipe: { title: string; tags: unknown; ingredients: unknown },
   avoidIngredients: string[],
 ): boolean {
-  if (avoidIngredients.length === 0) return false
+  const avoided = avoidIngredients.map((a) => a.trim().toLowerCase()).filter((a) => a !== '')
+  if (avoided.length === 0) return false
   const ingredientItems = readIngredientArray(recipe.ingredients)
     .map((i) => i.item.trim().toLowerCase())
     .filter((item) => item !== '')
-  const haystacks = [...readStringArray(recipe.tags).map((t) => t.toLowerCase())]
+  const haystacks = [...readStringArray(recipe.tags).map((t) => t.trim().toLowerCase())]
   if (ingredientItems.length > 0) {
     haystacks.push(...ingredientItems)
   } else {
     haystacks.push(recipe.title.toLowerCase())
   }
-  return avoidIngredients.some((avoided) => {
-    const lower = avoided.toLowerCase()
-    return haystacks.some((h) => h.includes(lower))
-  })
+  return avoided.some((lower) => haystacks.some((h) => h.includes(lower)))
 }
 
 function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {

@@ -51,9 +51,9 @@ Post-implementation review of the 2026-07-27 avoid-filter change (below) found t
 - **Avoid terms and tags are now trimmed**, matching the existing ingredient trimming — `" fisk "` now matches a trimmed `fisk` ingredient.
 - **Title fallback now requires fewer than two itemized ingredients**, not zero. A recipe with exactly one itemized ingredient (e.g. a URL import that only captured `salt` for "Fiskgratäng") used to drop the title safety net entirely; the threshold is now two, so a single stray ingredient doesn't disable it.
 
-The accepted trade-off from the original change — a fully itemized recipe (≥2 ingredients) is judged on ingredients/tags only, never its title, even if the title names an allergen absent from a curated tag — is unchanged and now pinned by a regression test so a future change to it is deliberate, not silent drift.
+The accepted trade-off from the original change — a fully itemized recipe (≥2 ingredients) is judged on ingredients/tags only, never its title, even if the title names an allergen absent from a curated tag — is unchanged and now pinned by a regression test so a future change to it is deliberate, not silent drift. A follow-up commit pinned the single-ingredient case (the ingredient itself as the avoided term) as a regression test distinct from the title-fallback threshold.
 
-No route contract change; OpenAPI unchanged.
+No route contract change; OpenAPI unchanged. Deployed to production on 2026-07-31 as `dpl_93Guy93c6utXNHQNNQ4Nd9nW2JJM` (`https://veckly-backend.vercel.app`) — verified live afterward (`/openapi.json` 200, `POST /recipes/recommend` unauthenticated 401). This deploy also included an unrelated shopping-category-normalization fix (`b7b28c9`, merging recipe/custom "other"-category groups that differed only by casing) that had already landed on `master`.
 
 ### 2026-07-27 — Avoid-filter no longer matches recipe titles when ingredients are itemized
 

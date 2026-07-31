@@ -110,6 +110,14 @@ describe('recipeMatchesAvoided', () => {
     expect(recipeMatchesAvoided(partiallyItemized, ['fisk'])).toBe(true)
   })
 
+  it('still matches when the single itemized ingredient is itself the avoided term', () => {
+    // Distinguishes "the title fallback stays on with one ingredient" (above)
+    // from "the ingredient signal works even with just one ingredient" —
+    // both haystacks are active below the two-ingredient threshold.
+    const singleIngredientMatch = { title: 'Fiskgratäng', tags: [], ingredients: [{ item: 'fisk' }] }
+    expect(recipeMatchesAvoided(singleIngredientMatch, ['fisk'])).toBe(true)
+  })
+
   it('does not match on the title once at least two ingredients are itemized', () => {
     const fullyItemized = {
       title: 'Fiskgratäng',

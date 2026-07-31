@@ -43,13 +43,25 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
-### 2026-07-26 — Avoid-filter no longer matches recipe titles when ingredients are itemized
+### 2026-07-31 — Avoid-filter hardening: sanitized terms, two-ingredient threshold
+
+Post-implementation review of the 2026-07-27 avoid-filter change (below) found three gaps in `recipeMatchesAvoided` (`src/week-plan.ts`), all fixed:
+
+- **Blank avoid terms no longer match everything.** `avoidIngredients: [""]` (a client bug) used to lowercase to `""`, and `haystack.includes("")` is `true` for every string — every recipe matched and week generation died with `ALL_RECIPES_EXCLUDED`. Avoid terms are now trimmed and blank entries dropped before matching, same as ingredients already were.
+- **Avoid terms and tags are now trimmed**, matching the existing ingredient trimming — `" fisk "` now matches a trimmed `fisk` ingredient.
+- **Title fallback now requires fewer than two itemized ingredients**, not zero. A recipe with exactly one itemized ingredient (e.g. a URL import that only captured `salt` for "Fiskgratäng") used to drop the title safety net entirely; the threshold is now two, so a single stray ingredient doesn't disable it.
+
+The accepted trade-off from the original change — a fully itemized recipe (≥2 ingredients) is judged on ingredients/tags only, never its title, even if the title names an allergen absent from a curated tag — is unchanged and now pinned by a regression test so a future change to it is deliberate, not silent drift.
+
+No route contract change; OpenAPI unchanged.
+
+### 2026-07-27 — Avoid-filter no longer matches recipe titles when ingredients are itemized
 
 The week-generation avoid-filter used substring matching against title + tags + ingredients, which produced false positives on compound-word languages — `avoid="ost"` excluded "Rostad kyckling" because "ost" is a substring of "Rostad". Extracted a tested pure helper `recipeMatchesAvoided` in `src/week-plan.ts` with a signal-quality rule: **itemized ingredients + tags are matched always; the free-prose title is matched only as a fallback when the recipe has no itemized ingredients** (title-only recipes, e.g. onboarding's go-to-dish when AI fill-in doesn't complete).
 
 An initial "ingredients-only, title+tags as fallback" design was caught by the existing `ALL_RECIPES_EXCLUDED` DB test: it stopped excluding "Peanut Noodles" (tagged `peanut`, but peanut not spelled out in the itemized list) — a false *negative* on an allergen, worse than the false positive being fixed. Tags are curated and carry genuine allergen intent, so they must stay always-on; only the title drops to fallback. Regression tests pin both directions (`ost`→Rostad must not match; `peanut`→Peanut Noodles via tag must match; `fisk`→title-only Fiskgratäng must match).
 
-Substring matching remains crude on compound words in the general case — the structural fix (a language-independent ingredient-concept taxonomy) stays deferred backlog; see `PLAN-ingrediens-taxonomi.md` in the workspace root, which now carries this change as its "separat, mindre ändring" and an explicit anti-decision that shopping categories must never be reused as an avoid taxonomy. Pre-change data check (Supabase, Veckly project): 161/161 active recipes have itemized ingredients today, so the title fallback is latent, not currently exercised. No route contract change; OpenAPI unchanged. Deployed to production on 2026-07-26 as `dpl_BsuTnAKkBgWuQXypPYhcS8QazLEQ` (`https://veckly-backend.vercel.app`) — verified live afterward (`/openapi.json` 200, `POST /recipes/recommend` unauthenticated 401).
+Substring matching remains crude on compound words in the general case — the structural fix (a language-independent ingredient-concept taxonomy) stays deferred backlog; see `PLAN-ingrediens-taxonomi.md` in the workspace root, which now carries this change as its "separat, mindre ändring" and an explicit anti-decision that shopping categories must never be reused as an avoid taxonomy. Pre-change data check (Supabase, Veckly project): 161/161 active recipes have itemized ingredients today, so the title fallback is latent, not currently exercised. No route contract change; OpenAPI unchanged. Deployed to production on 2026-07-27 as `dpl_BsuTnAKkBgWuQXypPYhcS8QazLEQ` (`https://veckly-backend.vercel.app`) — verified live afterward (`/openapi.json` 200, `POST /recipes/recommend` unauthenticated 401).
 
 ### 2026-07-22 — Ingredient category inference and repair
 

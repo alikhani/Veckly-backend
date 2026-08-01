@@ -388,3 +388,13 @@ export const householdAiWeeklyUsage = pgTable('household_ai_weekly_usage', {
 }, (table) => [
   primaryKey({ columns: [table.householdId, table.weekStartDate, table.usageKind], name: 'household_ai_weekly_usage_pk' }),
 ])
+
+export const premiumGateObservations = pgTable('premium_gate_observations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull(),
+  reason: text('reason').notNull(),
+  limitValue: integer('limit_value'),
+  currentValue: integer('current_value'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index('premium_gate_observations_household_occurred_idx').on(table.householdId, table.occurredAt)])

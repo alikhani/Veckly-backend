@@ -1,4 +1,6 @@
 import type { ResolvedEntitlement } from './entitlements.js'
+import type { Db } from './db.js'
+import { premiumGateObservations } from './schema.js'
 
 // Kept aligned with the existing web premium surfaces. This vocabulary is an
 // API contract: clients can render context-specific upgrade copy without
@@ -41,4 +43,8 @@ export function evaluatePremiumGate(
 
 export function observePremiumGate(entitlement: ResolvedEntitlement, reason: PremiumGateReason, usage?: { limit: number; current: number }) {
   if (entitlement.tier !== 'premium') console.info('[premium-gate] would block', premiumRequired(reason, usage))
+}
+
+export async function recordPremiumGateObservation(db: Db, input: { householdId: string; userId: string; reason: PremiumGateReason; usage?: { limit: number; current: number } }) {
+  await db.insert(premiumGateObservations).values({ householdId: input.householdId, userId: input.userId, reason: input.reason, limitValue: input.usage?.limit ?? null, currentValue: input.usage?.current ?? null })
 }

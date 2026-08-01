@@ -5,7 +5,7 @@ import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls, withRlsAndToken } from './rls.js'
 import { households, householdInvites, householdMemberships } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate } from './premium-gates.js'
+import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const InviteSchema = z.object({
@@ -373,7 +373,9 @@ export function buildInvitesRoutes(db: Db) {
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
-    observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'household_invite')
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
+    observePremiumGate(entitlement, 'household_invite')
+    if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'household_invite' })
 
     const invite = await createInvite(db, accessToken, user.id, householdId, { email: body.email })
 

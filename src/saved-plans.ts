@@ -2,9 +2,9 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
-import { savedPlans } from './schema.js'
+import { householdMemberships, savedPlans } from './schema.js'
 import { resolveEntitlementForUser } from './entitlements.js'
-import { observePremiumGate } from './premium-gates.js'
+import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const SavedPlanSchema = z.object({
@@ -168,7 +168,14 @@ export function buildSavedPlansRoutes(db: Db) {
     // a future Premium boundary. This remains observational during beta.
     const existing = await listSavedPlans(db, accessToken, user.id)
     if (!existing.some((plan) => plan.id === body.id)) {
-      observePremiumGate(await resolveEntitlementForUser(db, user.id), 'saved_plans_limit', { limit: 2, current: existing.length })
+      const entitlement = await resolveEntitlementForUser(db, user.id)
+      const usage = { limit: 2, current: existing.length }
+      observePremiumGate(entitlement, 'saved_plans_limit', usage)
+      if (entitlement.tier !== 'premium') {
+        const [membership] = await db.select({ householdId: householdMemberships.householdId }).from(householdMemberships)
+          .where(and(eq(householdMemberships.userId, user.id), eq(householdMemberships.status, 'active'))).limit(1)
+        if (membership) await recordPremiumGateObservation(db, { householdId: membership.householdId, userId: user.id, reason: 'saved_plans_limit', usage })
+      }
     }
     const plan = await upsertSavedPlan(db, accessToken, user.id, body)
     if (!plan) return c.json({ error: 'CONFLICT' }, 409)

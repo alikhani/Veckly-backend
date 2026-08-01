@@ -5,6 +5,8 @@ import { bootstrapHousehold } from './households.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, mealFeedback, recipes, userSavedRecipes } from './schema.js'
+import { resolveEntitlementForHousehold } from './entitlements.js'
+import { observePremiumGate } from './premium-gates.js'
 import { categorizeRecipeIngredients, readRecipeIngredients } from './ingredient-categories.js'
 import type { Db } from './db.js'
 
@@ -562,6 +564,7 @@ export function buildRecipesRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
+    if (body.isPublic) observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'community_share')
     const recipe = await createRecipe(db, accessToken, user.id, householdId, body)
     return c.json(recipe, 201)
   })
@@ -573,6 +576,7 @@ export function buildRecipesRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
+    if (body.isPublic) observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'community_share')
     const recipe = await updateRecipe(db, accessToken, householdId, recipeId, body)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)
     return c.json(recipe, 200)

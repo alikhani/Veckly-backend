@@ -315,3 +315,76 @@ export const householdPrepBatchAssignments = pgTable('household_prep_batch_assig
   date: date('date', { mode: 'string' }).notNull(),
   mealType: text('meal_type').notNull(),
 })
+
+// Billing providers normalize their state into these values. Provider receipt,
+// JWS, and token formats deliberately stay outside this domain model.
+export const billingProvider = pgEnum('billing_provider', ['app_store', 'google_play', 'stripe', 'manual'])
+export const billingSubscriptionStatus = pgEnum('billing_subscription_status', [
+  'active',
+  'grace_period',
+  'expired',
+  'cancelled',
+  'revoked',
+])
+export const householdEntitlementSource = pgEnum('household_entitlement_source', ['subscription', 'manual', 'beta'])
+export const householdAiUsageKind = pgEnum('household_ai_usage_kind', ['week_generation', 'week_regeneration'])
+
+export const billingSubscriptions = pgTable('billing_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: billingProvider('provider').notNull(),
+  ownerUserId: uuid('owner_user_id').notNull(),
+  externalId: text('external_id').notNull(),
+  productId: text('product_id').notNull(),
+  status: billingSubscriptionStatus('status').notNull(),
+  currentPeriodEndsAt: timestamp('current_period_ends_at', { withTimezone: true }),
+  environment: text('environment').notNull(),
+  providerMetadata: jsonb('provider_metadata').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('billing_subscriptions_provider_external_id_idx').on(table.provider, table.externalId),
+  index('billing_subscriptions_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+// Kept independently from subscription state so future App Store, Play, and
+// Stripe adapters can deduplicate deliveries and retain an audit trail.
+export const billingProviderEvents = pgTable('billing_provider_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: billingProvider('provider').notNull(),
+  providerEventId: text('provider_event_id').notNull(),
+  subscriptionId: uuid('subscription_id').references(() => billingSubscriptions.id, { onDelete: 'set null' }),
+  payload: jsonb('payload').notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('billing_provider_events_provider_event_id_idx').on(table.provider, table.providerEventId),
+  index('billing_provider_events_subscription_received_idx').on(table.subscriptionId, table.receivedAt),
+])
+
+// A subscription is owned by a person but explicitly sponsors one household.
+// Manual and beta grants use the same resolver path without inventing a fake
+// payment provider or a global beta bypass.
+export const householdEntitlements = pgTable('household_entitlements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  subscriptionId: uuid('subscription_id').references(() => billingSubscriptions.id, { onDelete: 'cascade' }),
+  source: householdEntitlementSource('source').notNull(),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull().defaultNow(),
+  endsAt: timestamp('ends_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  grantedBy: uuid('granted_by'),
+  metadata: jsonb('metadata').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('household_entitlements_household_validity_idx').on(table.householdId, table.endsAt),
+  index('household_entitlements_subscription_idx').on(table.subscriptionId),
+])
+
+export const householdAiWeeklyUsage = pgTable('household_ai_weekly_usage', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  usageKind: householdAiUsageKind('usage_kind').notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.weekStartDate, table.usageKind], name: 'household_ai_weekly_usage_pk' }),
+])

@@ -7,6 +7,8 @@ import { assertMembership } from './membership.js'
 import { isRateLimited } from './rate-limit.js'
 import { withRls } from './rls.js'
 import { householdRecipeRecommendations } from './schema.js'
+import { resolveEntitlementForHousehold } from './entitlements.js'
+import { observePremiumGate } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const RecommendationSchema = z.object({
@@ -273,6 +275,7 @@ export function buildRecipeRecommendationRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
+    if (body.householdId) observePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'ai_recommendations')
     const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
     const result = await handleRecommend(db, accessToken, user.id, body, language)
     return c.json(result.body as never, result.status)

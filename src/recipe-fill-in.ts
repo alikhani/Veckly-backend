@@ -3,6 +3,9 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import type { Db } from './db.js'
 import { isRateLimited } from './rate-limit.js'
+import { assertMembership } from './membership.js'
+import { resolveEntitlementForHousehold } from './entitlements.js'
+import { evaluatePremiumGate } from './premium-gates.js'
 
 const SYSTEM_PROMPT = `You are a recipe data generator for a family meal planning app.
 Your only job is to return a single valid JSON object — no explanation, no markdown, no preamble.
@@ -69,6 +72,7 @@ const FillInResponseSchema = z.object({
 }).openapi('RecipeFillInResult')
 
 const FillInBodySchema = z.object({
+  householdId: z.string().uuid().optional(),
   title: z.string().min(1).max(120),
   householdProfile: z.object({
     adults: z.number(),
@@ -195,7 +199,12 @@ export function buildRecipeFillInRoutes(db: Db) {
 
   app.openapi(fillInRoute, async (c) => {
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
+    if (body.householdId) {
+      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+    }
     const result = await handleFillIn(db, user.id, body)
     return c.json(result.body as never, result.status)
   })

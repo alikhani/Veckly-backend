@@ -4,6 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
+import { reserveWeeklyGeneration } from './ai-usage.js'
 import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
@@ -1112,6 +1113,9 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const { regenerate } = c.req.valid('json')
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+    await reserveWeeklyGeneration(db, householdId, weekStartDate, regenerate)
     const result = await doGenerateWeekPlan(
       db,
       accessToken,

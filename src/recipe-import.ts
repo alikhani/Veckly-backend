@@ -4,6 +4,9 @@ import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import type { Db } from './db.js'
 import { normalizeIngredientCategory } from './ingredient-categories.js'
 import { isRateLimited } from './rate-limit.js'
+import { assertMembership } from './membership.js'
+import { resolveEntitlementForHousehold } from './entitlements.js'
+import { evaluatePremiumGate } from './premium-gates.js'
 
 const PRIVATE_IP_PATTERN =
   /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
@@ -35,8 +38,9 @@ const RawRecipeSchema = z.object({
   title: z.string(),
 }).openapi('ImportedRecipe')
 
-const ImportBodySchema = z.object({ url: z.string() }).openapi('RecipeImportRequest')
+const ImportBodySchema = z.object({ householdId: z.string().uuid().optional(), url: z.string() }).openapi('RecipeImportRequest')
 const TextImportBodySchema = z.object({
+  householdId: z.string().uuid().optional(),
   text: z.string().max(50_000),
   sourceUrl: z.string().optional(),
 }).openapi('RecipeTextImportRequest')
@@ -874,14 +878,24 @@ export function buildRecipeImportRoutes(db: Db) {
 
   app.openapi(importRoute, async (c) => {
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
+    if (body.householdId) {
+      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+    }
     const result = await handleRecipeImport(db, user.id, body.url)
     return c.json(result.body as never, result.status)
   })
 
   app.openapi(textImportRoute, async (c) => {
     const user = c.get('user')
+    const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
+    if (body.householdId) {
+      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+    }
     const result = await handleRecipeTextImport(db, user.id, body.text, body.sourceUrl)
     return c.json(result.body as never, result.status)
   })

@@ -43,6 +43,22 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-08-01 — Freemium Fas 2A: entitlement read API och avstängda shadow-gates
+
+Två autentiserade read-endpoints är nu del av det genererade OpenAPI-kontraktet: `GET /users/me/entitlement` och `GET /households/{householdId}/entitlement`. Household-varianten kör `requireAuth → assertMembership → resolveEntitlementForHousehold`, vilket håller hushållssponsring strikt scoped även om samma användare tillhör flera hushåll. Svaret är medvetet litet: `tier`, `householdId`, `source` och `gatesEnabled`; inga provideridentifierare, kvitton, metadata eller periodslut lämnar servern.
+
+`src/premium-gates.ts` äger den kommande stabila felshape:n `PREMIUM_REQUIRED` samt reason-koder för invite, AI-veckogenerering, AI-fill-in, AI-rekommendationer, receptgräns, historik, sparade planer och publicering. Gratisnivåns beslutade AI-budget är en ny veckogenerering plus en regenerering per hushåll och kalendervecka; AI-fill-in/import och rekommendationer är Premium. När `PREMIUM_GATES_ENABLED=false` — default och beta-policy — är gatebeslut alltid tillåtande. Ingen befintlig produktroute är spärrad och alla beta-användare har fortsatt full åtkomst.
+
+OpenAPI-spec och iOS:s genererade klient är regenererade. Lokal verifiering: backend build och hela testsviten passerar, 378 tester i 24 filer. Nästa Fas 2-arbete är action-för-action shadow-observability; betalproviders och en klientexponerad grant-admin är inte byggda.
+
+### 2026-08-01 — Provider-neutral entitlement foundation (Freemium Fas 1)
+
+Backend har nu den första, avsiktligt leverantörsneutrala entitlement-kärnan för Veckly Premium. Migration `0035_provider_neutral_entitlements.sql` inför `billing_subscriptions`, idempotenta `billing_provider_events` och `household_entitlements`. Modellen kan normalisera `app_store`, `google_play`, `stripe` och `manual`, medan Premium alltid sponsrar ett valt hushåll i stället för att ligga som en klientspecifik flagga.
+
+Alla tre billing-tabeller har RLS utan klientpolicys: finans- och accessposter är server-auktoritativa. `src/entitlements.ts` har en gemensam resolver och explicita beta/manual-grants. Gate-vägen är alltid scoperad till målhushållet och verifierar aktivt medlemskap, så en användare med två hushåll inte kan använda hushåll A:s Premium i hushåll B. `PREMIUM_GATES_ENABLED=false` är default och ingen befintlig route blockerar ännu någon funktion.
+
+Verifierat lokalt: migrationen appliceras i testkedjan, 10 entitlement-tester passerar och hela sviten passerar (374 tester i 23 filer). Ingen betalprovider, publikt entitlement-API, OpenAPI-kontrakt eller live gate har införts. Migrationen är inte applicerad mot produktion ännu; det sker med Fas 2:s read-API och ordinarie staging-/produktionsrunbook.
+
 ### 2026-07-31 — Avoid-filter hardening: sanitized terms, two-ingredient threshold
 
 Post-implementation review of the 2026-07-27 avoid-filter change (below) found three gaps in `recipeMatchesAvoided` (`src/week-plan.ts`), all fixed:

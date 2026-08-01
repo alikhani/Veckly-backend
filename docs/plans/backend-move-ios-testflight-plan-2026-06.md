@@ -21,10 +21,10 @@ The order is deliberate:
 |---|---|---|
 | Phase 0 — Migration inventory | Complete | API parity matrix exists in `docs/migration/api-parity.md`; first implementation slice selected. |
 | Phase 1 — Backend parity foundation | Complete | Core OpenAPI/RLS loop working. All foundation slices done: household profile/members, active week, week-plan events, shopping-state, recipes, week-history, meal feedback, saved plans, recipe AI routes, and meal prep. |
-| Phase 2 — Backend product parity | Not started | Move remaining MealPlanner API behavior route by route. |
+| Phase 2 — Backend product parity | In progress | Core household/week/shopping/recipe/meal-prep behavior is migrated. Remaining planned slices are billing/premium, recipe translation, and web compatibility gaps. |
 | Phase 3 — Web strangler migration | Not started | Existing web app starts calling/proxying to `Veckly-backend`. |
-| Phase 4 — iOS foundation | In progress | `Veckly-ios` exists with generated OpenAPI client, tabs, localized English/Swedish app shell, and week/shopping/settings foundations. Needs auth and full environment setup. |
-| Phase 5 — iOS product parity | In progress | Shopping list, recipe detail, lock/skip, feedback, household, onboarding, localized UI, and several native planning workflows are implemented or stabilized. |
+| Phase 4 — iOS foundation | Complete for beta | Auth/session restore, production environment, generated client workflow and localized app shell are in place. |
+| Phase 5 — iOS product parity | Complete for first beta | The native core household loop is implemented; remaining differences are explicit non-blockers or future premium work. |
 | Phase 6 — TestFlight readiness | In progress | App icon, signing, entitlements, privacy manifest, and account deletion are done; internal TestFlight build is live. Remaining: backend prod hardening, QA matrix, external TestFlight submission. |
 
 ## Working Rules
@@ -77,7 +77,7 @@ Recommended first slice:
 
 ## Phase 1 — Backend Parity Foundation
 
-Status: in progress
+Status: complete
 
 Purpose: make the backend foundation production-shaped before moving the long tail of features.
 
@@ -114,7 +114,7 @@ Exit criteria:
 
 ## Phase 2 — Backend Product Parity
 
-Status: not started
+Status: in progress
 
 Purpose: move all active backend behavior from MealPlanner into `Veckly-backend`.
 
@@ -164,7 +164,7 @@ Exit criteria:
 
 ## Phase 4 — iOS Foundation
 
-Status: in progress
+Status: complete for the first beta scope
 
 Purpose: make iOS a stable native client of the backend contract.
 
@@ -187,7 +187,7 @@ Exit criteria:
 
 ## Phase 5 — iOS Product Parity
 
-Status: not started
+Status: complete for the first beta scope
 
 Purpose: build the native app to the point where a family can test Veckly without depending on the web app for core planning.
 
@@ -232,22 +232,19 @@ Exit criteria:
 
 ## Immediate Next Tasks
 
-Start here:
+Start here as of 2026-08-01:
 
-1. Create the API parity matrix for `MealPlanner/src/app/api/**`.
-2. Compare it with current `Veckly-backend` routes.
-3. Mark missing/partial/migrated/deprecated rows.
-4. Pick the first backend slice from the matrix.
-5. Implement and test that slice end-to-end:
-   - backend route
-   - RLS/auth tests
-   - OpenAPI update
-   - iOS generated client compile
+1. Run the remaining manual release QA: physical device, live VoiceOver and offline/reconnect.
+2. Submit the external TestFlight build and run the first-five-family beta loop.
+3. Implement backend-owned billing/subscription entitlements as the next product-parity slice, keeping gates disabled until upgrade UX and beta policy are verified.
+4. Move recipe translation or remaining web-compatibility routes only when an active client needs them.
 
 ## Progress Log
 
 - 2026-06-10: Plan created. Phase 0 is the next active task. Phase 1 and Phase 4 already have foundations in place but need parity validation before being marked complete.
 - 2026-06-10: Phase 0 started. API parity matrix created at `docs/migration/api-parity.md`; first recommended implementation slice is household profile/preferences, public member routes, active week pointer, week event expansion, then shopping-list compatibility.
+- 2026-08-01: Status reconciled with the shipped native core loop and live internal TestFlight. Phase 4 and the first-beta scope of Phase 5 are complete; Phase 6 remains open for manual QA and external submission. Billing/premium is the next planned backend slice.
+- 2026-08-01: Freemium Fas 1 completed: provider-neutral subscription/event/household-entitlement tables, deny-by-default client RLS, household-scoped entitlement resolver, beta/manual grants and disabled-by-default gate switch. Local migration chain and full backend suite pass (374 tests). No payment provider, public read API or enforced gate has been added; those remain the next commercial slice.
 - 2026-06-10: Phase 0 completed. Next implementation work starts in Phase 1 with household profile/preferences as the first backend parity slice.
 - 2026-06-10: Phase 1 first slice completed. Household profile/preferences added as `GET/PUT /households/{householdId}/profile`, backed by `household_profiles` RLS table, OpenAPI generation, and iOS client regeneration.
 - 2026-06-10: Phase 1 member route slice completed. Public OpenAPI operations added for member list, role update, and member removal; iOS client regenerated and compiled.

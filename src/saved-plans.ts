@@ -3,6 +3,8 @@ import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
 import { savedPlans } from './schema.js'
+import { resolveEntitlementForUser } from './entitlements.js'
+import { observePremiumGate } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const SavedPlanSchema = z.object({
@@ -162,6 +164,12 @@ export function buildSavedPlansRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const body = c.req.valid('json')
+    // Updating an existing template stays free; only a third distinct plan is
+    // a future Premium boundary. This remains observational during beta.
+    const existing = await listSavedPlans(db, accessToken, user.id)
+    if (!existing.some((plan) => plan.id === body.id)) {
+      observePremiumGate(await resolveEntitlementForUser(db, user.id), 'saved_plans_limit', { limit: 2, current: existing.length })
+    }
     const plan = await upsertSavedPlan(db, accessToken, user.id, body)
     if (!plan) return c.json({ error: 'CONFLICT' }, 409)
     return c.json(plan, 200)

@@ -5,6 +5,8 @@ import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { reserveWeeklyGeneration } from './ai-usage.js'
+import { resolveEntitlementForHousehold } from './entitlements.js'
+import { observePremiumGate } from './premium-gates.js'
 import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
@@ -1215,6 +1217,13 @@ export function buildWeekPlanRoutes(db: Db) {
     if ((from && !isMonday(from)) || (to && !isMonday(to))) return c.json({ error: 'INVALID_WEEK_RANGE' } as never, 400)
 
     const plans = await listWeekHistoryPlans(db, accessToken, householdId, { from, to })
+    // Four most recent calendar weeks remain free. Shadow only for now.
+    const now = new Date()
+    const mondayOffset = (now.getUTCDay() + 6) % 7
+    const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - mondayOffset - 21)).toISOString().slice(0, 10)
+    if (plans.some((plan) => plan.weekStartDate < cutoff)) {
+      observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'week_history')
+    }
     return c.json(plans, 200)
   })
 

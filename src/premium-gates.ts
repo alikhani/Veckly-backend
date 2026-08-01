@@ -39,7 +39,6 @@ export function evaluatePremiumGate(
   return premiumRequired(reason, usage)
 }
 
-export function observePremiumGate(entitlement: ResolvedEntitlement, reason: PremiumGateReason) {
-  const required = evaluatePremiumGate(entitlement, reason)
-  if (required) console.info('[premium-gate] would block', required)
+export function observePremiumGate(entitlement: ResolvedEntitlement, reason: PremiumGateReason, usage?: { limit: number; current: number }) {
+  if (entitlement.tier !== 'premium') console.info('[premium-gate] would block', premiumRequired(reason, usage))
 }

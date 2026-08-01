@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, not, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, isNull, not, or, sql } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { assertMembership } from './membership.js'
@@ -564,6 +564,8 @@ export function buildRecipesRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
+    const [recipeCount] = await db.select({ current: count() }).from(recipes).where(and(eq(recipes.householdId, householdId), eq(recipes.isArchived, false)))
+    observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'custom_recipes_limit', { limit: 10, current: recipeCount?.current ?? 0 })
     if (body.isPublic) observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'community_share')
     const recipe = await createRecipe(db, accessToken, user.id, householdId, body)
     return c.json(recipe, 201)

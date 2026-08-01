@@ -5,7 +5,7 @@ import type { Db } from './db.js'
 import { isRateLimited } from './rate-limit.js'
 import { assertMembership } from './membership.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { evaluatePremiumGate } from './premium-gates.js'
+import { evaluatePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
 
 const SYSTEM_PROMPT = `You are a recipe data generator for a family meal planning app.
 Your only job is to return a single valid JSON object — no explanation, no markdown, no preamble.
@@ -203,7 +203,9 @@ export function buildRecipeFillInRoutes(db: Db) {
     const body = c.req.valid('json')
     if (body.householdId) {
       if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
+      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
     }
     const result = await handleFillIn(db, user.id, body)
     return c.json(result.body as never, result.status)

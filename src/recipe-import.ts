@@ -6,7 +6,7 @@ import { normalizeIngredientCategory } from './ingredient-categories.js'
 import { isRateLimited } from './rate-limit.js'
 import { assertMembership } from './membership.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { evaluatePremiumGate } from './premium-gates.js'
+import { evaluatePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
 
 const PRIVATE_IP_PATTERN =
   /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
@@ -882,7 +882,9 @@ export function buildRecipeImportRoutes(db: Db) {
     const body = c.req.valid('json')
     if (body.householdId) {
       if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
+      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
     }
     const result = await handleRecipeImport(db, user.id, body.url)
     return c.json(result.body as never, result.status)
@@ -894,7 +896,9 @@ export function buildRecipeImportRoutes(db: Db) {
     const body = c.req.valid('json')
     if (body.householdId) {
       if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      evaluatePremiumGate(await resolveEntitlementForHousehold(db, user.id, body.householdId), 'recipe_ai_fill_in')
+      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
+      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
     }
     const result = await handleRecipeTextImport(db, user.id, body.text, body.sourceUrl)
     return c.json(result.body as never, result.status)

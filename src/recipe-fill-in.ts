@@ -5,7 +5,7 @@ import type { Db } from './db.js'
 import { isRateLimited } from './rate-limit.js'
 import { assertMembership } from './membership.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { evaluatePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 
 const SYSTEM_PROMPT = `You are a recipe data generator for a family meal planning app.
 Your only job is to return a single valid JSON object — no explanation, no markdown, no preamble.
@@ -71,8 +71,7 @@ const FillInResponseSchema = z.object({
   notes: z.string().max(500).optional(),
 }).openapi('RecipeFillInResult')
 
-const FillInBodySchema = z.object({
-  householdId: z.string().uuid().optional(),
+const FillInBodyFields = {
   title: z.string().min(1).max(120),
   householdProfile: z.object({
     adults: z.number(),
@@ -84,7 +83,9 @@ const FillInBodySchema = z.object({
     unit: z.string().max(20).optional(),
   })).max(50).optional(),
   existingSteps: z.array(z.string().max(1000)).max(30).optional(),
-}).openapi('RecipeFillInRequest')
+}
+const FillInBodySchema = z.object(FillInBodyFields).openapi('RecipeFillInRequest')
+const PublicFillInBodySchema = z.object({ householdId: z.string().uuid(), ...FillInBodyFields }).openapi('PublicRecipeFillInRequest')
 
 const FillInEnvelopeSchema = z.object({ recipe: FillInResponseSchema }).openapi('RecipeFillInEnvelope')
 
@@ -180,12 +181,13 @@ const fillInRoute = createRoute({
   summary: 'Generate recipe details from a title',
   security: [{ bearerAuth: [] }],
   request: {
-    body: { content: { 'application/json': { schema: FillInBodySchema } } },
+    body: { content: { 'application/json': { schema: PublicFillInBodySchema } } },
   },
   responses: {
     200: { description: 'Generated recipe details', content: { 'application/json': { schema: FillInEnvelopeSchema } } },
     400: { description: 'Invalid payload' },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     422: { description: 'AI response did not match the recipe schema' },
     429: { description: 'Rate limited' },
     500: { description: 'AI provider unavailable' },
@@ -201,12 +203,10 @@ export function buildRecipeFillInRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
-    if (body.householdId) {
-      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
-      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
-    }
+    if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+    const gate = await observePremiumGate(db, entitlement, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
+    if (gate) return c.json(gate as never, 403)
     const result = await handleFillIn(db, user.id, body)
     return c.json(result.body as never, result.status)
   })

@@ -8,7 +8,7 @@ import { isRateLimited } from './rate-limit.js'
 import { withRls } from './rls.js'
 import { householdRecipeRecommendations } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const RecommendationSchema = z.object({
@@ -27,12 +27,7 @@ const FeedbackItemSchema = z.object({
   signal: z.string().optional(),
 })
 
-const RecommendBodySchema = z.object({
-  // Optional for backward compatibility with the MealPlanner strangle route,
-  // which doesn't send it yet — caching only engages when it's present.
-  // When present, it's verified against the caller's own membership before
-  // being trusted as a cache key (see `resolveCacheableHouseholdId`).
-  householdId: z.string().uuid().optional(),
+const RecommendBodyFields = {
   householdProfile: z.object({
     adults: z.number(),
     children: z.number(),
@@ -46,6 +41,17 @@ const RecommendBodySchema = z.object({
     twoWeeksAgo: z.array(z.string()),
   }).optional(),
   prepContext: z.object({ isCookDay: z.boolean() }).optional(),
+}
+
+const RecommendBodySchema = z.object({
+  // Optional only for the MealPlanner strangle route, which does not send it yet.
+  householdId: z.string().uuid().optional(),
+  ...RecommendBodyFields,
+})
+
+const PublicRecommendBodySchema = z.object({
+  householdId: z.string().uuid(),
+  ...RecommendBodyFields,
 }).openapi('MealRecommendationsRequest')
 
 type TRecommendBody = z.infer<typeof RecommendBodySchema>
@@ -254,12 +260,13 @@ const recommendRoute = createRoute({
   summary: 'Rank candidate meals for a household',
   security: [{ bearerAuth: [] }],
   request: {
-    body: { content: { 'application/json': { schema: RecommendBodySchema } } },
+    body: { content: { 'application/json': { schema: PublicRecommendBodySchema } } },
   },
   responses: {
     200: { description: 'Recommended meals', content: { 'application/json': { schema: RecommendResponseSchema } } },
     400: { description: 'Invalid payload' },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     422: { description: 'AI response did not match schema' },
     429: { description: 'Rate limited' },
     500: { description: 'AI provider unavailable' },
@@ -275,11 +282,10 @@ export function buildRecipeRecommendationRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
-    if (body.householdId) {
-      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
-      observePremiumGate(entitlement, 'ai_recommendations')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'ai_recommendations' })
-    }
+    if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+    const gate = await observePremiumGate(db, entitlement, { householdId: body.householdId, userId: user.id, reason: 'ai_recommendations' })
+    if (gate) return c.json(gate as never, 403)
     const language = languageFromAcceptLanguage(c.req.header('Accept-Language'))
     const result = await handleRecommend(db, accessToken, user.id, body, language)
     return c.json(result.body as never, result.status)

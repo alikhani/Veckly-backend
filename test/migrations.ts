@@ -30,6 +30,10 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [householdEntitlementsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_entitlements') as exists`)
   const [householdAiUsageMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_ai_weekly_usage') as exists`)
   const [premiumGateObservationsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.premium_gate_observations') as exists`)
+  const [gateHardeningMarker] = await db.execute<{ exists: string | null }>(sql`
+    select column_name as exists from information_schema.columns
+    where table_name = 'household_ai_weekly_usage' and column_name = 'period_start_date'
+  `)
   const [householdRecipeRecommendationsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_recipe_recommendations') as exists`)
   const [householdsDeleteRlsMarker] = await db.execute<{ exists: string | null }>(sql`
     select policyname as exists from pg_policies
@@ -65,6 +69,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasHouseholdEntitlementsMigration = Boolean(householdEntitlementsMarker?.exists)
   const alreadyHasHouseholdAiUsageMigration = Boolean(householdAiUsageMarker?.exists)
   const alreadyHasPremiumGateObservationsMigration = Boolean(premiumGateObservationsMarker?.exists)
+  const alreadyHasGateHardeningMigration = Boolean(gateHardeningMarker?.exists)
   const alreadyHasHouseholdRecipeRecommendationsMigration = Boolean(householdRecipeRecommendationsMarker?.exists)
   const alreadyHasHouseholdsDeleteRlsMigration = Boolean(householdsDeleteRlsMarker?.exists)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
@@ -84,6 +89,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasGateHardeningMigration && file < '0039_') continue
     if (alreadyHasPremiumGateObservationsMigration && file < '0038_') continue
     if (alreadyHasHouseholdAiUsageMigration && file < '0037_') continue
     if (alreadyHasHouseholdEntitlementsMigration && file < '0036_') continue

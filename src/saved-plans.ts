@@ -2,9 +2,9 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
-import { householdMemberships, savedPlans } from './schema.js'
+import { savedPlans } from './schema.js'
 import { resolveEntitlementForUser } from './entitlements.js'
-import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { isPremiumLimitReached, observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import type { Db } from './db.js'
 
 const SavedPlanSchema = z.object({
@@ -114,6 +114,7 @@ const upsertSavedPlanRoute = createRoute({
   request: { body: { content: { 'application/json': { schema: UpsertSavedPlanSchema } } } },
   responses: {
     200: { description: 'Saved plan persisted', content: { 'application/json': { schema: SavedPlanSchema } } },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -167,15 +168,11 @@ export function buildSavedPlansRoutes(db: Db) {
     // Updating an existing template stays free; only a third distinct plan is
     // a future Premium boundary. This remains observational during beta.
     const existing = await listSavedPlans(db, accessToken, user.id)
-    if (!existing.some((plan) => plan.id === body.id)) {
+    const usage = { limit: 2, current: existing.length }
+    if (!existing.some((plan) => plan.id === body.id) && isPremiumLimitReached(usage)) {
       const entitlement = await resolveEntitlementForUser(db, user.id)
-      const usage = { limit: 2, current: existing.length }
-      observePremiumGate(entitlement, 'saved_plans_limit', usage)
-      if (entitlement.tier !== 'premium') {
-        const [membership] = await db.select({ householdId: householdMemberships.householdId }).from(householdMemberships)
-          .where(and(eq(householdMemberships.userId, user.id), eq(householdMemberships.status, 'active'))).limit(1)
-        if (membership) await recordPremiumGateObservation(db, { householdId: membership.householdId, userId: user.id, reason: 'saved_plans_limit', usage })
-      }
+      const gate = await observePremiumGate(db, entitlement, { householdId: null, userId: user.id, reason: 'saved_plans_limit', usage })
+      if (gate) return c.json(gate as never, 403)
     }
     const plan = await upsertSavedPlan(db, accessToken, user.id, body)
     if (!plan) return c.json({ error: 'CONFLICT' }, 409)

@@ -6,7 +6,7 @@ import { normalizeIngredientCategory } from './ingredient-categories.js'
 import { isRateLimited } from './rate-limit.js'
 import { assertMembership } from './membership.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { evaluatePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 
 const PRIVATE_IP_PATTERN =
   /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)/
@@ -38,12 +38,14 @@ const RawRecipeSchema = z.object({
   title: z.string(),
 }).openapi('ImportedRecipe')
 
-const ImportBodySchema = z.object({ householdId: z.string().uuid().optional(), url: z.string() }).openapi('RecipeImportRequest')
-const TextImportBodySchema = z.object({
-  householdId: z.string().uuid().optional(),
+const ImportBodySchema = z.object({ url: z.string() }).openapi('RecipeImportRequest')
+const PublicImportBodySchema = z.object({ householdId: z.string().uuid(), url: z.string() }).openapi('PublicRecipeImportRequest')
+const TextImportBodyFields = {
   text: z.string().max(50_000),
   sourceUrl: z.string().optional(),
-}).openapi('RecipeTextImportRequest')
+}
+const TextImportBodySchema = z.object(TextImportBodyFields).openapi('RecipeTextImportRequest')
+const PublicTextImportBodySchema = z.object({ householdId: z.string().uuid(), ...TextImportBodyFields }).openapi('PublicRecipeTextImportRequest')
 const ImportSourceSchema = z.object({
   kind: z.enum(['web', 'tiktok', 'instagram']),
   url: z.string(),
@@ -839,12 +841,13 @@ const importRoute = createRoute({
   summary: 'Import recipe metadata from a URL',
   security: [{ bearerAuth: [] }],
   request: {
-    body: { content: { 'application/json': { schema: ImportBodySchema } } },
+    body: { content: { 'application/json': { schema: PublicImportBodySchema } } },
   },
   responses: {
     200: { description: 'Imported recipe', content: { 'application/json': { schema: ImportEnvelopeSchema } } },
     400: { description: 'Invalid URL', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     422: { description: 'Could not parse recipe from fetched page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     500: { description: 'Could not fetch page', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
@@ -859,12 +862,13 @@ const textImportRoute = createRoute({
   summary: 'Import recipe metadata from pasted text',
   security: [{ bearerAuth: [] }],
   request: {
-    body: { content: { 'application/json': { schema: TextImportBodySchema } } },
+    body: { content: { 'application/json': { schema: PublicTextImportBodySchema } } },
   },
   responses: {
     200: { description: 'Imported recipe', content: { 'application/json': { schema: ImportEnvelopeSchema } } },
     400: { description: 'Invalid source URL', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     422: { description: 'Could not parse recipe from pasted text', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
     500: { description: 'Could not import pasted text', content: { 'application/json': { schema: RecipeImportErrorSchema } } },
@@ -880,12 +884,10 @@ export function buildRecipeImportRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
-    if (body.householdId) {
-      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
-      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
-    }
+    if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+    const gate = await observePremiumGate(db, entitlement, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
+    if (gate) return c.json(gate as never, 403)
     const result = await handleRecipeImport(db, user.id, body.url)
     return c.json(result.body as never, result.status)
   })
@@ -894,12 +896,10 @@ export function buildRecipeImportRoutes(db: Db) {
     const user = c.get('user')
     const accessToken = c.get('accessToken')
     const body = c.req.valid('json')
-    if (body.householdId) {
-      if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-      const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
-      evaluatePremiumGate(entitlement, 'recipe_ai_fill_in')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
-    }
+    if (!await assertMembership(db, accessToken, body.householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, body.householdId)
+    const gate = await observePremiumGate(db, entitlement, { householdId: body.householdId, userId: user.id, reason: 'recipe_ai_fill_in' })
+    if (gate) return c.json(gate as never, 403)
     const result = await handleRecipeTextImport(db, user.id, body.text, body.sourceUrl)
     return c.json(result.body as never, result.status)
   })

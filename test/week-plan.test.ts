@@ -858,7 +858,7 @@ describeWithDb('Week-plan event log + projection', () => {
         db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-10',
       )
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'empty' })
       expect(summary?.days[1]).toMatchObject({ dayOfWeek: 'tuesday', state: 'empty' })
@@ -878,7 +878,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       await expect(doGenerateWeekPlan(
         db, fakeAccessToken(userA), userA, householdAId, currentWeekStartDate, false, resolvedToday,
-      )).resolves.toEqual({ ok: true })
+      )).resolves.toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, currentWeekStartDate)
       expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'empty' })
       expect(summary?.days[1]).toMatchObject({ dayOfWeek: 'tuesday', state: 'empty' })
@@ -894,7 +894,7 @@ describeWithDb('Week-plan event log + projection', () => {
         db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03',
       )
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days.slice(0, 3).every((day) => day.state === 'planned')).toBe(true)
     })
@@ -913,7 +913,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'planned' })
       expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
@@ -933,7 +933,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[2]).toMatchObject({ dayOfWeek: 'wednesday', state: 'skipped', recipe: null })
     })
@@ -967,7 +967,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]).toMatchObject({ dayOfWeek: 'monday', state: 'planned' })
       expect(summary?.days[0]?.recipe?.title).toBe('Plain Pasta')
@@ -1011,7 +1011,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Builtin Chili')
     })
@@ -1034,7 +1034,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Legacy Builtin Chili')
       expect(summary?.days[0]?.recipe?.tags).toEqual(baseRecipe.tags)
@@ -1047,7 +1047,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Bookmarked Curry')
     })
@@ -1133,7 +1133,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Only Possible Pasta')
     })
@@ -1172,7 +1172,7 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const result = await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true)
 
-      expect(result).toEqual({ ok: true })
+      expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.title).toBe('Family Favorite')
       expect(summary?.days[0]?.reason).toBe('family-recipe')

@@ -4,9 +4,9 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { reserveWeeklyGeneration } from './ai-usage.js'
+import { releaseWeeklyGeneration, reserveWeeklyGeneration, weeklyUsagePeriodStart } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
@@ -468,6 +468,7 @@ const listWeekHistoryPlansRoute = createRoute({
       description: 'Week plans ordered by week start date descending',
       content: { 'application/json': { schema: z.array(WeekHistoryListItemSchema) } },
     },
+    403: { description: 'Premium is required for older history', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     400: { description: 'Invalid range' },
     401: { description: 'Missing or invalid session' },
   },
@@ -545,6 +546,7 @@ const generateWeekPlanRoute = createRoute({
       description: 'No recipes available to plan with',
       content: { 'application/json': { schema: GenerateWeekPlanErrorSchema } },
     },
+    403: { description: 'Premium generation quota reached', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -923,7 +925,7 @@ export async function doGenerateWeekPlan(
   weekStartDate: string,
   regenerate: boolean,
   today = defaultTodayForWeek(weekStartDate),
-): Promise<{ ok: true } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
+): Promise<{ ok: true; generated: boolean } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
   const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
 
@@ -1000,7 +1002,7 @@ export async function doGenerateWeekPlan(
     return regenerate ? true : !projState.meals[day]
   })
 
-  if (daysToFill.length === 0) return { ok: true }
+  if (daysToFill.length === 0) return { ok: true, generated: false }
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
 
   const candidates: TScoringRecipe[] = (avoidIngredients.length > 0
@@ -1097,7 +1099,7 @@ export async function doGenerateWeekPlan(
     )
   }
 
-  return { ok: true }
+  return { ok: true, generated: true }
 }
 
 export function buildWeekPlanRoutes(db: Db) {
@@ -1117,19 +1119,42 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
-    await reserveWeeklyGeneration(db, householdId, weekStartDate, regenerate)
-    const result = await doGenerateWeekPlan(
-      db,
-      accessToken,
-      user.id,
-      householdId,
-      weekStartDate,
-      regenerate,
-      requestToday(c.req.header('X-Veckly-Today')),
-    )
+    const today = requestToday(c.req.header('X-Veckly-Today'))
+    const usagePeriodStart = weeklyUsagePeriodStart(today)
+    const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
+    let reservation: Awaited<ReturnType<typeof reserveWeeklyGeneration>> & { persisted: boolean }
+    try {
+      reservation = { ...await reserveWeeklyGeneration(db, householdId, usagePeriodStart, regenerate), persisted: true }
+    } catch (error) {
+      if (entitlement.gatesEnabled) throw error
+      console.error('[premium-gate] failed to persist weekly AI usage in shadow mode', error)
+      reservation = { recorded: true, current: 0, limit: 2, persisted: false }
+    }
+    if (!reservation.recorded) {
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'week_generation_limit', usage: reservation })
+      if (gate) return c.json(gate as never, 403)
+    }
+    let result: Awaited<ReturnType<typeof doGenerateWeekPlan>>
+    try {
+      result = await doGenerateWeekPlan(
+        db,
+        accessToken,
+        user.id,
+        householdId,
+        weekStartDate,
+        regenerate,
+        today,
+      )
+    } catch (error) {
+      if (reservation.recorded && reservation.persisted) await releaseWeeklyGeneration(db, householdId, usagePeriodStart, regenerate)
+      throw error
+    }
+    if (reservation.recorded && reservation.persisted && ('error' in result || !result.generated)) {
+      await releaseWeeklyGeneration(db, householdId, usagePeriodStart, regenerate)
+    }
     if ('error' in result && result.error === 'NOT_MEMBER') return c.json({ error: 'NOT_MEMBER' }, 404)
     if ('error' in result) return c.json(result, 422)
-    return c.json(result, 200)
+    return c.json({ ok: true }, 200)
   })
 
   app.openapi(appendWeekPlanEventRoute, async (c) => {
@@ -1223,8 +1248,8 @@ export function buildWeekPlanRoutes(db: Db) {
     const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - mondayOffset - 21)).toISOString().slice(0, 10)
     if (plans.some((plan) => plan.weekStartDate < cutoff)) {
       const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-      observePremiumGate(entitlement, 'week_history')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'week_history' })
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'week_history' })
+      if (gate) return c.json(gate as never, 403)
     }
     return c.json(plans, 200)
   })

@@ -5,7 +5,8 @@ import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls, withRlsAndToken } from './rls.js'
 import { households, householdInvites, householdMemberships } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
+import { assertMembership } from './membership.js'
 import type { Db } from './db.js'
 
 const InviteSchema = z.object({
@@ -228,6 +229,7 @@ const createInviteRoute = createRoute({
   },
   responses: {
     201: { description: 'The created invite, including its shareable token', content: { 'application/json': { schema: InviteSchema } } },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -373,9 +375,10 @@ export function buildInvitesRoutes(db: Db) {
     const user = c.get('user')
     const { householdId } = c.req.valid('param')
     const body = c.req.valid('json')
+    if (!await assertMembership(db, accessToken, householdId, user.id)) return c.json({ error: 'NOT_MEMBER' } as never, 404)
     const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-    observePremiumGate(entitlement, 'household_invite')
-    if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'household_invite' })
+    const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'household_invite' })
+    if (gate) return c.json(gate as never, 403)
 
     const invite = await createInvite(db, accessToken, user.id, householdId, { email: body.email })
 

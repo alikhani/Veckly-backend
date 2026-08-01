@@ -382,16 +382,16 @@ export const householdEntitlements = pgTable('household_entitlements', {
 
 export const householdAiWeeklyUsage = pgTable('household_ai_weekly_usage', {
   householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
-  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  periodStartDate: date('period_start_date', { mode: 'string' }).notNull(),
   usageKind: householdAiUsageKind('usage_kind').notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  primaryKey({ columns: [table.householdId, table.weekStartDate, table.usageKind], name: 'household_ai_weekly_usage_pk' }),
+  primaryKey({ columns: [table.householdId, table.periodStartDate, table.usageKind], name: 'household_ai_weekly_usage_pk' }),
 ])
 
 export const premiumGateObservations = pgTable('premium_gate_observations', {
   id: uuid('id').primaryKey().defaultRandom(),
-  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  householdId: uuid('household_id').references(() => households.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull(),
   reason: text('reason').notNull(),
   limitValue: integer('limit_value'),

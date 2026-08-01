@@ -6,7 +6,7 @@ import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, mealFeedback, recipes, userSavedRecipes } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
+import { isPremiumLimitReached, observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { categorizeRecipeIngredients, readRecipeIngredients } from './ingredient-categories.js'
 import type { Db } from './db.js'
 
@@ -436,6 +436,7 @@ const createRecipeRoute = createRoute({
   },
   responses: {
     201: { description: 'The created recipe', content: { 'application/json': { schema: RecipeSchema } } },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -452,6 +453,7 @@ const updateRecipeRoute = createRoute({
   },
   responses: {
     200: { description: 'The updated recipe', content: { 'application/json': { schema: RecipeSchema } } },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     404: { description: 'Recipe not found or not in this household' },
     401: { description: 'Missing or invalid session' },
   },
@@ -567,11 +569,13 @@ export function buildRecipesRoutes(db: Db) {
     const [recipeCount] = await db.select({ current: count() }).from(recipes).where(and(eq(recipes.householdId, householdId), eq(recipes.isArchived, false)))
     const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
     const usage = { limit: 10, current: recipeCount?.current ?? 0 }
-    observePremiumGate(entitlement, 'custom_recipes_limit', usage)
-    if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'custom_recipes_limit', usage })
+    if (isPremiumLimitReached(usage)) {
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'custom_recipes_limit', usage })
+      if (gate) return c.json(gate as never, 403)
+    }
     if (body.isPublic) {
-      observePremiumGate(entitlement, 'community_share')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'community_share' })
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'community_share' })
+      if (gate) return c.json(gate as never, 403)
     }
     const recipe = await createRecipe(db, accessToken, user.id, householdId, body)
     return c.json(recipe, 201)
@@ -584,10 +588,11 @@ export function buildRecipesRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
-    if (body.isPublic) {
+    const existingRecipe = body.isPublic ? await getRecipe(db, accessToken, householdId, user.id, recipeId) : null
+    if (body.isPublic && existingRecipe && !existingRecipe.isPublic) {
       const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-      observePremiumGate(entitlement, 'community_share')
-      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'community_share' })
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'community_share' })
+      if (gate) return c.json(gate as never, 403)
     }
     const recipe = await updateRecipe(db, accessToken, householdId, recipeId, body)
     if (!recipe) return c.json({ error: 'Recipe not found' }, 404)

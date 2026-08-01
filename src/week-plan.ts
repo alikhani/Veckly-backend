@@ -6,7 +6,7 @@ import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { reserveWeeklyGeneration } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate } from './premium-gates.js'
+import { observePremiumGate, recordPremiumGateObservation } from './premium-gates.js'
 import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
@@ -1222,7 +1222,9 @@ export function buildWeekPlanRoutes(db: Db) {
     const mondayOffset = (now.getUTCDay() + 6) % 7
     const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - mondayOffset - 21)).toISOString().slice(0, 10)
     if (plans.some((plan) => plan.weekStartDate < cutoff)) {
-      observePremiumGate(await resolveEntitlementForHousehold(db, user.id, householdId), 'week_history')
+      const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
+      observePremiumGate(entitlement, 'week_history')
+      if (entitlement.tier !== 'premium') await recordPremiumGateObservation(db, { householdId, userId: user.id, reason: 'week_history' })
     }
     return c.json(plans, 200)
   })

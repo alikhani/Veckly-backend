@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { releaseWeeklyGeneration, reserveWeeklyGeneration, weeklyUsagePeriodStart } from './ai-usage.js'
+import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
@@ -469,6 +469,7 @@ const listWeekHistoryPlansRoute = createRoute({
       content: { 'application/json': { schema: z.array(WeekHistoryListItemSchema) } },
     },
     403: { description: 'Premium is required for older history', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
+    404: { description: 'Household not found or caller is not a member' },
     400: { description: 'Invalid range' },
     401: { description: 'Missing or invalid session' },
   },
@@ -548,6 +549,7 @@ const generateWeekPlanRoute = createRoute({
     },
     403: { description: 'Premium generation quota reached', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -1120,7 +1122,9 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const today = requestToday(c.req.header('X-Veckly-Today'))
-    const usagePeriodStart = weeklyUsagePeriodStart(today)
+    // Product date behavior follows the device-local header, but billing usage
+    // must never trust a caller-controlled date.
+    const usagePeriodStart = serverWeeklyUsagePeriodStart()
     const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
     let reservation: Awaited<ReturnType<typeof reserveWeeklyGeneration>> & { persisted: boolean }
     try {
@@ -1128,7 +1132,7 @@ export function buildWeekPlanRoutes(db: Db) {
     } catch (error) {
       if (entitlement.gatesEnabled) throw error
       console.error('[premium-gate] failed to persist weekly AI usage in shadow mode', error)
-      reservation = { recorded: true, current: 0, limit: 2, persisted: false }
+      reservation = { recorded: true, current: 0, limit: 1, persisted: false }
     }
     if (!reservation.recorded) {
       const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'week_generation_limit', usage: reservation })
@@ -1146,11 +1150,11 @@ export function buildWeekPlanRoutes(db: Db) {
         today,
       )
     } catch (error) {
-      if (reservation.recorded && reservation.persisted) await releaseWeeklyGeneration(db, householdId, usagePeriodStart, regenerate)
+      if (reservation.recorded && reservation.persisted) await releaseWeeklyGenerationBestEffort(db, householdId, usagePeriodStart, regenerate)
       throw error
     }
     if (reservation.recorded && reservation.persisted && ('error' in result || !result.generated)) {
-      await releaseWeeklyGeneration(db, householdId, usagePeriodStart, regenerate)
+      await releaseWeeklyGenerationBestEffort(db, householdId, usagePeriodStart, regenerate)
     }
     if ('error' in result && result.error === 'NOT_MEMBER') return c.json({ error: 'NOT_MEMBER' }, 404)
     if ('error' in result) return c.json(result, 422)

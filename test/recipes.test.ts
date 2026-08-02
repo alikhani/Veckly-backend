@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships, recipes, userSavedRecipes } from '../src/schema.js'
-import { createRecipe, listRecipes, getRecipe, repairIngredientCategories, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
+import { createRecipe, createRecipeWithinLimit, listRecipes, getRecipe, repairIngredientCategories, updateRecipe, listPublicRecipes, listSavedRecipes, saveRecipe, unsaveRecipe } from '../src/recipes.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -111,6 +111,23 @@ describeWithDb('Recipes + RLS', () => {
       const [persisted] = await db.select({ title: recipes.title }).from(recipes).where(eq(recipes.id, recipe.id))
       expect(persisted?.title).toBe('Pasta Carbonara')
     })
+  })
+
+  it('atomically allows only one concurrent recipe at the free limit boundary', async () => {
+    for (let index = 0; index < 9; index += 1) {
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: `Recipe ${index}` })
+    }
+    const concurrentDb = createDb(testDatabaseUrl!)
+
+    const attempts = await Promise.all([
+      createRecipeWithinLimit(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Concurrent A' }, true),
+      createRecipeWithinLimit(concurrentDb, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Concurrent B' }, true),
+    ])
+
+    expect(attempts.filter((attempt) => attempt.recipe !== null)).toHaveLength(1)
+    expect(attempts.filter((attempt) => attempt.limitReached)).toHaveLength(1)
+    const [persisted] = await db.select({ current: sql<number>`count(*)::int` }).from(recipes).where(eq(recipes.householdId, householdAId))
+    expect(persisted?.current).toBe(10)
   })
 
   describe('(b) Public recipe visibility', () => {

@@ -128,29 +128,59 @@ export async function createRecipe(
   input: z.infer<typeof CreateRecipeSchema>,
 ) {
   return withRls(db, accessToken, async (tx) => {
-    const [recipe] = await tx
-      .insert(recipes)
-      .values({
-        householdId,
-        createdBy: userId,
-        title: input.title,
-        description: input.description,
-        servings: input.servings,
-        ingredients: categorizeRecipeIngredients(input.ingredients),
-        steps: input.steps,
-        tags: input.tags,
-        prepTimeMinutes: input.prepTimeMinutes ?? null,
-        cookTimeMinutes: input.cookTimeMinutes ?? null,
-        cuisine: input.cuisine ?? null,
-        proteinSource: input.proteinSource ?? null,
-        mealWeight: input.mealWeight ?? null,
-        sourceUrl: input.sourceUrl ?? null,
-        source: input.source,
-        isPublic: input.isPublic,
-      })
-      .returning()
-    if (!recipe) throw new Error('Insert did not return the persisted recipe')
-    return toRecipeResponse(recipe)
+    return insertRecipe(tx, userId, householdId, input)
+  })
+}
+
+async function insertRecipe(
+  db: Db,
+  userId: string,
+  householdId: string,
+  input: z.infer<typeof CreateRecipeSchema>,
+) {
+  const [recipe] = await db
+    .insert(recipes)
+    .values({
+      householdId,
+      createdBy: userId,
+      title: input.title,
+      description: input.description,
+      servings: input.servings,
+      ingredients: categorizeRecipeIngredients(input.ingredients),
+      steps: input.steps,
+      tags: input.tags,
+      prepTimeMinutes: input.prepTimeMinutes ?? null,
+      cookTimeMinutes: input.cookTimeMinutes ?? null,
+      cuisine: input.cuisine ?? null,
+      proteinSource: input.proteinSource ?? null,
+      mealWeight: input.mealWeight ?? null,
+      sourceUrl: input.sourceUrl ?? null,
+      source: input.source,
+      isPublic: input.isPublic,
+    })
+    .returning()
+  if (!recipe) throw new Error('Insert did not return the persisted recipe')
+  return toRecipeResponse(recipe)
+}
+
+export async function createRecipeWithinLimit(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string,
+  input: z.infer<typeof CreateRecipeSchema>,
+  enforceLimit: boolean,
+) {
+  return withRls(db, accessToken, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`custom-recipes:${householdId}`}, 0))`)
+    const [recipeCount] = await tx.select({ current: count() }).from(recipes).where(and(
+      eq(recipes.householdId, householdId),
+      eq(recipes.isArchived, false),
+    ))
+    const usage = { limit: 10, current: recipeCount?.current ?? 0 }
+    const limitReached = isPremiumLimitReached(usage)
+    if (limitReached && enforceLimit) return { recipe: null, usage, limitReached }
+    return { recipe: await insertRecipe(tx, userId, householdId, input), usage, limitReached }
   })
 }
 
@@ -436,8 +466,9 @@ const createRecipeRoute = createRoute({
   },
   responses: {
     201: { description: 'The created recipe', content: { 'application/json': { schema: RecipeSchema } } },
-    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
+    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -566,19 +597,25 @@ export function buildRecipesRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
-    const [recipeCount] = await db.select({ current: count() }).from(recipes).where(and(eq(recipes.householdId, householdId), eq(recipes.isArchived, false)))
     const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-    const usage = { limit: 10, current: recipeCount?.current ?? 0 }
-    if (isPremiumLimitReached(usage)) {
-      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'custom_recipes_limit', usage })
-      if (gate) return c.json(gate as never, 403)
-    }
     if (body.isPublic) {
       const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'community_share' })
       if (gate) return c.json(gate as never, 403)
     }
-    const recipe = await createRecipe(db, accessToken, user.id, householdId, body)
-    return c.json(recipe, 201)
+    const attempt = await createRecipeWithinLimit(
+      db,
+      accessToken,
+      user.id,
+      householdId,
+      body,
+      entitlement.tier !== 'premium' && entitlement.gatesEnabled,
+    )
+    if (attempt.limitReached) {
+      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'custom_recipes_limit', usage: attempt.usage })
+      if (gate) return c.json(gate as never, 403)
+    }
+    if (!attempt.recipe) throw new Error('Recipe limit blocked without a premium gate response')
+    return c.json(attempt.recipe, 201)
   })
 
   app.openapi(updateRecipeRoute, async (c) => {

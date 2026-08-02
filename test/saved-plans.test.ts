@@ -3,7 +3,7 @@ import { eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { savedPlans } from '../src/schema.js'
-import { listSavedPlans, removeSavedPlan, renameSavedPlan, upsertSavedPlan } from '../src/saved-plans.js'
+import { listSavedPlans, removeSavedPlan, renameSavedPlan, upsertSavedPlan, upsertSavedPlanWithinLimit } from '../src/saved-plans.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -16,6 +16,7 @@ describeWithDb('Saved plans + RLS', () => {
   const userB = '22222222-2222-2222-2222-222222222222'
   const planA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
   const planB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+  const planC = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
 
   beforeEach(async () => {
     await db.execute(sql`delete from "saved_plans"`)
@@ -55,6 +56,31 @@ describeWithDb('Saved plans + RLS', () => {
 
     await removeSavedPlan(db, fakeAccessToken(userA), userA, planA)
     await expect(listSavedPlans(db, fakeAccessToken(userA), userA)).resolves.toHaveLength(1)
+  })
+
+  it('atomically allows only one concurrent plan at the free limit boundary', async () => {
+    await upsertSavedPlan(db, fakeAccessToken(userA), userA, {
+      id: planA,
+      createdAt: '2026-06-01T10:00:00.000Z',
+      label: 'Existing plan',
+      state: '{}',
+    })
+    const concurrentDb = createDb(testDatabaseUrl!)
+    const input = (id: string, label: string) => ({
+      id,
+      createdAt: '2026-06-01T11:00:00.000Z',
+      label,
+      state: '{}',
+    })
+
+    const attempts = await Promise.all([
+      upsertSavedPlanWithinLimit(db, fakeAccessToken(userA), userA, input(planB, 'Concurrent B'), true),
+      upsertSavedPlanWithinLimit(concurrentDb, fakeAccessToken(userA), userA, input(planC, 'Concurrent C'), true),
+    ])
+
+    expect(attempts.filter((attempt) => attempt.plan !== null)).toHaveLength(1)
+    expect(attempts.filter((attempt) => attempt.limitReached)).toHaveLength(1)
+    await expect(listSavedPlans(db, fakeAccessToken(userA), userA)).resolves.toHaveLength(2)
   })
 
   it('does not expose another user saved plans through RLS', async () => {

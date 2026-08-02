@@ -267,6 +267,7 @@ const recommendRoute = createRoute({
     400: { description: 'Invalid payload' },
     401: { description: 'Missing or invalid session' },
     403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
+    404: { description: 'Household not found or caller is not a member' },
     422: { description: 'AI response did not match schema' },
     429: { description: 'Rate limited' },
     500: { description: 'AI provider unavailable' },

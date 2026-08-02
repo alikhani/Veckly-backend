@@ -43,6 +43,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-08-02 — Freemium shadow-gate hardening
+
+Den andra code-review-vändans fem fynd är stängda. AI-veckobudgeten använder nu serverns UTC-kalendervecka och kan inte flyttas med klientens `X-Veckly-Today`; device-datumet används fortsatt enbart för produktbeteenden som att lämna passerade dagar tomma. Generate och regenerate rapporterar varsin tydlig `limit: 1, current: 1`-budget. Misslyckad reservation-release loggas best-effort och kan inte längre ersätta ett korrekt 200/404/422-svar med 500.
+
+Receptgränsen (10) och gränsen för sparade planer (2) är serialiserade per hushåll respektive användare med PostgreSQL transaction-scoped advisory locks. Därmed kan samtidiga requests från olika serverless-instanser inte passera en aktiv gate tillsammans. Samtidighetstester använder separata databasanslutningar och verifierar exakt 10 respektive 2 persistade poster. Alla nya medlemskontrollers 404-svar finns i OpenAPI och Swift-klienten mappar dem till `APIError.notFound`.
+
+`PREMIUM_GATES_ENABLED=false` är fortsatt default: betaanvändare blockeras inte. Verifierat lokalt med backend build, 387 tester i 25 filer, regenererad OpenAPI/Swift-klient, iOS build och berörda iOS-tester.
+
 ### 2026-08-01 — Freemium Fas 2A: entitlement read API och avstängda shadow-gates
 
 Två autentiserade read-endpoints är nu del av det genererade OpenAPI-kontraktet: `GET /users/me/entitlement` och `GET /households/{householdId}/entitlement`. Household-varianten kör `requireAuth → assertMembership → resolveEntitlementForHousehold`, vilket håller hushållssponsring strikt scoped även om samma användare tillhör flera hushåll. Svaret är medvetet litet: `tier`, `householdId`, `source` och `gatesEnabled`; inga provideridentifierare, kvitton, metadata eller periodslut lämnar servern.

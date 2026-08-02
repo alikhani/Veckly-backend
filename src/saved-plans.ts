@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, count, desc, eq, sql } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { withRls } from './rls.js'
 import { savedPlans } from './schema.js'
@@ -49,29 +49,53 @@ export async function upsertSavedPlan(
   input: z.infer<typeof UpsertSavedPlanSchema>,
 ) {
   return withRls(db, accessToken, async (tx) => {
-    const [row] = await tx
-      .insert(savedPlans)
-      .values({
-        id: input.id,
+    return persistSavedPlan(tx, userId, input)
+  })
+}
+
+async function persistSavedPlan(db: Db, userId: string, input: z.infer<typeof UpsertSavedPlanSchema>) {
+  const [row] = await db
+    .insert(savedPlans)
+    .values({
+      id: input.id,
+      userId,
+      createdAt: new Date(input.createdAt),
+      label: input.label,
+      stateJson: input.state,
+    })
+    .onConflictDoUpdate({
+      target: savedPlans.id,
+      set: {
         userId,
         createdAt: new Date(input.createdAt),
         label: input.label,
         stateJson: input.state,
-      })
-      .onConflictDoUpdate({
-        target: savedPlans.id,
-        set: {
-          userId,
-          createdAt: new Date(input.createdAt),
-          label: input.label,
-          stateJson: input.state,
-        },
-        where: eq(savedPlans.userId, userId),
-      })
-      .returning()
+      },
+      where: eq(savedPlans.userId, userId),
+    })
+    .returning()
 
-    if (!row) return null
-    return toSavedPlanResponse(row)
+  return row ? toSavedPlanResponse(row) : null
+}
+
+export async function upsertSavedPlanWithinLimit(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  input: z.infer<typeof UpsertSavedPlanSchema>,
+  enforceLimit: boolean,
+) {
+  return withRls(db, accessToken, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`saved-plans:${userId}`}, 0))`)
+    const [existing] = await tx.select({ id: savedPlans.id }).from(savedPlans).where(and(
+      eq(savedPlans.id, input.id),
+      eq(savedPlans.userId, userId),
+    )).limit(1)
+    const [planCount] = await tx.select({ current: count() }).from(savedPlans).where(eq(savedPlans.userId, userId))
+    const usage = { limit: 2, current: planCount?.current ?? 0 }
+    const limitReached = !existing && isPremiumLimitReached(usage)
+    if (limitReached && enforceLimit) return { plan: null, usage, limitReached }
+    return { plan: await persistSavedPlan(tx, userId, input), usage, limitReached }
   })
 }
 
@@ -165,18 +189,20 @@ export function buildSavedPlansRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const body = c.req.valid('json')
-    // Updating an existing template stays free; only a third distinct plan is
-    // a future Premium boundary. This remains observational during beta.
-    const existing = await listSavedPlans(db, accessToken, user.id)
-    const usage = { limit: 2, current: existing.length }
-    if (!existing.some((plan) => plan.id === body.id) && isPremiumLimitReached(usage)) {
-      const entitlement = await resolveEntitlementForUser(db, user.id)
-      const gate = await observePremiumGate(db, entitlement, { householdId: null, userId: user.id, reason: 'saved_plans_limit', usage })
+    const entitlement = await resolveEntitlementForUser(db, user.id)
+    const attempt = await upsertSavedPlanWithinLimit(
+      db,
+      accessToken,
+      user.id,
+      body,
+      entitlement.tier !== 'premium' && entitlement.gatesEnabled,
+    )
+    if (attempt.limitReached) {
+      const gate = await observePremiumGate(db, entitlement, { householdId: null, userId: user.id, reason: 'saved_plans_limit', usage: attempt.usage })
       if (gate) return c.json(gate as never, 403)
     }
-    const plan = await upsertSavedPlan(db, accessToken, user.id, body)
-    if (!plan) return c.json({ error: 'CONFLICT' }, 409)
-    return c.json(plan, 200)
+    if (!attempt.plan) return c.json({ error: 'CONFLICT' }, 409)
+    return c.json(attempt.plan, 200)
   })
 
   app.openapi(renameSavedPlanRoute, async (c) => {

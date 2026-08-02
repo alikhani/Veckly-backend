@@ -229,8 +229,9 @@ const createInviteRoute = createRoute({
   },
   responses: {
     201: { description: 'The created invite, including its shareable token', content: { 'application/json': { schema: InviteSchema } } },
-    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
+    403: { description: 'Premium is required', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
+    404: { description: 'Household not found or caller is not a member' },
   },
 })
 

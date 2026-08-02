@@ -31,6 +31,10 @@ export function buildApp(db: Db) {
     allowHeaders: ['Content-Type', 'Authorization', 'Accept-Language', 'X-Veckly-Today'],
   }))
   app.use(secureHeaders())
+  app.use('*', async (c, next) => {
+    await next()
+    if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store')
+  })
 
   // Internal server-to-server routes (MealPlanner strangle path)
   app.route('/', buildInternalHouseholdsRoutes(db))

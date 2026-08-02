@@ -800,6 +800,40 @@
           "createdAt"
         ]
       },
+      "PremiumRequiredResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "PREMIUM_REQUIRED"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "household_invite",
+              "week_generation_limit",
+              "recipe_ai_fill_in",
+              "ai_recommendations",
+              "custom_recipes_limit",
+              "week_history",
+              "saved_plans_limit",
+              "community_share"
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "current": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "CreateHouseholdInviteRequest": {
         "type": "object",
         "properties": {
@@ -2950,9 +2984,13 @@
           "recipe"
         ]
       },
-      "RecipeFillInRequest": {
+      "PublicRecipeFillInRequest": {
         "type": "object",
         "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "title": {
             "type": "string",
             "minLength": 1,
@@ -3007,6 +3045,7 @@
           }
         },
         "required": [
+          "householdId",
           "title"
         ]
       },
@@ -3188,20 +3227,29 @@
           "error"
         ]
       },
-      "RecipeImportRequest": {
+      "PublicRecipeImportRequest": {
         "type": "object",
         "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "url": {
             "type": "string"
           }
         },
         "required": [
+          "householdId",
           "url"
         ]
       },
-      "RecipeTextImportRequest": {
+      "PublicRecipeTextImportRequest": {
         "type": "object",
         "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "text": {
             "type": "string",
             "maxLength": 50000
@@ -3211,6 +3259,7 @@
           }
         },
         "required": [
+          "householdId",
           "text"
         ]
       },
@@ -3364,6 +3413,7 @@
           }
         },
         "required": [
+          "householdId",
           "householdProfile",
           "feedbackSummary",
           "candidateMeals"
@@ -3807,6 +3857,56 @@
         },
         "required": [
           "eventName"
+        ]
+      },
+      "Entitlement": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "premium"
+            ]
+          },
+          "householdId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "subscription",
+              "manual",
+              "beta"
+            ]
+          },
+          "gatesEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tier",
+          "householdId",
+          "source",
+          "gatesEnabled"
+        ]
+      },
+      "EntitlementResponse": {
+        "type": "object",
+        "properties": {
+          "entitlement": {
+            "$ref": "#/components/schemas/Entitlement"
+          }
+        },
+        "required": [
+          "entitlement"
         ]
       }
     },
@@ -4680,6 +4780,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       },
@@ -4899,6 +5012,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium generation quota reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           },
           "422": {
             "description": "No recipes available to plan with",
@@ -5123,6 +5249,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required for older history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }
@@ -5663,6 +5802,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }
@@ -5765,6 +5917,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Recipe not found or not in this household"
@@ -5964,7 +6126,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RecipeFillInRequest"
+                "$ref": "#/components/schemas/PublicRecipeFillInRequest"
               }
             }
           }
@@ -5985,6 +6147,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           },
           "422": {
             "description": "AI response did not match the recipe schema"
@@ -6011,7 +6186,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RecipeImportRequest"
+                "$ref": "#/components/schemas/PublicRecipeImportRequest"
               }
             }
           }
@@ -6039,6 +6214,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           },
           "422": {
             "description": "Could not parse recipe from fetched page",
@@ -6096,7 +6284,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RecipeTextImportRequest"
+                "$ref": "#/components/schemas/PublicRecipeTextImportRequest"
               }
             }
           }
@@ -6124,6 +6312,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           },
           "422": {
             "description": "Could not parse recipe from pasted text",
@@ -6192,6 +6393,19 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           },
           "422": {
             "description": "AI response did not match schema"
@@ -6344,6 +6558,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "Premium is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumRequiredResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -6920,6 +7144,72 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProductEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/users/me/entitlement": {
+      "get": {
+        "operationId": "getMyEntitlement",
+        "summary": "Resolve the authenticated user’s current household entitlement",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe entitlement state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/entitlement": {
+      "get": {
+        "operationId": "getHouseholdEntitlement",
+        "summary": "Resolve entitlement for one active household membership",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe household entitlement state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
                 }
               }
             }

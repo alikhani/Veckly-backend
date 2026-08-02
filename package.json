@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "node --env-file=.env --import tsx/esm --watch src/index.ts",
     "dev:serve": "node --env-file=.env --import tsx/esm src/index.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run openapi:write:backend && tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:local": "DATABASE_URL=postgres://postgres:postgres@localhost:54333/postgres TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54333/postgres_test SUPABASE_URL=http://localhost:54321 SUPABASE_ANON_KEY=test vitest run",
     "openapi:write": "node --import tsx/esm scripts/write-openapi.ts ../Veckly-ios/OpenAPI/veckly-openapi.json",
+    "openapi:write:backend": "node --import tsx/esm scripts/write-openapi.ts openapi.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },

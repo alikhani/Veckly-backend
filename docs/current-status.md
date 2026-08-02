@@ -43,6 +43,12 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-08-02 — Freemium Fas 2 deployed in shadow mode
+
+Migrations `0035`–`0038` are applied in production and verified with RLS enabled on all five billing, entitlement, AI-usage, and gate-observation tables. The tables remain server-owned with no client policies, and `PREMIUM_GATES_ENABLED` is absent in production so the default `false` keeps every beta feature available.
+
+Production deployment `dpl_CVC6KKDTJE1VdEnWw88FW9BXmh5v` is live at `https://veckly-backend.vercel.app`. Smoke tests verified `/health` 200, unauthenticated entitlement 401, both entitlement paths in OpenAPI, and generation responses 200/401/403/404/422. Runtime API responses now default to `Cache-Control: no-store`. The committed backend OpenAPI artifact had drifted behind the runtime routes, so every build now regenerates `openapi.json` before TypeScript compilation; this prevents Vercel's static-file layer from serving an old client contract after future route changes. The deployment had no error-level runtime logs after verification.
+
 ### 2026-08-02 — Freemium shadow-gate hardening
 
 Den andra code-review-vändans fem fynd är stängda. AI-veckobudgeten använder nu serverns UTC-kalendervecka och kan inte flyttas med klientens `X-Veckly-Today`; device-datumet används fortsatt enbart för produktbeteenden som att lämna passerade dagar tomma. Generate och regenerate rapporterar varsin tydlig `limit: 1, current: 1`-budget. Misslyckad reservation-release loggas best-effort och kan inte längre ersätta ett korrekt 200/404/422-svar med 500.

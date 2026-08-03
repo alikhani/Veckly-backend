@@ -159,6 +159,6 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, delete on "household_prep_batches" to authenticated;
     grant select, insert, delete on "household_prep_batch_assignments" to authenticated;
     grant select, insert, update on "user_profiles" to authenticated;
-    grant select, insert, update on "household_recipe_recommendations" to authenticated;
+    grant select, insert, update, delete on "household_recipe_recommendations" to authenticated;
   `))
 }

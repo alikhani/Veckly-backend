@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdMemberships, householdProfiles } from './schema.js'
+import { householdMemberships, householdProfiles, householdRecipeRecommendations } from './schema.js'
 import type { Db } from './db.js'
 
 const PrioritySchema = z.enum(['quick', 'budget', 'child-friendly', 'meal-prep', 'varied'])
@@ -76,6 +76,9 @@ export async function upsertHouseholdProfile(
 ) {
   return withRls(db, accessToken, async (tx) => {
     const now = new Date()
+    const avoidIngredients = input.avoidIngredients
+      .map((item) => item.trim())
+      .filter((item) => item !== '')
     const [profile] = await tx
       .insert(householdProfiles)
       .values({
@@ -83,7 +86,7 @@ export async function upsertHouseholdProfile(
         adults: input.adults,
         children: input.children,
         priorities: input.priorities,
-        avoidIngredients: input.avoidIngredients,
+        avoidIngredients,
         selectedDays: input.selectedDays,
         updatedBy: userId,
         updatedAt: now,
@@ -94,7 +97,7 @@ export async function upsertHouseholdProfile(
           adults: input.adults,
           children: input.children,
           priorities: input.priorities,
-          avoidIngredients: input.avoidIngredients,
+          avoidIngredients,
           selectedDays: input.selectedDays,
           updatedBy: userId,
           updatedAt: now,
@@ -102,6 +105,12 @@ export async function upsertHouseholdProfile(
       })
       .returning()
     if (!profile) throw new Error('Upsert did not return the persisted household profile')
+    // Recommendations encode the profile in both their ranking and reason.
+    // Invalidate on every profile write so a changed avoid-list, household
+    // size or priority cannot leave a week-old answer active.
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
     return toProfileResponse(profile)
   })
 }

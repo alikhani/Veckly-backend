@@ -9,6 +9,7 @@ import { withRls } from './rls.js'
 import { householdRecipeRecommendations } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
+import { recipeMatchesAvoided } from './week-plan.js'
 import type { Db } from './db.js'
 
 const RecommendationSchema = z.object({
@@ -35,7 +36,12 @@ const RecommendBodyFields = {
     avoidIngredients: z.array(z.string()),
   }),
   feedbackSummary: z.array(FeedbackItemSchema),
-  candidateMeals: z.array(z.object({ id: z.string(), title: z.string() })).min(1),
+  candidateMeals: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    tags: z.array(z.string()).optional(),
+    ingredients: z.array(z.string()).optional(),
+  })).min(1),
   recentMealIds: z.object({
     lastWeek: z.array(z.string()),
     twoWeeksAgo: z.array(z.string()),
@@ -190,6 +196,29 @@ function parseAiJson(raw: string) {
   return JSON.parse(cleaned) as unknown
 }
 
+function allowedRecommendationIds(body: TRecommendBody) {
+  const allowed = new Set<string>()
+  for (const candidate of body.candidateMeals) {
+    // Older/internal clients only send id + title. Keep those compatible:
+    // title-only substring matching would reintroduce false positives such as
+    // avoid="ost" excluding "Rostad kyckling". Native clients send both
+    // arrays, which lets us apply the same fail-safe matcher as generation.
+    if (candidate.tags === undefined || candidate.ingredients === undefined) {
+      allowed.add(candidate.id)
+      continue
+    }
+    const recipe = {
+      title: candidate.title,
+      tags: candidate.tags,
+      ingredients: candidate.ingredients.map((item) => ({ item })),
+    }
+    if (!recipeMatchesAvoided(recipe, body.householdProfile.avoidIngredients)) {
+      allowed.add(candidate.id)
+    }
+  }
+  return allowed
+}
+
 async function generateStructuredJSON(systemPrompt: string, userMessage: string) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
@@ -214,7 +243,7 @@ async function handleRecommend(db: Db, accessToken: string, userId: string, body
   if (cacheableHouseholdId) {
     const cached = await getCachedRecommendations(db, accessToken, cacheableHouseholdId, language)
     if (cached) {
-      const validIds = new Set(body.candidateMeals.map((m) => m.id))
+      const validIds = allowedRecommendationIds(body)
       return { body: { recommendations: cached.filter((r) => validIds.has(r.mealId)) }, status: 200 as const }
     }
   }
@@ -243,7 +272,7 @@ async function handleRecommend(db: Db, accessToken: string, userId: string, body
     return { body: { error: 'INVALID_AI_RESPONSE' }, status: 422 as const }
   }
 
-  const validIds = new Set(body.candidateMeals.map((m) => m.id))
+  const validIds = allowedRecommendationIds(body)
   const recommendations = validated.data.recommendations.filter((r) => validIds.has(r.mealId))
 
   if (cacheableHouseholdId) {

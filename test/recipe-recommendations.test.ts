@@ -125,6 +125,50 @@ describeWithDb('Recipe recommendation routes', () => {
     expect(body.recommendations).toEqual([{ mealId: 'tacos', reason: 'Good fit.' }])
   })
 
+  it('filters AI recommendations that conflict with avoid ingredients when recipe metadata is supplied', async () => {
+    setRecipeRecommendationGeneratorForTests(async () => JSON.stringify({
+      recommendations: [
+        { mealId: 'tacos', reason: 'Good fit.' },
+        { mealId: 'pasta', reason: 'AI ignored the avoid preference.' },
+      ],
+    }))
+    const body = {
+      ...validBody,
+      householdProfile: { ...validBody.householdProfile, avoidIngredients: ['peanut'] },
+      candidateMeals: [
+        { id: 'tacos', title: 'Tacos', tags: ['weekday'], ingredients: ['tortilla', 'beans'] },
+        { id: 'pasta', title: 'Pasta', tags: [], ingredients: ['pasta', 'peanut butter'] },
+      ],
+    }
+
+    const response = await request(body, 'user-avoid-filter')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [{ mealId: 'tacos', reason: 'Good fit.' }],
+    })
+  })
+
+  it('does not reintroduce title substring false positives when recipe metadata is supplied', async () => {
+    setRecipeRecommendationGeneratorForTests(async () => JSON.stringify({
+      recommendations: [{ mealId: 'roasted', reason: 'Good fit.' }],
+    }))
+    const body = {
+      ...validBody,
+      householdProfile: { ...validBody.householdProfile, avoidIngredients: ['ost'] },
+      candidateMeals: [
+        { id: 'roasted', title: 'Rostad kyckling', tags: [], ingredients: ['kyckling', 'potatis'] },
+      ],
+    }
+
+    const response = await request(body, 'user-avoid-title')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [{ mealId: 'roasted', reason: 'Good fit.' }],
+    })
+  })
+
   it('includes household, feedback, and prep context in the prompt', async () => {
     let userMessage = ''
     setRecipeRecommendationGeneratorForTests(async (_, message) => {

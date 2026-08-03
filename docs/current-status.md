@@ -43,6 +43,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-08-04 — Recommendation avoid hardening and profile-aware cache invalidation
+
+The native recommendation request now includes each candidate recipe's ingredient names and tags. Backend recommendation output—both fresh AI results and cached results—is deterministically post-filtered through the same `recipeMatchesAvoided` policy used by week generation. Claude can therefore no longer return a native recommendation that conflicts with an explicit avoid term merely because it ignored the prompt. The existing compound-word protection remains intact: a fully itemized “Rostad kyckling” is not excluded by `avoid="ost"`.
+
+Household profile writes now trim avoid terms, discard blank entries and invalidate all cached recommendation languages for that household in the same RLS transaction. Changes to household size, priorities or avoids can no longer leave week-old recommendation reasons active. The request extension is additive and older internal callers that only send id/title remain compatible; they do not opt into title-only matching because that would reintroduce known false positives.
+
+OpenAPI and the generated Swift client were updated. Verification: backend build, the full backend suite (402 tests in 27 files) and 8 focused iOS tests pass. This change is local only and has not been deployed yet.
+
 ### 2026-08-03 — Freemium Fas 3B prepared in sandbox mode
 
 App Store-kedjan är nu byggd men inte driftsatt. En autentiserad household-route tar emot StoreKit-transaktionens JWS, verifierar den med Apples officiella serverbibliotek och kräver sandboxmiljö, Vecklys bundle-/produkt-ID samt ett `appAccountToken` som matchar Supabase-användaren. Verifierade köp normaliseras idempotent till befintliga provider-neutrala subscription- och household-entitlement-tabeller. Migration `0039` låser att en subscription endast kan sponsra ett hushåll.

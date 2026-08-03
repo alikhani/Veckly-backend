@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { getHouseholdProfile, upsertHouseholdProfile } from '../src/household-profile.js'
-import { householdMemberships, householdProfiles, households } from '../src/schema.js'
+import { householdMemberships, householdProfiles, householdRecipeRecommendations, households } from '../src/schema.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -32,6 +32,7 @@ describeWithDb('Household profile', () => {
   }
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "household_profiles"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -103,6 +104,26 @@ describeWithDb('Household profile', () => {
 
     const rows = await db.select().from(householdProfiles).where(eq(householdProfiles.householdId, householdAId))
     expect(rows).toHaveLength(1)
+  })
+
+  it('normalizes avoid terms and invalidates cached recommendations when the profile changes', async () => {
+    await db.insert(householdRecipeRecommendations).values({
+      householdId: householdAId,
+      language: 'sv',
+      recommendations: [{ mealId: 'cached', reason: 'Stale reason' }],
+    })
+
+    const saved = await upsertHouseholdProfile(db, fakeAccessToken(userA), userA, householdAId, {
+      ...profile,
+      avoidIngredients: [' fisk ', '', '   '],
+    })
+
+    expect(saved.avoidIngredients).toEqual(['fisk'])
+    const cached = await db
+      .select()
+      .from(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdAId))
+    expect(cached).toHaveLength(0)
   })
 
   it('does not expose another household profile across RLS', async () => {

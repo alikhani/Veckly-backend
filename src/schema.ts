@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex, index, integer, date, jsonb, boolean, primaryKey } from 'drizzle-orm/pg-core'
 
 export const householdMembershipRole = pgEnum('household_membership_role', ['owner', 'member'])
@@ -378,6 +379,9 @@ export const householdEntitlements = pgTable('household_entitlements', {
 }, (table) => [
   index('household_entitlements_household_validity_idx').on(table.householdId, table.endsAt),
   index('household_entitlements_subscription_idx').on(table.subscriptionId),
+  uniqueIndex('household_entitlements_subscription_unique_idx')
+    .on(table.subscriptionId)
+    .where(sql`${table.subscriptionId} is not null`),
 ])
 
 export const householdAiWeeklyUsage = pgTable('household_ai_weekly_usage', {

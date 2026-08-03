@@ -3908,6 +3908,97 @@
         "required": [
           "entitlement"
         ]
+      },
+      "AppStoreTransactionSubmitResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "sandbox"
+            ]
+          },
+          "entitlement": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "free",
+                  "premium"
+                ]
+              },
+              "householdId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "source": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "subscription",
+                  "manual",
+                  "beta"
+                ]
+              },
+              "gatesEnabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tier",
+              "householdId",
+              "source",
+              "gatesEnabled"
+            ]
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicate",
+          "environment",
+          "entitlement"
+        ]
+      },
+      "AppStoreTransactionSubmit": {
+        "type": "object",
+        "properties": {
+          "signedTransaction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          }
+        },
+        "required": [
+          "signedTransaction"
+        ]
+      },
+      "AppStoreServerNotification": {
+        "type": "object",
+        "properties": {
+          "signedPayload": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500000
+          }
+        },
+        "required": [
+          "signedPayload"
+        ]
       }
     },
     "parameters": {}
@@ -7219,6 +7310,182 @@
           },
           "404": {
             "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/billing/app-store/transactions": {
+      "post": {
+        "operationId": "submitAppStoreTransaction",
+        "summary": "Verify and attach an App Store sandbox transaction to a household",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppStoreTransactionSubmit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified sandbox transaction accepted idempotently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppStoreTransactionSubmitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or unverified App Store transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          },
+          "409": {
+            "description": "Transaction ownership or household sponsorship conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "App Store sandbox verification is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/billing/app-store/notifications": {
+      "post": {
+        "operationId": "receiveAppStoreServerNotification",
+        "summary": "Receive a signed App Store Server Notification V2 in sandbox mode",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppStoreServerNotification"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified notification accepted idempotently"
+          },
+          "400": {
+            "description": "Malformed or unverified App Store notification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "App Store sandbox verification is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
           }
         }
       }

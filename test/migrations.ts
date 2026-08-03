@@ -34,6 +34,11 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
     select column_name as exists from information_schema.columns
     where table_name = 'household_ai_weekly_usage' and column_name = 'period_start_date'
   `)
+  const [subscriptionSponsorshipMarker] = await db.execute<{ exists: string | null }>(sql`
+    select indexname as exists from pg_indexes
+    where tablename = 'household_entitlements'
+      and indexname = 'household_entitlements_subscription_unique_idx'
+  `)
   const [householdRecipeRecommendationsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_recipe_recommendations') as exists`)
   const [householdsDeleteRlsMarker] = await db.execute<{ exists: string | null }>(sql`
     select policyname as exists from pg_policies
@@ -70,6 +75,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasHouseholdAiUsageMigration = Boolean(householdAiUsageMarker?.exists)
   const alreadyHasPremiumGateObservationsMigration = Boolean(premiumGateObservationsMarker?.exists)
   const alreadyHasGateHardeningMigration = Boolean(gateHardeningMarker?.exists)
+  const alreadyHasSubscriptionSponsorshipMigration = Boolean(subscriptionSponsorshipMarker?.exists)
   const alreadyHasHouseholdRecipeRecommendationsMigration = Boolean(householdRecipeRecommendationsMarker?.exists)
   const alreadyHasHouseholdsDeleteRlsMigration = Boolean(householdsDeleteRlsMarker?.exists)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
@@ -89,6 +95,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasSubscriptionSponsorshipMigration && file < '0040_') continue
     if (alreadyHasGateHardeningMigration && file < '0039_') continue
     if (alreadyHasPremiumGateObservationsMigration && file < '0038_') continue
     if (alreadyHasHouseholdAiUsageMigration && file < '0037_') continue

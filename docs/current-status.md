@@ -43,6 +43,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-08-03 — Freemium Fas 3B prepared in sandbox mode
+
+App Store-kedjan är nu byggd men inte driftsatt. En autentiserad household-route tar emot StoreKit-transaktionens JWS, verifierar den med Apples officiella serverbibliotek och kräver sandboxmiljö, Vecklys bundle-/produkt-ID samt ett `appAccountToken` som matchar Supabase-användaren. Verifierade köp normaliseras idempotent till befintliga provider-neutrala subscription- och household-entitlement-tabeller. Migration `0039` låser att en subscription endast kan sponsra ett hushåll.
+
+En publik, signerad `App Store Server Notifications V2`-route hanterar sandboxnotiser, verifierar även inbäddad transaction/renewal JWS, deduplicerar `notificationUUID` och normaliserar active, expired, billing retry, grace och revoked. Reconciliation-grunden använder App Store Server API:s subscription-status och samma persistensväg. Produktionsmiljö accepteras uttryckligen inte.
+
+iOS skickar nu Apples `jwsRepresentation` till backend innan en verifierad transaktion avslutas; misslyckad leverans lämnas oavslutad för StoreKit-retry. OpenAPI och Swift-klienten är regenererade. Ingen paywall eller köpentry point har lagts till, App Store Connect-produkterna är inte skapade/publicerade, ingen migration eller deploy har gjorts och `PREMIUM_GATES_ENABLED=false` kvarstår. Verifierat lokalt med backend build, 399 tester i 27 filer, iOS build och StoreKit-sviten (4 godkända, 1 avstängd för den dokumenterade Xcode 26.6-regressionen). Setup och senare sandbox-QA finns i `docs/runbooks/app-store-sandbox.md`.
+
 ### 2026-08-02 — Freemium Fas 2 deployed in shadow mode
 
 Migrations `0035`–`0038` are applied in production and verified with RLS enabled on all five billing, entitlement, AI-usage, and gate-observation tables. The tables remain server-owned with no client policies, and `PREMIUM_GATES_ENABLED` is absent in production so the default `false` keeps every beta feature available.

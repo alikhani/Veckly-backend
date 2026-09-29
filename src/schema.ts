@@ -224,6 +224,40 @@ export const householdMealSignals = pgTable('household_meal_signals', {
   index('household_meal_signals_household_updated_idx').on(table.householdId, table.updatedAt),
 ])
 
+export const mealOutcomeStatus = pgEnum('meal_outcome_status', ['cooked', 'changed_plan', 'skipped'])
+export const mealPortionOutcome = pgEnum('meal_portion_outcome', ['too_little', 'right_amount', 'too_much'])
+export const mealOutcomeReason = pgEnum('meal_outcome_reason', [
+  'easy_weeknight',
+  'family_approved',
+  'good_leftovers',
+  'too_much_effort',
+  'family_pushback',
+  'poor_leftovers',
+])
+
+// What the household actually did on a planned dinner date. One shared row
+// per date is deliberately editable by every active household member. Recipe
+// ids are snapshots rather than foreign keys so the historical outcome
+// survives a recipe being archived or deleted later.
+export const householdMealOutcomes = pgTable('household_meal_outcomes', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  date: date('date', { mode: 'string' }).notNull(),
+  plannedRecipeId: uuid('planned_recipe_id').notNull(),
+  status: mealOutcomeStatus('status').notNull(),
+  portionOutcome: mealPortionOutcome('portion_outcome'),
+  reason: mealOutcomeReason('reason'),
+  actualRecipeId: uuid('actual_recipe_id'),
+  actualMealLabel: text('actual_meal_label'),
+  updatedBy: uuid('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.weekStartDate, table.date], name: 'household_meal_outcomes_pk' }),
+  index('household_meal_outcomes_household_week_idx').on(table.householdId, table.weekStartDate),
+  index('household_meal_outcomes_planned_recipe_idx').on(table.plannedRecipeId),
+])
+
 // Server-side cache for `/recipes/recommend` (see recipe-recommendations.ts)
 // — a household's taste profile and feedback history don't meaningfully
 // shift week to week, so recomputing this AI call on every app launch

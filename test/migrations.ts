@@ -39,6 +39,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
     where tablename = 'household_entitlements'
       and indexname = 'household_entitlements_subscription_unique_idx'
   `)
+  const [mealOutcomesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_meal_outcomes') as exists`)
   const [householdRecipeRecommendationsMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_recipe_recommendations') as exists`)
   const [householdsDeleteRlsMarker] = await db.execute<{ exists: string | null }>(sql`
     select policyname as exists from pg_policies
@@ -76,6 +77,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasPremiumGateObservationsMigration = Boolean(premiumGateObservationsMarker?.exists)
   const alreadyHasGateHardeningMigration = Boolean(gateHardeningMarker?.exists)
   const alreadyHasSubscriptionSponsorshipMigration = Boolean(subscriptionSponsorshipMarker?.exists)
+  const alreadyHasMealOutcomesMigration = Boolean(mealOutcomesMarker?.exists)
   const alreadyHasHouseholdRecipeRecommendationsMigration = Boolean(householdRecipeRecommendationsMarker?.exists)
   const alreadyHasHouseholdsDeleteRlsMigration = Boolean(householdsDeleteRlsMarker?.exists)
   const alreadyHasMealTypeCheckMigration = Boolean(mealTypeCheckMarker?.exists)
@@ -95,6 +97,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasMealOutcomesMigration && file < '0041_') continue
     if (alreadyHasSubscriptionSponsorshipMigration && file < '0040_') continue
     if (alreadyHasGateHardeningMigration && file < '0039_') continue
     if (alreadyHasPremiumGateObservationsMigration && file < '0038_') continue
@@ -151,6 +154,7 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, delete on "user_saved_recipes" to authenticated;
     grant select, insert, delete on "household_saved_recipes" to authenticated;
     grant select, insert, update, delete on "household_meal_signals" to authenticated;
+    grant select, insert, update on "household_meal_outcomes" to authenticated;
     grant select, insert on "product_events" to authenticated;
     grant select, insert, update, delete on "meal_feedback" to authenticated;
     grant select, insert, update, delete on "saved_plans" to authenticated;

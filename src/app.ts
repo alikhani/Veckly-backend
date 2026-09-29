@@ -4,6 +4,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { buildActiveWeekRoutes } from './active-week.js'
 import { buildFamilyMemoryRoutes } from './family-memory.js'
 import { buildHouseholdMealSignalsRoutes } from './household-meal-signals.js'
+import { buildMealOutcomesRoutes } from './meal-outcomes.js'
 import { buildHouseholdSavedRecipesRoutes } from './household-saved-recipes.js'
 import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './households.js'
 import { buildHouseholdProfileRoutes, buildInternalHouseholdProfileRoutes } from './household-profile.js'
@@ -54,6 +55,7 @@ export function buildApp(db: Db) {
   app.route('/', buildActiveWeekRoutes(db))
   app.route('/', buildFamilyMemoryRoutes(db))
   app.route('/', buildHouseholdMealSignalsRoutes(db))
+  app.route('/', buildMealOutcomesRoutes(db))
   app.route('/', buildHouseholdSavedRecipesRoutes(db))
   app.route('/', buildHouseholdsRoutes(db))
   app.route('/', buildHouseholdProfileRoutes(db))

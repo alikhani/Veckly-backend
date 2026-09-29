@@ -8,7 +8,7 @@ import {
   removeHouseholdMealSignal,
   upsertHouseholdMealSignal,
 } from '../src/household-meal-signals.js'
-import { householdMealSignals, households, householdMemberships, mealFeedback } from '../src/schema.js'
+import { householdMealSignals, householdRecipeRecommendations, households, householdMemberships, mealFeedback } from '../src/schema.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -24,6 +24,7 @@ describeWithDb('Household meal signals + RLS', () => {
   let householdBId: string
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -42,6 +43,7 @@ describeWithDb('Household meal signals + RLS', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_memberships"`)
@@ -93,6 +95,24 @@ describeWithDb('Household meal signals + RLS', () => {
       signals: {},
       items: [],
     })
+  })
+
+  it('invalidates all localized recommendation cache entries on upsert and removal', async () => {
+    const seedCache = () => db.insert(householdRecipeRecommendations).values([
+      { householdId: householdAId, language: 'en', recommendations: [] },
+      { householdId: householdAId, language: 'sv', recommendations: [] },
+      { householdId: householdBId, language: 'en', recommendations: [] },
+    ])
+    await seedCache()
+    await upsertHouseholdMealSignal(db, fakeAccessToken(userA), userA, householdAId, 'tacos', 'not_for_us')
+    expect(await db.select().from(householdRecipeRecommendations)).toHaveLength(1)
+
+    await db.delete(householdRecipeRecommendations)
+    await seedCache()
+    await removeHouseholdMealSignal(db, fakeAccessToken(userA), householdAId, 'tacos')
+    const rows = await db.select().from(householdRecipeRecommendations)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.householdId).toBe(householdBId)
   })
 
   it('does not expose another household signal through RLS', async () => {

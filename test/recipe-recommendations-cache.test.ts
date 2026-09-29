@@ -3,7 +3,14 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { setRecipeRecommendationGeneratorForTests } from '../src/recipe-recommendations.js'
-import { households, householdMemberships } from '../src/schema.js'
+import {
+  householdMealOutcomes,
+  householdMealSignals,
+  householdRecipeRecommendations,
+  households,
+  householdMemberships,
+  mealFeedback,
+} from '../src/schema.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
@@ -31,6 +38,9 @@ describeWithDb('Recipe recommendation server-side cache', () => {
   beforeEach(async () => {
     process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
     await db.execute(sql`delete from "household_recipe_recommendations"`)
+    await db.execute(sql`delete from "household_meal_outcomes"`)
+    await db.execute(sql`delete from "household_meal_signals"`)
+    await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "rate_limit_hits"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -42,6 +52,9 @@ describeWithDb('Recipe recommendation server-side cache', () => {
 
   afterAll(async () => {
     await db.execute(sql`delete from "household_recipe_recommendations"`)
+    await db.execute(sql`delete from "household_meal_outcomes"`)
+    await db.execute(sql`delete from "household_meal_signals"`)
+    await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "rate_limit_hits"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -192,5 +205,97 @@ describeWithDb('Recipe recommendation server-side cache', () => {
 
     expect(refetched).toBe(true)
     await expect(response.json()).resolves.toEqual({ recommendations: [{ mealId: 'tacos', reason: 'Refetched reason.' }] })
+  })
+
+  it('misses cache when prep, swap, or candidate metadata changes', async () => {
+    let calls = 0
+    setRecipeRecommendationGeneratorForTests(async () => aiResponse(`Call ${++calls}.`))
+    const firstBody = {
+      ...validBody,
+      householdId,
+      prepContext: { isCookDay: false },
+      swapContext: { intent: 'any' as const },
+      candidateMeals: [
+        { id: 'tacos', title: 'Tacos', tags: ['quick'], ingredients: ['beans'], prepTimeMinutes: 20 },
+        { id: 'pasta', title: 'Pasta', tags: [], ingredients: ['pasta'], prepTimeMinutes: 30 },
+      ],
+    }
+    await request(firstBody)
+
+    await db.execute(sql`delete from "rate_limit_hits"`)
+    await request({
+      ...firstBody,
+      prepContext: { isCookDay: true },
+      swapContext: { intent: 'quicker' as const, currentMealId: 'pasta' },
+      candidateMeals: firstBody.candidateMeals.map((candidate) => (
+        candidate.id === 'tacos' ? { ...candidate, prepTimeMinutes: 15 } : candidate
+      )),
+    })
+
+    expect(calls).toBe(2)
+  })
+
+  it('treats legacy bare-array cache rows as a miss', async () => {
+    await db.insert(householdRecipeRecommendations).values({
+      householdId,
+      language: 'en',
+      recommendations: [{ mealId: 'tacos', reason: 'Legacy stale reason.' }],
+    })
+    let called = false
+    setRecipeRecommendationGeneratorForTests(async () => {
+      called = true
+      return aiResponse('Fresh versioned reason.')
+    })
+
+    const response = await request({ ...validBody, householdId })
+
+    expect(called).toBe(true)
+    await expect(response.json()).resolves.toEqual({ recommendations: [{ mealId: 'tacos', reason: 'Fresh versioned reason.' }] })
+  })
+
+  it('uses fresh server feedback and confirmed outcomes in prompt and deterministic fallback', async () => {
+    const tacosId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const pastaId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    await db.insert(mealFeedback).values({ householdId, userId, mealId: tacosId, vote: 'down' })
+    await db.insert(householdMealSignals).values({
+      householdId,
+      mealId: pastaId,
+      signal: 'works_for_family',
+      updatedBy: userId,
+    })
+    await db.insert(householdMealOutcomes).values({
+      householdId,
+      weekStartDate: '2026-09-21',
+      date: '2026-09-22',
+      plannedRecipeId: pastaId,
+      status: 'cooked',
+      reason: 'family_approved',
+      updatedBy: userId,
+    })
+    let prompt = ''
+    setRecipeRecommendationGeneratorForTests(async (_, message) => {
+      prompt = message
+      throw new Error('Provider unavailable')
+    })
+
+    const response = await request({
+      ...validBody,
+      householdId,
+      referenceWeekStartDate: '2026-09-28',
+      feedbackSummary: [],
+      candidateMeals: [
+        { id: tacosId, title: 'Tacos' },
+        { id: pastaId, title: 'Pasta' },
+      ],
+    })
+
+    expect(prompt).toContain('Personally disliked: "Tacos"')
+    expect(prompt).toContain(`${pastaId}:works_for_family`)
+    expect(prompt).toContain(`${pastaId}:family_approved`)
+    expect(prompt).toContain(`Confirmed cooked last week: ${pastaId}`)
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [{ mealId: pastaId, reason: 'A meal your family already enjoys.' }],
+    })
   })
 })

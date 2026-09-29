@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdMealSignals } from './schema.js'
+import { householdMealSignals, householdRecipeRecommendations } from './schema.js'
 import type { Db } from './db.js'
 
 const HouseholdMealSignalSchema = z.enum(['works_for_family', 'not_for_us']).openapi('HouseholdMealSignal')
@@ -84,6 +84,9 @@ export async function upsertHouseholdMealSignal(
       })
       .returning()
     if (!row) throw new Error('Upsert did not return the persisted household meal signal')
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
     return toHouseholdMealSignalRecord(row)
   })
 }
@@ -93,6 +96,9 @@ export async function removeHouseholdMealSignal(db: Db, accessToken: string, hou
     await tx
       .delete(householdMealSignals)
       .where(and(eq(householdMealSignals.householdId, householdId), eq(householdMealSignals.mealId, mealId)))
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
   })
 }
 

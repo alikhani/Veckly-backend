@@ -4,7 +4,7 @@ import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { bootstrapHousehold } from './households.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { mealFeedback } from './schema.js'
+import { householdRecipeRecommendations, mealFeedback } from './schema.js'
 import type { Db } from './db.js'
 
 const MealFeedbackVoteSchema = z.enum(['up', 'down']).openapi('MealFeedbackVote')
@@ -103,6 +103,9 @@ export async function upsertMealFeedback(
       })
       .returning()
     if (!row) throw new Error('Upsert did not return the persisted meal feedback')
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
     return toMealFeedbackRecord(row)
   })
 }
@@ -112,6 +115,9 @@ export async function removeMealFeedback(db: Db, accessToken: string, userId: st
     await tx
       .delete(mealFeedback)
       .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId), eq(mealFeedback.mealId, mealId)))
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
   })
 }
 

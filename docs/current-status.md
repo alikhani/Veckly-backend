@@ -43,6 +43,12 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-09-29 — AVL-004 context-rich, fresh recommendations
+
+`POST /recipes/recommend` now accepts additive candidate metadata (prep/cook time, tags, normalized ingredients, cuisine, protein and meal weight), prep/leftovers context, swap intent and an optional reference week. For authenticated household requests, the backend refreshes private feedback, shared household signals and confirmed outcome-based recency/reasons under RLS instead of trusting a stale client snapshot. Prompts are bounded to 60 candidates, 12 tags and 16 ingredients per candidate with short normalized metadata values.
+
+The existing recommendation JSONB now stores a versioned request fingerprint covering profile, candidate metadata, prep/swap context and fresh server context; legacy array rows are cache misses. Feedback, shared-signal and outcome writes invalidate every localized household cache row. AI provider, JSON/schema and rate-limit misses return `200` with the same response shape using a localized deterministic ranking, after the same invented-id and avoid-data filtering as AI results. Structured logs record only result/fallback type, latency and candidate count, never prompts or free-text profile data.
+
 ### 2026-09-29 — AVL-003 outcome-based family memory and scoring
 
 Recency, fatigue, family cookbook statistics, recap top recipe and the week-summary satiation streak now distinguish planned meals from confirmed dinner outcomes. `cooked` attributes history to the planned recipe; `changed_plan` attributes it only to a known `actualRecipeId`; `skipped` and label-only replacements do not count as a cooked recipe.

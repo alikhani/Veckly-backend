@@ -3555,6 +3555,38 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "prepTimeMinutes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "cookTimeMinutes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "cuisine": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "proteinSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mealWeight": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -3562,7 +3594,8 @@
                 "title"
               ]
             },
-            "minItems": 1
+            "minItems": 1,
+            "maxItems": 200
           },
           "recentMealIds": {
             "type": "object",
@@ -3590,11 +3623,40 @@
             "properties": {
               "isCookDay": {
                 "type": "boolean"
+              },
+              "leftoversDesired": {
+                "type": "boolean"
               }
             },
             "required": [
               "isCookDay"
             ]
+          },
+          "swapContext": {
+            "type": "object",
+            "properties": {
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "any",
+                  "quicker",
+                  "childFriendly",
+                  "simplerShopping",
+                  "moreVariation",
+                  "sameFeel"
+                ]
+              },
+              "currentMealId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "intent"
+            ]
+          },
+          "referenceWeekStartDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           }
         },
         "required": [
@@ -6899,13 +6961,13 @@
             "description": "Household not found or caller is not a member"
           },
           "422": {
-            "description": "AI response did not match schema"
+            "description": "Reserved for request-compatible validation errors; AI validation failures use deterministic fallback"
           },
           "429": {
-            "description": "Rate limited"
+            "description": "Reserved for infrastructure throttling; the recommendation AI throttle uses deterministic fallback"
           },
           "500": {
-            "description": "AI provider unavailable"
+            "description": "Unexpected server error; AI provider failures use deterministic fallback"
           }
         }
       }

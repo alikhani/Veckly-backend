@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
-import { households, householdMemberships, mealFeedback } from '../src/schema.js'
+import { householdRecipeRecommendations, households, householdMemberships, mealFeedback } from '../src/schema.js'
 import { listMealFeedback, removeMealFeedback, upsertMealFeedback } from '../src/meal-feedback.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
@@ -18,6 +18,7 @@ describeWithDb('Meal feedback + RLS', () => {
   let householdBId: string
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -35,6 +36,7 @@ describeWithDb('Meal feedback + RLS', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -78,6 +80,24 @@ describeWithDb('Meal feedback + RLS', () => {
     )
 
     expect(rows).toHaveLength(0)
+  })
+
+  it('invalidates all localized recommendation cache entries on upsert and removal', async () => {
+    const seedCache = () => db.insert(householdRecipeRecommendations).values([
+      { householdId: householdAId, language: 'en', recommendations: [] },
+      { householdId: householdAId, language: 'sv', recommendations: [] },
+      { householdId: householdBId, language: 'en', recommendations: [] },
+    ])
+    await seedCache()
+    await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, 'tacos', { vote: 'down' })
+    expect(await db.select().from(householdRecipeRecommendations)).toHaveLength(1)
+
+    await db.delete(householdRecipeRecommendations)
+    await seedCache()
+    await removeMealFeedback(db, fakeAccessToken(userA), userA, householdAId, 'tacos')
+    const rows = await db.select().from(householdRecipeRecommendations)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.householdId).toBe(householdBId)
   })
 
   it('does not expose another member own feedback in the same household', async () => {

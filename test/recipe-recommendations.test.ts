@@ -75,12 +75,18 @@ describeWithDb('Recipe recommendation routes', () => {
     await expect(response.json()).resolves.toEqual({ error: 'INVALID_PAYLOAD' })
   })
 
-  it('rate-limits repeat calls by user', async () => {
+  it('falls back deterministically instead of calling AI twice inside the rate-limit window', async () => {
     await request(validBody, 'user-rate-limit')
     const response = await request(validBody, 'user-rate-limit')
 
-    expect(response.status).toBe(429)
-    await expect(response.json()).resolves.toEqual({ error: 'RATE_LIMITED' })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [
+        { mealId: 'tacos', reason: 'A meal your family already enjoys.' },
+        { mealId: 'pasta', reason: "Fits your preferences and this week's plan." },
+        { mealId: 'soup', reason: "Fits your preferences and this week's plan." },
+      ],
+    })
   })
 
   it('does not rate-limit different users', async () => {
@@ -90,24 +96,32 @@ describeWithDb('Recipe recommendation routes', () => {
     expect(response.status).toBe(200)
   })
 
-  it('returns 500 when generation fails', async () => {
+  it('returns deterministic recommendations when generation fails', async () => {
     setRecipeRecommendationGeneratorForTests(async () => {
       throw new Error('AI timeout')
     })
 
     const response = await request(validBody, 'user-ai-error')
 
-    expect(response.status).toBe(500)
-    await expect(response.json()).resolves.toEqual({ error: 'AI_UNAVAILABLE' })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      recommendations: [
+        { mealId: 'tacos', reason: 'A meal your family already enjoys.' },
+        { mealId: 'pasta' },
+        { mealId: 'soup' },
+      ],
+    })
   })
 
-  it('returns 422 when AI output is invalid', async () => {
+  it('returns deterministic recommendations when AI output is invalid', async () => {
     setRecipeRecommendationGeneratorForTests(async () => 'Not JSON')
 
     const response = await request(validBody, 'user-non-json')
 
-    expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual({ error: 'INVALID_AI_RESPONSE' })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      recommendations: [{ mealId: 'tacos' }, { mealId: 'pasta' }, { mealId: 'soup' }],
+    })
   })
 
   it('filters AI-invented meal IDs', async () => {
@@ -169,18 +183,95 @@ describeWithDb('Recipe recommendation routes', () => {
     })
   })
 
-  it('includes household, feedback, and prep context in the prompt', async () => {
+  it('includes household, feedback, prep, swap, recency, and candidate metadata in the prompt', async () => {
     let userMessage = ''
     setRecipeRecommendationGeneratorForTests(async (_, message) => {
       userMessage = message
       return validAiResponse
     })
 
-    await request({ ...validBody, prepContext: { isCookDay: true } }, 'user-prompt')
+    await request({
+      ...validBody,
+      recentMealIds: { lastWeek: ['soup'], twoWeeksAgo: ['pasta'] },
+      prepContext: { isCookDay: true, leftoversDesired: true },
+      swapContext: { intent: 'quicker' as const, currentMealId: 'soup' },
+      candidateMeals: [
+        {
+          id: 'tacos',
+          title: 'Tacos',
+          tags: ['quick', 'leftovers'],
+          ingredients: [' Tortilla ', 'BLACK   BEANS'],
+          prepTimeMinutes: 10,
+          cookTimeMinutes: 15,
+          cuisine: 'Mexican',
+          proteinSource: 'legumes',
+          mealWeight: 'medium',
+        },
+      ],
+    }, 'user-prompt')
 
     expect(userMessage).toContain('2 adults')
     expect(userMessage).toContain('Tacos')
     expect(userMessage).toContain('batch cook day')
+    expect(userMessage).toContain('Leftovers are wanted')
+    expect(userMessage).toContain('Swap intent: quicker')
+    expect(userMessage).toContain('Confirmed cooked last week: soup')
+    expect(userMessage).toContain('time=25m')
+    expect(userMessage).toContain('protein=legumes')
+    expect(userMessage).toContain('ingredients=tortilla,black beans')
+  })
+
+  it('keeps avoid filtering in the deterministic fallback', async () => {
+    setRecipeRecommendationGeneratorForTests(async () => { throw new Error('AI down') })
+    const response = await request({
+      ...validBody,
+      householdProfile: { ...validBody.householdProfile, avoidIngredients: ['peanut'] },
+      candidateMeals: [
+        { id: 'tacos', title: 'Tacos', tags: ['quick'], ingredients: ['beans'] },
+        { id: 'pasta', title: 'Pasta', tags: [], ingredients: ['peanut butter'] },
+      ],
+    }, 'user-fallback-avoid')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [{ mealId: 'tacos', reason: 'A meal your family already enjoys.' }],
+    })
+  })
+
+  it('falls back deterministically when every AI recommendation is filtered out', async () => {
+    setRecipeRecommendationGeneratorForTests(async () => JSON.stringify({
+      recommendations: [{ mealId: 'invented', reason: 'Not allowed.' }],
+    }))
+
+    const response = await request(validBody, 'user-filtered-empty')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      recommendations: [{ mealId: 'tacos' }, { mealId: 'pasta' }, { mealId: 'soup' }],
+    })
+  })
+
+  it('bounds candidate metadata included in the AI prompt', async () => {
+    let userMessage = ''
+    setRecipeRecommendationGeneratorForTests(async (_, message) => {
+      userMessage = message
+      return validAiResponse
+    })
+    const candidates = Array.from({ length: 61 }, (_, index) => ({
+      id: `candidate-${index + 1}`,
+      title: `Candidate ${index + 1}`,
+      tags: Array.from({ length: 13 }, (_value, tagIndex) => `tag-${tagIndex + 1}`),
+      ingredients: Array.from({ length: 17 }, (_value, ingredientIndex) => `Ingredient ${ingredientIndex + 1}`),
+    }))
+
+    await request({ ...validBody, candidateMeals: candidates }, 'user-bounded-prompt')
+
+    expect(userMessage).toContain('candidate-60 | Candidate 60')
+    expect(userMessage).not.toContain('candidate-61 | Candidate 61')
+    expect(userMessage).toContain('tag-12')
+    expect(userMessage).not.toContain('tag-13')
+    expect(userMessage).toContain('ingredient 16')
+    expect(userMessage).not.toContain('ingredient 17')
   })
 
   it('writes recommendation reasons in Swedish when the caller sends Accept-Language: sv', async () => {

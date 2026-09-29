@@ -258,12 +258,10 @@ export const householdMealOutcomes = pgTable('household_meal_outcomes', {
   index('household_meal_outcomes_planned_recipe_idx').on(table.plannedRecipeId),
 ])
 
-// Server-side cache for `/recipes/recommend` (see recipe-recommendations.ts)
-// — a household's taste profile and feedback history don't meaningfully
-// shift week to week, so recomputing this AI call on every app launch
-// doesn't buy anything beyond cost and latency. Keyed by `language` too
-// (not just `householdId`) since a cached English response wouldn't satisfy
-// a Swedish-language caller.
+// Server-side cache for `/recipes/recommend` (see recipe-recommendations.ts).
+// The JSON payload carries a cache version plus a fingerprint of candidate
+// metadata and request/server context. Language remains part of the primary
+// key because reasons are localized.
 export const householdRecipeRecommendations = pgTable('household_recipe_recommendations', {
   householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
   language: text('language').notNull(),

@@ -7,7 +7,8 @@ import { withRls } from './rls.js'
 import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
-import { householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
+import { householdMealOutcomes, householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import {
   computeCurrentStreak,
@@ -845,7 +846,8 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
     // unbounded query — see `computeCurrentStreak` in week-scoring.ts.
     const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-    const [[projection], priorWeekProjections] = await Promise.all([
+    const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
+    const [[projection], priorWeekProjections, outcomeRows] = await Promise.all([
       tx
         .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
         .from(weekPlanProjections)
@@ -854,7 +856,19 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       tx
         .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
         .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates)))
+        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates))),
+      tx
+        .select({
+          weekStartDate: householdMealOutcomes.weekStartDate,
+          plannedRecipeId: householdMealOutcomes.plannedRecipeId,
+          status: householdMealOutcomes.status,
+          actualRecipeId: householdMealOutcomes.actualRecipeId,
+        })
+        .from(householdMealOutcomes)
+        .where(and(
+          eq(householdMealOutcomes.householdId, householdId),
+          inArray(householdMealOutcomes.weekStartDate, allWeekStartDates),
+        )),
     ])
 
     const projectionState = readProjectionState(projection?.state)
@@ -862,12 +876,22 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       .map((day) => projectionState.meals[day]?.recipeRef)
       .filter((id): id is string => Boolean(id))
 
-    const priorWeeksByDate = new Map(
+    const priorPlansByDate = new Map(
       priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
     )
+    const resolvedHistory = resolveMealHistory(
+      allWeekStartDates.map((date) => ({
+        weekStartDate: date,
+        mealIds: date === weekStartDate ? recipeIds : priorPlansByDate.get(date) ?? [],
+      })),
+      outcomeRows,
+    )
+    const confirmedWeeksByDate = new Map(
+      resolvedHistory.confirmedRecords.map((record) => [record.weekStartDate, record.mealIds]),
+    )
     const weeksMostRecentFirst = [
-      recipeIds,
-      ...priorWeekStartDates.map((date) => priorWeeksByDate.get(date) ?? []),
+      confirmedWeeksByDate.get(weekStartDate) ?? [],
+      ...priorWeekStartDates.map((date) => confirmedWeeksByDate.get(date) ?? []),
     ]
 
     const recipeRows = recipeIds.length
@@ -935,7 +959,7 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
@@ -981,6 +1005,19 @@ export async function doGenerateWeekPlan(
       tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
         .from(weekPlanProjections)
         .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates)))
+    ),
+    withRls(db, accessToken, (tx) =>
+      tx.select({
+        weekStartDate: householdMealOutcomes.weekStartDate,
+        plannedRecipeId: householdMealOutcomes.plannedRecipeId,
+        status: householdMealOutcomes.status,
+        actualRecipeId: householdMealOutcomes.actualRecipeId,
+      })
+        .from(householdMealOutcomes)
+        .where(and(
+          eq(householdMealOutcomes.householdId, householdId),
+          inArray(householdMealOutcomes.weekStartDate, priorWeekStartDates),
+        ))
     ),
   ])
 
@@ -1041,10 +1078,15 @@ export async function doGenerateWeekPlan(
   const priorWeeksByDate = new Map(
     priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
   )
-  const weekHistoryRecords = priorWeekStartDates.map((date) => ({ weekStartDate: date, mealIds: priorWeeksByDate.get(date) ?? [] }))
-  const recentMealIds = extractRecentMealIds(weekHistoryRecords, weekStartDate)
-  const fatiguedMealIds = detectFatiguedMeals(weekHistoryRecords)
-  const everCookedRecipeIds = new Set(weekHistoryRecords.flatMap((record) => record.mealIds))
+  const resolvedHistory = resolveMealHistory(
+    priorWeekStartDates.map((date) => ({ weekStartDate: date, mealIds: priorWeeksByDate.get(date) ?? [] })),
+    outcomeRows,
+  )
+  const recentMealIds = extractRecentMealIds(resolvedHistory.scoringRecords, weekStartDate)
+  const fatiguedMealIds = detectFatiguedMeals(resolvedHistory.scoringRecords)
+  const confirmedFatiguedMealIds = detectConfirmedFatiguedMeals(priorWeekStartDates, resolvedHistory.confirmedRecords)
+  const everCookedRecipeIds = recipeIdsFromRecords(resolvedHistory.confirmedRecords)
+  const legacyPlannedRecipeIds = recipeIdsFromRecords(resolvedHistory.legacyPlannedRecords)
 
   // Only meals staying put (not in `daysToFill`) should inform exclusion/
   // variety scoring — on a regenerate, a day's current meal is about to be
@@ -1088,7 +1130,15 @@ export async function doGenerateWeekPlan(
 
     // Evaluated against `weekCtx` as it stood *before* this pick — same
     // order as the web engine (evaluateConfidence, then updateWeekContext).
-    const reason = deriveAssignmentReason(next, { householdId, feedback, allRecipes: candidates, selection, fatiguedMealIds, everCookedRecipeIds })
+    const reason = deriveAssignmentReason(next, {
+      householdId,
+      feedback,
+      allRecipes: candidates,
+      selection,
+      fatiguedMealIds: confirmedFatiguedMealIds,
+      everCookedRecipeIds,
+      legacyPlannedRecipeIds,
+    })
     const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
 
     alreadyUsed.add(next.id)

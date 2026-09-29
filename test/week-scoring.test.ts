@@ -389,6 +389,16 @@ describe('deriveAssignmentReason', () => {
     expect(deriveAssignmentReason(pasta, ctx)).toBe('new-for-variety')
   })
 
+  it('does not call a legacy-planned recipe new without confirmed outcome history', () => {
+    const pasta = recipe({ id: 'pasta', householdId: null })
+    const ctx = baseReasonContext({
+      everCookedRecipeIds: new Set(),
+      legacyPlannedRecipeIds: new Set(['pasta']),
+    })
+
+    expect(deriveAssignmentReason(pasta, ctx)).toBeUndefined()
+  })
+
   it('returns undefined when no signal applies', () => {
     const pasta = recipe({ id: 'pasta', householdId: null })
     const ctx = baseReasonContext({ everCookedRecipeIds: new Set(['pasta']) })

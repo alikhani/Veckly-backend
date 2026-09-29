@@ -91,6 +91,12 @@
               "title",
               "count"
             ]
+          },
+          "cookedDinnerCountThisMonth": {
+            "type": "integer"
+          },
+          "legacyPlannedDinnerCountThisMonth": {
+            "type": "integer"
           }
         },
         "required": [
@@ -115,6 +121,24 @@
             "type": [
               "integer",
               "null"
+            ]
+          },
+          "legacyTimesPlanned": {
+            "type": "integer"
+          },
+          "weeksSinceLegacyPlanned": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "historyBasis": {
+            "type": "string",
+            "enum": [
+              "confirmed_outcomes",
+              "mixed",
+              "legacy_plans",
+              "none"
             ]
           }
         },

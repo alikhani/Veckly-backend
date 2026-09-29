@@ -43,6 +43,14 @@ See `docs/plans/backend-move-ios-testflight-plan-2026-06.md` for the full phased
 
 ## Recent changes
 
+### 2026-09-29 — AVL-003 outcome-based family memory and scoring
+
+Recency, fatigue, family cookbook statistics, recap top recipe and the week-summary satiation streak now distinguish planned meals from confirmed dinner outcomes. `cooked` attributes history to the planned recipe; `changed_plan` attributes it only to a known `actualRecipeId`; `skipped` and label-only replacements do not count as a cooked recipe.
+
+For compatibility, a whole historical week with no outcomes still uses its assignments as a conservative internal fallback for recency/fatigue scoring. As soon as a week contains one outcome, outcomes are its only truth source and unrecorded dinners remain unknown. Legacy plans never produce an exact `streakWeeks`, a user-facing `back-after-break` reason, a `timesCooked` count, or a top-cooked recipe. Cookbook responses expose optional `legacyTimesPlanned`, `weeksSinceLegacyPlanned`, and `historyBasis` fields so clients can use neutral wording. Recap keeps `plannedWeekCount` and adds separate optional confirmed-cooked and legacy-planned monthly counts.
+
+Outcome writes invalidate every localized household recommendation-cache row in the same RLS transaction. The history resolution is centralized in `src/meal-history.ts` and covered by pure provenance tests plus database-backed mixed-history, replacement, skipped, streak, scoring, cache and RLS tests. OpenAPI changes are additive; no route path changed.
+
 ### 2026-08-04 — Recommendation avoid hardening and profile-aware cache invalidation
 
 The native recommendation request now includes each candidate recipe's ingredient names and tags. Backend recommendation output—both fresh AI results and cached results—is deterministically post-filtered through the same `recipeMatchesAvoided` policy used by week generation. Claude can therefore no longer return a native recommendation that conflicts with an explicit avoid term merely because it ignored the prompt. The existing compound-word protection remains intact: a fully itemized “Rostad kyckling” is not excluded by `avoid="ost"`.

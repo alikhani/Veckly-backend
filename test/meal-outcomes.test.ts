@@ -3,7 +3,7 @@ import { eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { listMealOutcomes, upsertMealOutcome } from '../src/meal-outcomes.js'
-import { householdMealOutcomes, householdMemberships, households } from '../src/schema.js'
+import { householdMealOutcomes, householdMemberships, householdRecipeRecommendations, households } from '../src/schema.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -23,6 +23,7 @@ describeWithDb('Meal outcomes + RLS', () => {
   let householdBId: string
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -40,6 +41,7 @@ describeWithDb('Meal outcomes + RLS', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_recipe_recommendations"`)
     await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_memberships"`)
     await db.execute(sql`delete from "households"`)
@@ -115,6 +117,24 @@ describeWithDb('Meal outcomes + RLS', () => {
       actualRecipeId: null,
       actualMealLabel: null,
     })
+  })
+
+  it('invalidates every localized recommendation cache entry when history changes', async () => {
+    await db.insert(householdRecipeRecommendations).values([
+      { householdId: householdAId, language: 'en', recommendations: [{ mealId: plannedRecipeId, reason: 'Old' }] },
+      { householdId: householdAId, language: 'sv', recommendations: [{ mealId: plannedRecipeId, reason: 'Gammal' }] },
+      { householdId: householdBId, language: 'en', recommendations: [{ mealId: actualRecipeId, reason: 'Keep' }] },
+    ])
+
+    await upsertMealOutcome(db, fakeAccessToken(userA), userA, householdAId, date, {
+      weekStartDate,
+      plannedRecipeId,
+      status: 'cooked',
+    })
+
+    const cacheRows = await db.select().from(householdRecipeRecommendations)
+    expect(cacheRows).toHaveLength(1)
+    expect(cacheRows[0]?.householdId).toBe(householdBId)
   })
 
   it('does not expose another household outcome through RLS', async () => {

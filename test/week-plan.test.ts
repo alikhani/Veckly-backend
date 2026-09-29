@@ -7,7 +7,7 @@ import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
-import { householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { householdMealOutcomes, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
   finalizeWeekHistoryPlan,
@@ -182,6 +182,7 @@ describeWithDb('Week-plan event log + projection', () => {
   // before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_saved_recipes"`)
@@ -205,6 +206,7 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "household_saved_recipes"`)
@@ -226,6 +228,24 @@ describeWithDb('Week-plan event log + projection', () => {
   }
 
   const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
+
+  async function seedOutcome(input: {
+    weekStartDate: string
+    date?: string
+    plannedRecipeId: string
+    status: 'cooked' | 'changed_plan' | 'skipped'
+    actualRecipeId?: string
+  }) {
+    await db.insert(householdMealOutcomes).values({
+      householdId: householdAId,
+      weekStartDate: input.weekStartDate,
+      date: input.date ?? input.weekStartDate,
+      plannedRecipeId: input.plannedRecipeId,
+      status: input.status,
+      actualRecipeId: input.actualRecipeId ?? null,
+      updatedBy: userA,
+    })
+  }
   const baseHistoryState = {
     request: {
       household: { adults: 2, children: 1, priorities: ['quick' as const], avoidIngredients: [] },
@@ -735,17 +755,34 @@ describeWithDb('Week-plan event log + projection', () => {
         skippedDays: [],
       }
       await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state })
+      await seedOutcome({ weekStartDate, plannedRecipeId: recipe.id, status: 'cooked' })
       for (const priorWeekStart of ['2026-06-01', '2026-05-25']) {
         await db.insert(weekPlanProjections).values({
           householdId: householdAId,
           weekStartDate: priorWeekStart,
           state: { weekStarted: true, request: null, meals: { monday: { recipeRef: recipe.id } }, lockedDays: [], skippedDays: [] },
         })
+        await seedOutcome({ weekStartDate: priorWeekStart, plannedRecipeId: recipe.id, status: 'cooked' })
       }
 
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
 
       expect(summary?.days[0]?.streakWeeks).toBe(3)
+    })
+
+    it('never exposes an exact streak from legacy plan assignments', async () => {
+      const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, baseRecipe)
+      for (const date of [weekStartDate, '2026-06-01', '2026-05-25']) {
+        await db.insert(weekPlanProjections).values({
+          householdId: householdAId,
+          weekStartDate: date,
+          state: { weekStarted: true, request: null, meals: { monday: { recipeRef: recipe.id } }, lockedDays: [], skippedDays: [] },
+        })
+      }
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]?.streakWeeks).toBeNull()
     })
 
     it('leaves streakWeeks null when the recipe was cooked fewer than 3 consecutive weeks', async () => {
@@ -1100,6 +1137,68 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.recipe?.title).toBe('Fresh Alternative')
     })
 
+    it('applies recency to the actual replacement, not the changed planned recipe', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const freshId = '10000000-0000-4000-8000-000000000000'
+      const actualId = '20000000-0000-4000-8000-000000000000'
+      const plannedId = '30000000-0000-4000-8000-000000000000'
+      await db.insert(recipes).values([
+        { ...baseRecipe, id: freshId, title: 'Fresh Alternative', householdId: null, source: 'builtin', isPublic: true, createdBy: userA },
+        { ...baseRecipe, id: actualId, title: 'Actual Replacement', householdId: null, source: 'builtin', isPublic: true, createdBy: userA },
+        { ...baseRecipe, id: plannedId, title: 'Changed Planned Meal', householdId: null, source: 'builtin', isPublic: true, createdBy: userA },
+      ])
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, actualId, { vote: 'up' })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate: '2026-06-01',
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: { monday: { recipeRef: plannedId } },
+          lockedDays: [],
+          skippedDays: [],
+        } satisfies TWeekPlanProjectionState,
+      })
+      await seedOutcome({
+        weekStartDate: '2026-06-01',
+        plannedRecipeId: plannedId,
+        status: 'changed_plan',
+        actualRecipeId: actualId,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      // Actual Replacement's +8 like is cancelled by its -8 last-week
+      // recency. All zero-score ties are deterministic by id, so the fresh
+      // recipe wins. Projection-based recency would incorrectly pick Actual.
+      expect(summary?.days[0]?.recipe?.id).toBe(freshId)
+    })
+
+    it('does not penalize a skipped planned recipe as recently cooked', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const planned = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Skipped But Liked' })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Neutral Alternative' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, planned.id, { vote: 'up' })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate: '2026-06-01',
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: { monday: { recipeRef: planned.id } },
+          lockedDays: [],
+          skippedDays: [],
+        } satisfies TWeekPlanProjectionState,
+      })
+      await seedOutcome({ weekStartDate: '2026-06-01', plannedRecipeId: planned.id, status: 'skipped' })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.id).toBe(planned.id)
+    })
+
     it('prefers the household\'s own recipe over an otherwise-equal public recipe', async () => {
       await insertProfile([{ day: 'monday' }])
       await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Household Recipe' })
@@ -1218,6 +1317,24 @@ describeWithDb('Week-plan event log + projection', () => {
       // so it must not be flagged.
       expect(summary?.days[0]?.recipe?.title).toBe('Salmon')
       expect(summary?.days[0]?.reason).toBeNull()
+    })
+
+    it('surfaces back-after-break only from a continuously confirmed outcome timeline', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const recipe = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, { ...baseRecipe, title: 'Confirmed Salmon', isPublic: true })
+      await addHouseholdSavedRecipe(db, fakeAccessToken(userA), userA, householdAId, recipe.id)
+      for (const date of ['2026-05-04', '2026-05-11', '2026-05-18']) {
+        await seedOutcome({ weekStartDate: date, plannedRecipeId: recipe.id, status: 'cooked' })
+      }
+      for (const date of ['2026-05-25', '2026-06-01']) {
+        await seedOutcome({ weekStartDate: date, plannedRecipeId: recipe.id, status: 'skipped' })
+      }
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.id).toBe(recipe.id)
+      expect(summary?.days[0]?.reason).toBe('back-after-break')
     })
 
     it('leaves reason and confidence null for a manually assigned meal', async () => {

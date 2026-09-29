@@ -2,8 +2,9 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, eq, gte, inArray } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
+import { cookedRecipeIdFromOutcome, resolveMealHistory } from './meal-history.js'
 import { withRls } from './rls.js'
-import { mealFeedback, recipes, weekPlanProjections } from './schema.js'
+import { householdMealOutcomes, mealFeedback, recipes, weekPlanProjections } from './schema.js'
 import { addDays, isMonday } from './week-plan.js'
 import type { Db } from './db.js'
 
@@ -19,6 +20,10 @@ const HISTORY_LOOKBACK_WEEKS = 156
 const FamilyRecapSchema = z.object({
   plannedWeekCount: z.number().int(),
   topRecipeThisMonth: z.object({ title: z.string(), count: z.number().int() }).nullable(),
+  // Additive during the AVL-003 client transition. Returned on every response,
+  // optional in OpenAPI so an older generated client stays source-compatible.
+  cookedDinnerCountThisMonth: z.number().int().optional(),
+  legacyPlannedDinnerCountThisMonth: z.number().int().optional(),
 }).openapi('FamilyRecap')
 
 type TProjectionMealsState = { meals?: Record<string, { recipeRef: string }> }
@@ -38,21 +43,40 @@ export async function getFamilyRecap(db: Db, accessToken: string, householdId: s
     // window — an accepted tradeoff given how generous it is; revisit if
     // real households ever get that old.
     const historyCutoff = addDays(`${referenceMonth}-01`, -7 * HISTORY_LOOKBACK_WEEKS)
-    const rows = await tx
-      .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
-      .from(weekPlanProjections)
-      .where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, historyCutoff)))
+    const [rows, outcomeRows] = await Promise.all([
+      tx
+        .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
+        .from(weekPlanProjections)
+        .where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, historyCutoff))),
+      tx
+        .select({
+          weekStartDate: householdMealOutcomes.weekStartDate,
+          date: householdMealOutcomes.date,
+          plannedRecipeId: householdMealOutcomes.plannedRecipeId,
+          status: householdMealOutcomes.status,
+          actualRecipeId: householdMealOutcomes.actualRecipeId,
+        })
+        .from(householdMealOutcomes)
+        .where(and(eq(householdMealOutcomes.householdId, householdId), gte(householdMealOutcomes.weekStartDate, historyCutoff))),
+    ])
 
     const plannedWeeks = rows.filter((row) => mealIdsFromState(row.state).length > 0)
     const plannedWeekCount = plannedWeeks.length
 
     const mealIdCounts = new Map<string, number>()
-    for (const week of plannedWeeks) {
-      if (!week.weekStartDate.startsWith(referenceMonth)) continue
-      for (const recipeId of mealIdsFromState(week.state)) {
-        mealIdCounts.set(recipeId, (mealIdCounts.get(recipeId) ?? 0) + 1)
-      }
+    let cookedDinnerCountThisMonth = 0
+    for (const outcome of outcomeRows) {
+      if (!outcome.date.startsWith(referenceMonth)) continue
+      const recipeId = cookedRecipeIdFromOutcome(outcome)
+      if (!recipeId) continue
+      cookedDinnerCountThisMonth++
+      mealIdCounts.set(recipeId, (mealIdCounts.get(recipeId) ?? 0) + 1)
     }
+
+    const outcomeWeeks = new Set(outcomeRows.map((outcome) => outcome.weekStartDate))
+    const legacyPlannedDinnerCountThisMonth = plannedWeeks
+      .filter((week) => week.weekStartDate.startsWith(referenceMonth) && !outcomeWeeks.has(week.weekStartDate))
+      .reduce((count, week) => count + mealIdsFromState(week.state).length, 0)
 
     let topRecipeId: string | null = null
     let topCount = 0
@@ -69,7 +93,12 @@ export async function getFamilyRecap(db: Db, accessToken: string, householdId: s
       if (recipe) topRecipeThisMonth = { title: recipe.title, count: topCount }
     }
 
-    return { plannedWeekCount, topRecipeThisMonth }
+    return {
+      plannedWeekCount,
+      topRecipeThisMonth,
+      cookedDinnerCountThisMonth,
+      legacyPlannedDinnerCountThisMonth,
+    }
   })
 }
 
@@ -78,6 +107,9 @@ const FamilyCookbookRecipeSchema = z.object({
   title: z.string(),
   timesCooked: z.number().int(),
   weeksSinceCooked: z.number().int().nullable(),
+  legacyTimesPlanned: z.number().int().optional(),
+  weeksSinceLegacyPlanned: z.number().int().nullable().optional(),
+  historyBasis: z.enum(['confirmed_outcomes', 'mixed', 'legacy_plans', 'none']).optional(),
 }).openapi('FamilyCookbookRecipe')
 
 const FamilyCookbookSchema = z.object({
@@ -101,27 +133,33 @@ function weeksBetween(earlierWeekStart: string, laterWeekStart: string): number 
   return Math.max(0, Math.round(diff / MS_PER_WEEK))
 }
 
-type TWeekHistoryRow = { weekStartDate: string; state: unknown }
+type TRecipeHistoryStats = {
+  countById: Map<string, number>
+  lastWeekById: Map<string, string>
+}
 
-function computeCookedStats(historyRows: TWeekHistoryRow[], likedRecipeIds: Set<string>) {
-  const timesCookedById = new Map<string, number>()
-  const lastCookedWeekById = new Map<string, string>()
-  for (const week of historyRows) {
-    for (const recipeId of mealIdsFromState(week.state)) {
+function computeRecipeStats(
+  records: Array<{ weekStartDate: string; mealIds: string[] }>,
+  likedRecipeIds: Set<string>,
+): TRecipeHistoryStats {
+  const countById = new Map<string, number>()
+  const lastWeekById = new Map<string, string>()
+  for (const week of records) {
+    for (const recipeId of week.mealIds) {
       if (!likedRecipeIds.has(recipeId)) continue
-      timesCookedById.set(recipeId, (timesCookedById.get(recipeId) ?? 0) + 1)
-      const currentLast = lastCookedWeekById.get(recipeId)
-      if (!currentLast || week.weekStartDate > currentLast) lastCookedWeekById.set(recipeId, week.weekStartDate)
+      countById.set(recipeId, (countById.get(recipeId) ?? 0) + 1)
+      const currentLast = lastWeekById.get(recipeId)
+      if (!currentLast || week.weekStartDate > currentLast) lastWeekById.set(recipeId, week.weekStartDate)
     }
   }
-  return { timesCookedById, lastCookedWeekById }
+  return { countById, lastWeekById }
 }
 
 function buildCookbookEntries(
   likedRecipeIds: string[],
   titleById: Map<string, string>,
-  timesCookedById: Map<string, number>,
-  lastCookedWeekById: Map<string, string>,
+  confirmedStats: TRecipeHistoryStats,
+  legacyStats: TRecipeHistoryStats,
   currentWeekStartDate: string,
 ) {
   const favorites: z.infer<typeof FamilyCookbookRecipeSchema>[] = []
@@ -129,16 +167,38 @@ function buildCookbookEntries(
   for (const recipeId of likedRecipeIds) {
     const title = titleById.get(recipeId)
     if (!title) continue // recipe deleted since it was cooked/liked
-    const lastCookedWeek = lastCookedWeekById.get(recipeId)
+    const lastCookedWeek = confirmedStats.lastWeekById.get(recipeId)
+    const lastLegacyPlannedWeek = legacyStats.lastWeekById.get(recipeId)
     const weeksSinceCooked = lastCookedWeek ? weeksBetween(lastCookedWeek, currentWeekStartDate) : null
-    const entry = { recipeId, title, timesCooked: timesCookedById.get(recipeId) ?? 0, weeksSinceCooked }
+    const weeksSinceLegacyPlanned = lastLegacyPlannedWeek ? weeksBetween(lastLegacyPlannedWeek, currentWeekStartDate) : null
+    const timesCooked = confirmedStats.countById.get(recipeId) ?? 0
+    const legacyTimesPlanned = legacyStats.countById.get(recipeId) ?? 0
+    const historyBasis = timesCooked > 0
+      ? legacyTimesPlanned > 0 ? 'mixed' as const : 'confirmed_outcomes' as const
+      : legacyTimesPlanned > 0 ? 'legacy_plans' as const : 'none' as const
+    const entry = {
+      recipeId,
+      title,
+      timesCooked,
+      weeksSinceCooked,
+      legacyTimesPlanned,
+      weeksSinceLegacyPlanned,
+      historyBasis,
+    }
+    // "Due again" is an eating claim, so legacy planning history can never
+    // trigger it. Legacy-only favorites stay in the neutral list and expose
+    // their plan provenance for compatible clients to phrase carefully.
     if (weeksSinceCooked !== null && weeksSinceCooked >= DUE_AGAIN_THRESHOLD_WEEKS) dueAgain.push(entry)
     else favorites.push(entry)
   }
   const compareByTitle = (a: z.infer<typeof FamilyCookbookRecipeSchema>, b: z.infer<typeof FamilyCookbookRecipeSchema>) =>
     cookbookTitleCollator.compare(a.title, b.title) || a.title.localeCompare(b.title) || a.recipeId.localeCompare(b.recipeId)
-  favorites.sort((a, b) => b.timesCooked - a.timesCooked || compareByTitle(a, b))
-  dueAgain.sort((a, b) => (b.weeksSinceCooked ?? 0) - (a.weeksSinceCooked ?? 0) || compareByTitle(a, b))
+  favorites.sort((a, b) => b.timesCooked - a.timesCooked || (b.legacyTimesPlanned ?? 0) - (a.legacyTimesPlanned ?? 0) || compareByTitle(a, b))
+  dueAgain.sort((a, b) => {
+    const aWeeks = a.weeksSinceCooked ?? 0
+    const bWeeks = b.weeksSinceCooked ?? 0
+    return bWeeks - aWeeks || compareByTitle(a, b)
+  })
   return { favorites, dueAgain }
 }
 
@@ -157,19 +217,32 @@ function buildCookbookEntries(
 export async function getFamilyCookbook(db: Db, accessToken: string, userId: string, householdId: string, currentWeekStartDate: string) {
   return withRls(db, accessToken, async (tx) => {
     const historyCutoff = addDays(currentWeekStartDate, -7 * HISTORY_LOOKBACK_WEEKS)
-    const [feedbackRows, historyRows] = await Promise.all([
+    const [feedbackRows, historyRows, outcomeRows] = await Promise.all([
       tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote })
         .from(mealFeedback)
         .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId))),
       tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
         .from(weekPlanProjections)
         .where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, historyCutoff))),
+      tx.select({
+        weekStartDate: householdMealOutcomes.weekStartDate,
+        plannedRecipeId: householdMealOutcomes.plannedRecipeId,
+        status: householdMealOutcomes.status,
+        actualRecipeId: householdMealOutcomes.actualRecipeId,
+      })
+        .from(householdMealOutcomes)
+        .where(and(eq(householdMealOutcomes.householdId, householdId), gte(householdMealOutcomes.weekStartDate, historyCutoff))),
     ])
 
     const likedRecipeIds = new Set(feedbackRows.filter((row) => row.vote === 'up').map((row) => row.mealId))
     if (likedRecipeIds.size === 0) return { totalFamilyLikedCount: 0, favorites: [], dueAgain: [] }
 
-    const { timesCookedById, lastCookedWeekById } = computeCookedStats(historyRows, likedRecipeIds)
+    const resolvedHistory = resolveMealHistory(
+      historyRows.map((week) => ({ weekStartDate: week.weekStartDate, mealIds: mealIdsFromState(week.state) })),
+      outcomeRows,
+    )
+    const confirmedStats = computeRecipeStats(resolvedHistory.confirmedRecords, likedRecipeIds)
+    const legacyStats = computeRecipeStats(resolvedHistory.legacyPlannedRecords, likedRecipeIds)
 
     const recipeRows = await tx.select({ id: recipes.id, title: recipes.title }).from(recipes).where(inArray(recipes.id, Array.from(likedRecipeIds)))
     const titleById = new Map(recipeRows.map((recipe) => [recipe.id, recipe.title]))
@@ -177,7 +250,13 @@ export async function getFamilyCookbook(db: Db, accessToken: string, userId: str
     // a deleted recipe, and the headline must agree with the returned list.
     const totalFamilyLikedCount = recipeRows.length
 
-    const { favorites, dueAgain } = buildCookbookEntries(Array.from(likedRecipeIds), titleById, timesCookedById, lastCookedWeekById, currentWeekStartDate)
+    const { favorites, dueAgain } = buildCookbookEntries(
+      Array.from(likedRecipeIds),
+      titleById,
+      confirmedStats,
+      legacyStats,
+      currentWeekStartDate,
+    )
 
     return { totalFamilyLikedCount, favorites, dueAgain }
   })

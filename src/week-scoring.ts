@@ -286,6 +286,7 @@ export type TReasonContext = {
   selection?: TDaySelection
   fatiguedMealIds?: string[]
   everCookedRecipeIds?: Set<string>
+  legacyPlannedRecipeIds?: Set<string>
 }
 
 /** Picks the single most salient explanation for why this recipe won its
@@ -302,7 +303,11 @@ export function deriveAssignmentReason(recipe: TScoringRecipe, ctx: TReasonConte
   if ((ctx.selection?.effortLevel === 'busy' || ctx.selection?.lateEvening) && recipe.tags.includes('quick')) return 'quick-weekday'
   if (ctx.fatiguedMealIds?.includes(recipe.id)) return 'back-after-break'
   if (scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes) > 0) return 'based-on-feedback'
-  if (ctx.everCookedRecipeIds && !ctx.everCookedRecipeIds.has(recipe.id)) return 'new-for-variety'
+  if (
+    ctx.everCookedRecipeIds
+    && !ctx.everCookedRecipeIds.has(recipe.id)
+    && !ctx.legacyPlannedRecipeIds?.has(recipe.id)
+  ) return 'new-for-variety'
   return undefined
 }
 

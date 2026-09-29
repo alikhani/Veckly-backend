@@ -5,7 +5,7 @@ import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { getFamilyCookbook, getFamilyRecap } from '../src/family-memory.js'
-import { households, householdMemberships, mealFeedback, recipes, weekPlanProjections } from '../src/schema.js'
+import { householdMealOutcomes, households, householdMemberships, mealFeedback, recipes, weekPlanProjections } from '../src/schema.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -32,6 +32,7 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
   }
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "week_plan_projections"`)
@@ -51,6 +52,7 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "meal_feedback"`)
     await db.execute(sql`delete from "recipes"`)
     await db.execute(sql`delete from "week_plan_projections"`)
@@ -67,10 +69,31 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
     })
   }
 
+  async function seedCookedWeek(weekStartDate: string, mealRecipeIds: string[]) {
+    await seedWeek(weekStartDate, mealRecipeIds)
+    await db.insert(householdMealOutcomes).values(mealRecipeIds.map((plannedRecipeId, index) => {
+      const date = new Date(`${weekStartDate}T00:00:00Z`)
+      date.setUTCDate(date.getUTCDate() + index)
+      return {
+        householdId: householdAId,
+        weekStartDate,
+        date: date.toISOString().slice(0, 10),
+        plannedRecipeId,
+        status: 'cooked' as const,
+        updatedBy: userA,
+      }
+    }))
+  }
+
   it('returns zero planned weeks and no top recipe when the household has no history', async () => {
     const recap = await getFamilyRecap(db, fakeAccessToken(userA), householdAId, '2026-06')
 
-    expect(recap).toEqual({ plannedWeekCount: 0, topRecipeThisMonth: null })
+    expect(recap).toEqual({
+      plannedWeekCount: 0,
+      topRecipeThisMonth: null,
+      cookedDinnerCountThisMonth: 0,
+      legacyPlannedDinnerCountThisMonth: 0,
+    })
   })
 
   it('counts only weeks that actually had a meal assigned', async () => {
@@ -91,14 +114,51 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
   it('picks the most-cooked recipe within the reference month, ignoring other months', async () => {
     const favorite = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Korvstroganoff' })
     const other = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Taco Tuesday' })
-    await seedWeek('2026-06-01', [favorite.id, favorite.id, other.id])
-    await seedWeek('2026-06-08', [favorite.id])
+    await seedCookedWeek('2026-06-01', [favorite.id, favorite.id, other.id])
+    await seedCookedWeek('2026-06-08', [favorite.id])
     // Outside the reference month — must not count toward June's top recipe.
-    await seedWeek('2026-07-06', [other.id, other.id, other.id])
+    await seedCookedWeek('2026-07-06', [other.id, other.id, other.id])
 
     const recap = await getFamilyRecap(db, fakeAccessToken(userA), householdAId, '2026-06')
 
     expect(recap.topRecipeThisMonth).toEqual({ title: 'Korvstroganoff', count: 3 })
+    expect(recap.cookedDinnerCountThisMonth).toBe(4)
+    expect(recap.legacyPlannedDinnerCountThisMonth).toBe(0)
+  })
+
+  it('keeps planned legacy dinners separate from confirmed changed and skipped outcomes', async () => {
+    const planned = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Planned Pasta' })
+    const replacement = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Actual Curry' })
+    await seedWeek('2026-06-01', [planned.id, planned.id])
+    await db.insert(householdMealOutcomes).values([
+      {
+        householdId: householdAId,
+        weekStartDate: '2026-06-01',
+        date: '2026-06-01',
+        plannedRecipeId: planned.id,
+        status: 'changed_plan',
+        actualRecipeId: replacement.id,
+        updatedBy: userA,
+      },
+      {
+        householdId: householdAId,
+        weekStartDate: '2026-06-01',
+        date: '2026-06-02',
+        plannedRecipeId: planned.id,
+        status: 'skipped',
+        updatedBy: userA,
+      },
+    ])
+    await seedWeek('2026-06-08', [planned.id])
+
+    const recap = await getFamilyRecap(db, fakeAccessToken(userA), householdAId, '2026-06')
+
+    expect(recap).toMatchObject({
+      plannedWeekCount: 2,
+      cookedDinnerCountThisMonth: 1,
+      legacyPlannedDinnerCountThisMonth: 1,
+      topRecipeThisMonth: { title: 'Actual Curry', count: 1 },
+    })
   })
 
   it('does not expose another household\'s recap across RLS', async () => {
@@ -107,7 +167,12 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
 
     const recap = await getFamilyRecap(db, fakeAccessToken(userB), householdBId, '2026-06')
 
-    expect(recap).toEqual({ plannedWeekCount: 0, topRecipeThisMonth: null })
+    expect(recap).toEqual({
+      plannedWeekCount: 0,
+      topRecipeThisMonth: null,
+      cookedDinnerCountThisMonth: 0,
+      legacyPlannedDinnerCountThisMonth: 0,
+    })
   })
 
   it('excludes weeks older than the 3-year lookback window from the planned-week count', async () => {
@@ -138,12 +203,20 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
     it('counts a recipe the caller liked and has cooked', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Korvstroganoff' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
-      await seedWeek('2026-07-06', [recipe.id])
+      await seedCookedWeek('2026-07-06', [recipe.id])
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
       expect(cookbook.totalFamilyLikedCount).toBe(1)
-      expect(cookbook.favorites).toEqual([{ recipeId: recipe.id, title: 'Korvstroganoff', timesCooked: 1, weeksSinceCooked: 0 }])
+      expect(cookbook.favorites).toEqual([{
+        recipeId: recipe.id,
+        title: 'Korvstroganoff',
+        timesCooked: 1,
+        weeksSinceCooked: 0,
+        legacyTimesPlanned: 0,
+        weeksSinceLegacyPlanned: null,
+        historyBasis: 'confirmed_outcomes',
+      }])
     })
 
     it('clamps weeksSinceCooked to 0 instead of going negative for a stale client-supplied current week', async () => {
@@ -152,11 +225,16 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       // Cooked in a week *after* the "current" week the caller passes in —
       // an out-of-date client clock shouldn't be able to produce a negative
       // weeks-since-cooked value.
-      await seedWeek('2026-07-13', [recipe.id])
+      await seedCookedWeek('2026-07-13', [recipe.id])
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
-      expect(cookbook.favorites).toEqual([{ recipeId: recipe.id, title: 'Korvstroganoff', timesCooked: 1, weeksSinceCooked: 0 }])
+      expect(cookbook.favorites[0]).toMatchObject({
+        recipeId: recipe.id,
+        timesCooked: 1,
+        weeksSinceCooked: 0,
+        historyBasis: 'confirmed_outcomes',
+      })
     })
 
     // Votes are per-user (RLS enforces `user_id = auth.uid()` even on
@@ -190,9 +268,62 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
 
       expect(cookbook.totalFamilyLikedCount).toBe(1)
       expect(cookbook.favorites).toEqual([
-        { recipeId: recipe.id, title: 'Wishlist Curry', timesCooked: 0, weeksSinceCooked: null },
+        {
+          recipeId: recipe.id,
+          title: 'Wishlist Curry',
+          timesCooked: 0,
+          weeksSinceCooked: null,
+          legacyTimesPlanned: 0,
+          weeksSinceLegacyPlanned: null,
+          historyBasis: 'none',
+        },
       ])
       expect(cookbook.dueAgain).toEqual([])
+    })
+
+    it('attributes changed plans to the actual recipe and labels legacy plans without claiming they were cooked', async () => {
+      const planned = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Planned Pasta' })
+      const replacement = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Actual Curry' })
+      const legacy = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Legacy Soup' })
+      for (const recipe of [planned, replacement, legacy]) {
+        await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
+      }
+      await seedWeek('2026-06-29', [planned.id])
+      await db.insert(householdMealOutcomes).values({
+        householdId: householdAId,
+        weekStartDate: '2026-06-29',
+        date: '2026-06-29',
+        plannedRecipeId: planned.id,
+        status: 'changed_plan',
+        actualRecipeId: replacement.id,
+        updatedBy: userA,
+      })
+      await seedWeek('2026-07-06', [legacy.id])
+
+      const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-13')
+      const entries = new Map([...cookbook.favorites, ...cookbook.dueAgain].map((entry) => [entry.recipeId, entry]))
+
+      expect(entries.get(planned.id)).toMatchObject({
+        timesCooked: 0,
+        weeksSinceCooked: null,
+        legacyTimesPlanned: 0,
+        historyBasis: 'none',
+      })
+      expect(entries.get(replacement.id)).toMatchObject({
+        timesCooked: 1,
+        weeksSinceCooked: 2,
+        legacyTimesPlanned: 0,
+        historyBasis: 'confirmed_outcomes',
+      })
+      expect(entries.get(legacy.id)).toMatchObject({
+        timesCooked: 0,
+        weeksSinceCooked: null,
+        legacyTimesPlanned: 1,
+        weeksSinceLegacyPlanned: 1,
+        historyBasis: 'legacy_plans',
+      })
+      expect(cookbook.favorites.map((entry) => entry.recipeId)).toContain(legacy.id)
+      expect(cookbook.dueAgain.map((entry) => entry.recipeId)).not.toContain(legacy.id)
     })
 
     it('counts only liked recipes that are present in the returned lists', async () => {
@@ -218,12 +349,17 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
     it('moves a favorite into dueAgain once 6+ weeks have passed since it was last cooked', async () => {
       const recipe = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Meatballs' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
-      await seedWeek('2026-05-25', [recipe.id])
+      await seedCookedWeek('2026-05-25', [recipe.id])
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
       expect(cookbook.favorites).toEqual([])
-      expect(cookbook.dueAgain).toEqual([{ recipeId: recipe.id, title: 'Meatballs', timesCooked: 1, weeksSinceCooked: 6 }])
+      expect(cookbook.dueAgain[0]).toMatchObject({
+        recipeId: recipe.id,
+        timesCooked: 1,
+        weeksSinceCooked: 6,
+        historyBasis: 'confirmed_outcomes',
+      })
     })
 
     it('sorts favorites by times cooked, most first', async () => {
@@ -231,9 +367,9 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       const rarely = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Sunday Roast' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, often.id, { vote: 'up' })
       await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, rarely.id, { vote: 'up' })
-      await seedWeek('2026-06-22', [often.id])
-      await seedWeek('2026-06-29', [often.id, rarely.id])
-      await seedWeek('2026-07-06', [often.id])
+      await seedCookedWeek('2026-06-22', [often.id])
+      await seedCookedWeek('2026-06-29', [often.id, rarely.id])
+      await seedCookedWeek('2026-07-06', [often.id])
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
@@ -248,7 +384,7 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
       for (const recipe of [zebra, apple, meatballs, stew]) {
         await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, recipe.id, { vote: 'up' })
       }
-      await seedWeek('2026-05-25', [meatballs.id, stew.id])
+      await seedCookedWeek('2026-05-25', [meatballs.id, stew.id])
 
       const cookbook = await getFamilyCookbook(db, fakeAccessToken(userA), userA, householdAId, '2026-07-06')
 
@@ -275,7 +411,15 @@ describeWithDb('Family memory (Plan D3/D5)', () => {
 
       expect(cookbook.totalFamilyLikedCount).toBe(1)
       expect(cookbook.favorites).toEqual([
-        { recipeId: recipe.id, title: 'Pasta', timesCooked: 0, weeksSinceCooked: null },
+        {
+          recipeId: recipe.id,
+          title: 'Pasta',
+          timesCooked: 0,
+          weeksSinceCooked: null,
+          legacyTimesPlanned: 0,
+          weeksSinceLegacyPlanned: null,
+          historyBasis: 'none',
+        },
       ])
       expect(cookbook.dueAgain).toEqual([])
     })

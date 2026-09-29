@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import type { Db } from './db.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { householdMealOutcomes } from './schema.js'
+import { householdMealOutcomes, householdRecipeRecommendations } from './schema.js'
 
 type AppEnv = { Variables: { user: AuthedUser; accessToken: string } }
 
@@ -159,6 +159,12 @@ export async function upsertMealOutcome(
       })
       .returning()
     if (!row) throw new Error('Upsert did not return the persisted meal outcome')
+    // Recommendation responses include recent-meal context. A corrected
+    // outcome changes that context immediately, so the week-long cache must
+    // not preserve advice based on the old history.
+    await tx
+      .delete(householdRecipeRecommendations)
+      .where(eq(householdRecipeRecommendations.householdId, householdId))
     return toMealOutcomeRecord(row)
   })
 }

@@ -8,8 +8,9 @@ import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeekl
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdMealOutcomes, householdMealSignals, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdMealOutcomes, householdMealSignals, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
+import { canonicalIngredientItemKey } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
 import {
   DayPlanningContextSchema,
@@ -26,6 +27,7 @@ import {
   deriveAssignmentReason,
   detectFatiguedMeals,
   evaluateAssignmentConfidence,
+  evaluateWeekEconomy,
   extractRecentMealIds,
   rankCandidates,
   scoreMeal,
@@ -323,6 +325,12 @@ const WeekPlanSummarySchema = z.object({
   weekStartDate: z.string(),
   updatedAt: z.string().nullable(),
   explanations: z.array(WeekPlanExplanationSchema).max(2),
+  economy: z.object({
+    uniqueIngredientCount: z.number().int().min(0),
+    uniquePurchaseCount: z.number().int().min(0),
+    pantryCoveredIngredientCount: z.number().int().min(0),
+    reusedIngredientCount: z.number().int().min(0),
+  }),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
 
@@ -1058,10 +1066,17 @@ function readStringArray(value: unknown): string[] {
   return readJsonArray(value).filter((item): item is string => typeof item === 'string')
 }
 
-function readIngredientArray(value: unknown): Array<{ item: string }> {
-  return readJsonArray(value).filter((item): item is { item: string } =>
+function readIngredientArray(value: unknown): Array<{ item: string; unit?: string | null; category?: string | null }> {
+  return readJsonArray(value).filter((item): item is { item: string; unit?: string | null; category?: string | null } =>
     Boolean(item && typeof item === 'object' && 'item' in item && typeof item.item === 'string'),
   )
+}
+
+function readPantryStock(state: unknown): Record<string, number> {
+  const candidate = state as { pantryStock?: unknown } | null | undefined
+  if (!candidate?.pantryStock || typeof candidate.pantryStock !== 'object') return {}
+  return Object.fromEntries(Object.entries(candidate.pantryStock as Record<string, unknown>)
+    .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] > 0))
 }
 
 // Avoid-matching, in order of signal quality:
@@ -1260,7 +1275,7 @@ function normalizedIngredientName(value: string) {
 
 export function deriveWeekExplanations(input: {
   days: Array<{ date: string; reason: string | null; recipe: { id: string; title: string } | null }>
-  recipeIngredients: Map<string, Array<{ item: string }>>
+  recipeIngredients: Map<string, Array<{ item: string; unit?: string | null; category?: string | null }>>
   prepLinks: Array<{ recipeId: string | null; recipeTitle: string | null; cookDate: string; coveredDates: string[] }>
 }): TWeekExplanation[] {
   const explanations: TWeekExplanation[] = []
@@ -1286,8 +1301,9 @@ export function deriveWeekExplanations(input: {
   for (const day of input.days) {
     if (!day.recipe) continue
     for (const ingredient of input.recipeIngredients.get(day.recipe.id) ?? []) {
-      const normalized = normalizedIngredientName(ingredient.item)
-      if (!normalized || EXCLUDED_SHARED_INGREDIENTS.has(normalized)) continue
+      const normalizedName = normalizedIngredientName(ingredient.item)
+      if (!normalizedName || EXCLUDED_SHARED_INGREDIENTS.has(normalizedName)) continue
+      const normalized = canonicalIngredientItemKey(ingredient)
       const usage = ingredientUsage.get(normalized) ?? { label: ingredient.item.trim(), recipeIds: new Set<string>() }
       usage.recipeIds.add(day.recipe.id)
       ingredientUsage.set(normalized, usage)
@@ -1568,7 +1584,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
     const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
     const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
-    const [[projection], priorWeekProjections, outcomeRows] = await Promise.all([
+    const [[projection], priorWeekProjections, outcomeRows, [shoppingProjection]] = await Promise.all([
       tx
         .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
         .from(weekPlanProjections)
@@ -1590,6 +1606,12 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           eq(householdMealOutcomes.householdId, householdId),
           inArray(householdMealOutcomes.weekStartDate, allWeekStartDates),
         )),
+      tx
+        .select({ state: shoppingListProjections.state })
+        .from(shoppingListProjections)
+        .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
+        .orderBy(desc(shoppingListProjections.weekStartDate))
+        .limit(1),
     ])
 
     const projectionState = readProjectionState(projection?.state)
@@ -1681,6 +1703,21 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       household,
       weekStartDate,
       updatedAt: projection?.updatedAt.toISOString() ?? null,
+      economy: evaluateWeekEconomy(
+        recipeIds.map((id) => recipesById.get(id)).filter((recipe): recipe is NonNullable<typeof recipe> => Boolean(recipe)).map((recipe) => ({
+          id: recipe.id,
+          title: recipe.title,
+          servings: recipe.servings,
+          prepTimeMinutes: recipe.prepTimeMinutes,
+          tags: readStringArray(recipe.tags),
+          ingredients: readIngredientArray(recipe.ingredients),
+          cuisine: null,
+          proteinSource: null,
+          mealWeight: null,
+          householdId: null,
+        })),
+        readPantryStock(shoppingProjection?.state),
+      ),
       explanations: deriveWeekExplanations({
         days,
         recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
@@ -1708,7 +1745,7 @@ export async function previewPreviousWeekProposal(
   request: TPreviousWeekProposalRequest,
 ): Promise<TPreviousWeekProposal | { error: 'NO_COMPLETED_WEEK' | 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' | 'STALE_WEEK_PLAN' }> {
   const priorWindowStart = addDays(weekStartDate, -42)
-  const [profileRows, projection, poolRecipes, feedbackRows, signalRows, priorProjections, outcomes] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, signalRows, priorProjections, outcomes, shoppingRows, prepAssignmentRows] = await Promise.all([
     withRls(db, accessToken, (tx) => tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
       .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)),
     getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
@@ -1733,6 +1770,18 @@ export async function previewPreviousWeekProposal(
     }).from(householdMealOutcomes).where(and(
       eq(householdMealOutcomes.householdId, householdId), gte(householdMealOutcomes.weekStartDate, priorWindowStart), lt(householdMealOutcomes.weekStartDate, weekStartDate),
     ))),
+    withRls(db, accessToken, (tx) => tx.select({ state: shoppingListProjections.state })
+      .from(shoppingListProjections)
+      .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
+      .orderBy(desc(shoppingListProjections.weekStartDate)).limit(1)),
+    withRls(db, accessToken, (tx) => tx
+      .select({ date: householdPrepBatchAssignments.date, recipeId: householdPrepBatches.recipeId })
+      .from(householdPrepBatchAssignments)
+      .innerJoin(householdPrepBatches, eq(householdPrepBatchAssignments.batchId, householdPrepBatches.id))
+      .where(and(
+        eq(householdPrepBatches.householdId, householdId), eq(householdPrepBatchAssignments.mealType, 'dinner'),
+        gte(householdPrepBatchAssignments.date, weekStartDate), lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
+      ))),
   ])
 
   if (request.expectedUpdatedAt !== (projection?.updatedAt.toISOString() ?? null)) return { error: 'STALE_WEEK_PLAN' }
@@ -1769,7 +1818,14 @@ export async function previewPreviousWeekProposal(
   const sourceOutcomes = outcomes.filter((row) => row.weekStartDate === completedWeek)
   const sourceByDay = new Map(sourceOutcomes.map((outcome) => [orderedDays[new Date(`${outcome.date}T00:00:00Z`).getUTCDay() === 0 ? 6 : new Date(`${outcome.date}T00:00:00Z`).getUTCDay() - 1], outcome]))
   const targetState = readProjectionState(projection?.state)
-  const weekCtx = createWeekContext()
+  const weekCtx = createWeekContext(readPantryStock(shoppingRows[0]?.state))
+  const prepRecipeIdsByDate = new Map<string, Set<string>>()
+  for (const row of prepAssignmentRows) {
+    if (!row.recipeId) continue
+    const ids = prepRecipeIdsByDate.get(row.date) ?? new Set<string>()
+    ids.add(row.recipeId)
+    prepRecipeIdsByDate.set(row.date, ids)
+  }
   const used = new Set<string>()
   const days: z.infer<typeof PreviousWeekProposalDaySchema>[] = []
 
@@ -1788,11 +1844,15 @@ export async function previewPreviousWeekProposal(
     else if ((changedCounts.get(previousRecipe.id) ?? 0) >= 2) rejection = 'changed-plan-often'
 
     const available = candidates.filter((candidate) => !used.has(candidate.id) && householdSignals[candidate.id] !== 'not_for_us' && feedback[candidate.id]?.vote !== 'down')
-    const ranked = rankCandidates(available.length ? available : candidates, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds: [...fatiguedIds] })
+    const preferredPrepRecipeIds = prepRecipeIdsByDate.get(targetDate)
+    const ranked = rankCandidates(available.length ? available : candidates, {
+      householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection,
+      recentMealIds, fatiguedMealIds: [...fatiguedIds], preferredPrepRecipeIds,
+    })
     // Reuse is the promise here. Recency must not turn every meal from last
     // week into a replacement; this comparison only asks whether the target
     // day's explicit context makes another recipe materially better.
-    if (!rejection && previousRecipe && ranked[0] && scoreMeal(ranked[0], { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection }) - scoreMeal(previousRecipe, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection }) >= 8) {
+    if (!rejection && previousRecipe && ranked[0] && scoreMeal(ranked[0], { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, preferredPrepRecipeIds }) - scoreMeal(previousRecipe, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, preferredPrepRecipeIds }) >= 8) {
       rejection = 'week-context'
     }
     const chosen = !rejection && previousRecipe ? previousRecipe : ranked[0]
@@ -1852,7 +1912,7 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
@@ -1912,6 +1972,22 @@ export async function doGenerateWeekPlan(
           inArray(householdMealOutcomes.weekStartDate, priorWeekStartDates),
         ))
     ),
+    withRls(db, accessToken, (tx) => tx
+      .select({ state: shoppingListProjections.state })
+      .from(shoppingListProjections)
+      .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
+      .orderBy(desc(shoppingListProjections.weekStartDate))
+      .limit(1)),
+    withRls(db, accessToken, (tx) => tx
+      .select({ date: householdPrepBatchAssignments.date, recipeId: householdPrepBatches.recipeId })
+      .from(householdPrepBatchAssignments)
+      .innerJoin(householdPrepBatches, eq(householdPrepBatchAssignments.batchId, householdPrepBatches.id))
+      .where(and(
+        eq(householdPrepBatches.householdId, householdId),
+        eq(householdPrepBatchAssignments.mealType, 'dinner'),
+        gte(householdPrepBatchAssignments.date, weekStartDate),
+        lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
+      ))),
   ])
 
   const profile = profileRows[0] ?? null
@@ -1993,7 +2069,14 @@ export async function doGenerateWeekPlan(
     .map(([, meal]) => meal)
 
   const alreadyUsed = new Set(keptMeals.map((m) => m.recipeRef))
-  const weekCtx = createWeekContext()
+  const weekCtx = createWeekContext(readPantryStock(shoppingRows[0]?.state))
+  const prepRecipeIdsByDate = new Map<string, Set<string>>()
+  for (const row of prepAssignmentRows) {
+    if (!row.recipeId) continue
+    const ids = prepRecipeIdsByDate.get(row.date) ?? new Set<string>()
+    ids.add(row.recipeId)
+    prepRecipeIdsByDate.set(row.date, ids)
+  }
   // Seed week-context with this week's already-placed (locked/existing)
   // meals so cuisine/protein-variety and hearty-adjacency scoring account
   // for the whole week, not just the days being filled right now.
@@ -2019,7 +2102,10 @@ export async function doGenerateWeekPlan(
     const date = addDays(weekStartDate, orderedDays.indexOf(day))
     const weekOverride = projState.contextOverrides?.[date]
     const selection = mergeDayPlanningContext(selectedDaysByName.get(day), weekOverride)
-    const ranked = rankCandidates(scoringPool, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds })
+    const ranked = rankCandidates(scoringPool, {
+      householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection,
+      recentMealIds, fatiguedMealIds, preferredPrepRecipeIds: prepRecipeIdsByDate.get(date),
+    })
     const next = ranked[0]
     if (!next) continue
 

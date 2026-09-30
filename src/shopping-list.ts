@@ -8,6 +8,13 @@ import { withRls } from './rls.js'
 import { households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import { normalizeIngredientCategory, readRecipeIngredients } from './ingredient-categories.js'
+import {
+  canonicalIngredientItemKey,
+  ingredientItemKey,
+  ingredientStateItemKeys,
+  normalizeIngredientKeyPart,
+  singularizeIngredientName,
+} from './ingredient-identity.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -390,9 +397,7 @@ function localizeShoppingUnit(unit: string | null, language: TShoppingListLangua
   return SWEDISH_UNIT_LABELS[unit.trim().toLowerCase()] ?? unit
 }
 
-function normalizeKeyPart(value: string | null | undefined) {
-  return (value ?? '').trim().toLowerCase().replace(/\s+/g, '-')
-}
+const normalizeKeyPart = normalizeIngredientKeyPart
 
 function customItemIdentity(item: { label: string; category: string }) {
   return `${normalizeKeyPart(item.category)}:${(item.label ?? '').trim().toLowerCase().replace(/\s+/g, ' ')}`
@@ -408,50 +413,11 @@ function deduplicateCustomItems(items: Array<{ itemKey: string; label: string; c
   })
 }
 
-function buildItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(normalizeIngredientCategory(ingredient.item, ingredient.category))
-  const item = normalizeKeyPart(ingredient.item)
-  const unit = normalizeKeyPart(ingredient.unit)
-  return [category, item, unit].join(':')
-}
+const buildItemKey = ingredientItemKey
+const singularizeShoppingItem = singularizeIngredientName
+const buildCanonicalItemKey = canonicalIngredientItemKey
 
-function singularizeShoppingItem(value: string) {
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ')
-  if (normalized.endsWith('ies') && normalized.length > 4) return `${normalized.slice(0, -3)}y`
-  if (normalized.endsWith('oes') && normalized.length > 4) return normalized.slice(0, -2)
-  if (normalized.endsWith('s') && !normalized.endsWith('ss') && normalized.length > 3) return normalized.slice(0, -1)
-  return normalized
-}
-
-function buildCanonicalItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(normalizeIngredientCategory(ingredient.item, ingredient.category))
-  const item = normalizeKeyPart(singularizeShoppingItem(ingredient.item))
-  const unit = normalizeKeyPart(ingredient.unit)
-  return [category, item, unit].join(':')
-}
-
-function buildLegacyItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(ingredient.category) || 'other'
-  const item = normalizeKeyPart(ingredient.item)
-  const unit = normalizeKeyPart(ingredient.unit)
-  return [category, item, unit].join(':')
-}
-
-function buildLegacyCanonicalItemKey(ingredient: TRecipeIngredient) {
-  const category = normalizeKeyPart(ingredient.category) || 'other'
-  const item = normalizeKeyPart(singularizeShoppingItem(ingredient.item))
-  const unit = normalizeKeyPart(ingredient.unit)
-  return [category, item, unit].join(':')
-}
-
-function buildStateItemKeys(ingredient: TRecipeIngredient) {
-  return new Set([
-    buildItemKey(ingredient),
-    buildCanonicalItemKey(ingredient),
-    buildLegacyItemKey(ingredient),
-    buildLegacyCanonicalItemKey(ingredient),
-  ])
-}
+const buildStateItemKeys = ingredientStateItemKeys
 
 function preferredShoppingLabel(current: string, candidate: string) {
   const currentTrimmed = current.trim()

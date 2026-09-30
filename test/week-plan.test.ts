@@ -7,7 +7,7 @@ import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
-import { householdMealOutcomes, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { householdMealOutcomes, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
   previewPreviousWeekProposal,
@@ -291,6 +291,9 @@ describeWithDb('Week-plan event log + projection', () => {
   // before any suite starts — see test/global-setup.ts.
 
   beforeEach(async () => {
+    await db.execute(sql`delete from "household_prep_batch_assignments"`)
+    await db.execute(sql`delete from "household_prep_batches"`)
+    await db.execute(sql`delete from "shopping_list_projections"`)
     await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
@@ -315,6 +318,9 @@ describeWithDb('Week-plan event log + projection', () => {
   })
 
   afterAll(async () => {
+    await db.execute(sql`delete from "household_prep_batch_assignments"`)
+    await db.execute(sql`delete from "household_prep_batches"`)
+    await db.execute(sql`delete from "shopping_list_projections"`)
     await db.execute(sql`delete from "household_meal_outcomes"`)
     await db.execute(sql`delete from "household_meal_signals"`)
     await db.execute(sql`delete from "meal_feedback"`)
@@ -1754,6 +1760,59 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.recipe?.title).toBe('Manual Pick')
       expect(summary?.days[0]?.reason).toBeNull()
       expect(summary?.days[0]?.confidence).toBeNull()
+    })
+
+    it('prioritizes an explicit dinner prep chain over an otherwise equal candidate', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const ordinary = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Ordinary dinner', ingredients: [{ item: 'zucchini', amount: '1', unit: 'pc', category: 'produce' }],
+      })
+      const prepared = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Prepared dinner', ingredients: [{ item: 'beans', amount: '200', unit: 'g', category: 'pantry' }],
+      })
+      const [batch] = await db.insert(householdPrepBatches).values({
+        householdId: householdAId, recipeId: prepared.id, cookDate: weekStartDate, totalPortions: 8, createdBy: userA,
+      }).returning()
+      await db.insert(householdPrepBatchAssignments).values({ batchId: batch!.id, date: weekStartDate, mealType: 'dinner' })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false)
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.id).toBe(prepared.id)
+      expect(summary?.days[0]?.recipe?.id).not.toBe(ordinary.id)
+    })
+
+    it('reports only ingredient-derived economy metrics and honors pantry state', async () => {
+      const first = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Tomato rice', ingredients: [
+          { item: 'tomatoes', amount: '2', unit: 'pc', category: 'produce' },
+          { item: 'rice', amount: '200', unit: 'g', category: 'pantry' },
+        ],
+      })
+      const second = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Tomato beans', ingredients: [
+          { item: 'tomato', amount: '1', unit: 'pc', category: 'produce' },
+          { item: 'beans', amount: '200', unit: 'g', category: 'pantry' },
+        ],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId, weekStartDate,
+        state: { weekStarted: true, request: null, meals: { monday: { recipeRef: first.id }, tuesday: { recipeRef: second.id } }, lockedDays: [], skippedDays: [] },
+      })
+      await db.insert(shoppingListProjections).values({
+        householdId: householdAId, weekStartDate,
+        state: { listStarted: true, checkedItems: {}, pantryStock: { 'pantry:rice:g': 100 }, customItems: [] },
+      })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.economy).toEqual({
+        uniqueIngredientCount: 3,
+        uniquePurchaseCount: 2,
+        pantryCoveredIngredientCount: 1,
+        reusedIngredientCount: 1,
+      })
+      expect(summary?.explanations).toContainEqual({ kind: 'shared-ingredient', ingredient: 'tomatoes', dinnerCount: 2 })
     })
 
     it('keeps cooked meals but replaces a family veto in an improved previous-week proposal', async () => {

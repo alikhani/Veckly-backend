@@ -4,12 +4,13 @@
 // recipe-row and feedback-row shapes. Kept as pure functions (no DB access)
 // so they're unit-testable without a database, matching the web engine's
 // own test structure.
+import { canonicalIngredientItemKey, pantryCoversIngredient } from './ingredient-identity.js'
 
 export type TScoringRecipe = {
   id: string
   title: string
   tags: string[]
-  ingredients: Array<{ item: string }> | null
+  ingredients: Array<{ item: string; unit?: string | null; category?: string | null }> | null
   servings: number
   prepTimeMinutes: number | null
   cuisine: string | null
@@ -180,10 +181,12 @@ export type TWeekContext = {
   placedCuisines: Record<string, number>
   placedProteins: Record<string, number>
   placedWeights: Array<string | null>
+  ingredientUseCounts: Record<string, number>
+  pantryStock: Record<string, number>
 }
 
-export function createWeekContext(): TWeekContext {
-  return { placedCuisines: {}, placedProteins: {}, placedWeights: [] }
+export function createWeekContext(pantryStock: Record<string, number> = {}): TWeekContext {
+  return { placedCuisines: {}, placedProteins: {}, placedWeights: [], ingredientUseCounts: {}, pantryStock }
 }
 
 /** Penalizes repeating the same cuisine/protein a 3rd+ time in the week, and
@@ -211,6 +214,82 @@ export function updateWeekContext(ctx: TWeekContext, recipe: TScoringRecipe): vo
   if (recipe.cuisine) ctx.placedCuisines[recipe.cuisine] = (ctx.placedCuisines[recipe.cuisine] ?? 0) + 1
   if (recipe.proteinSource) ctx.placedProteins[recipe.proteinSource] = (ctx.placedProteins[recipe.proteinSource] ?? 0) + 1
   ctx.placedWeights.push(recipe.mealWeight)
+  for (const key of recipeIngredientKeys(recipe)) {
+    ctx.ingredientUseCounts[key] = (ctx.ingredientUseCounts[key] ?? 0) + 1
+  }
+}
+
+const ECONOMY_EXCLUDED_ITEMS = new Set([
+  'salt', 'salt and pepper', 'pepper', 'black pepper', 'water', 'oil', 'olive oil',
+  'salt och peppar', 'svartpeppar', 'vatten', 'olja', 'olivolja',
+])
+
+function recipeIngredients(recipe: TScoringRecipe) {
+  return (recipe.ingredients ?? []).filter((ingredient) => {
+    const item = ingredient.item.trim().toLocaleLowerCase('sv-SE').replace(/\s+/g, ' ')
+    return item.length > 0 && !ECONOMY_EXCLUDED_ITEMS.has(item)
+  })
+}
+
+export function recipeIngredientKeys(recipe: TScoringRecipe) {
+  return new Set(recipeIngredients(recipe).map(canonicalIngredientItemKey))
+}
+
+export function scoreIngredientEconomy(
+  recipe: TScoringRecipe,
+  ctx: TWeekContext,
+  preferredPrepRecipeIds: Set<string> | undefined,
+) {
+  const ingredients = recipeIngredients(recipe)
+  const keys = new Set(ingredients.map(canonicalIngredientItemKey))
+  const overlapCount = [...keys].filter((key) => (ctx.ingredientUseCounts[key] ?? 0) > 0).length
+  const pantryCount = ingredients.filter((ingredient) => pantryCoversIngredient(ingredient, ctx.pantryStock)).length
+  const newCount = [...keys].filter((key) => (ctx.ingredientUseCounts[key] ?? 0) === 0).length
+  const prepChainScore = preferredPrepRecipeIds?.has(recipe.id) ? 14 : 0
+  return prepChainScore
+    + Math.min(3, overlapCount) * 1.25
+    + Math.min(3, pantryCount) * 0.75
+    - Math.min(10, newCount) * 0.15
+}
+
+export type TWeekEconomyMetrics = {
+  uniqueIngredientCount: number
+  uniquePurchaseCount: number
+  pantryCoveredIngredientCount: number
+  reusedIngredientCount: number
+}
+
+export function evaluateWeekEconomy(recipes: TScoringRecipe[], pantryStock: Record<string, number>): TWeekEconomyMetrics {
+  const useCounts = new Map<string, number>()
+  const pantryCovered = new Set<string>()
+  for (const recipe of recipes) {
+    const ingredients = recipeIngredients(recipe)
+    const keysForRecipe = new Set(ingredients.map(canonicalIngredientItemKey))
+    for (const key of keysForRecipe) useCounts.set(key, (useCounts.get(key) ?? 0) + 1)
+    for (const ingredient of ingredients) {
+      if (pantryCoversIngredient(ingredient, pantryStock)) pantryCovered.add(canonicalIngredientItemKey(ingredient))
+    }
+  }
+  return {
+    uniqueIngredientCount: useCounts.size,
+    uniquePurchaseCount: Math.max(0, useCounts.size - pantryCovered.size),
+    pantryCoveredIngredientCount: pantryCovered.size,
+    reusedIngredientCount: [...useCounts.values()].filter((count) => count >= 2).length,
+  }
+}
+
+export function compareApprovedWeeksByEconomy(
+  left: TScoringRecipe[],
+  right: TScoringRecipe[],
+  pantryStock: Record<string, number>,
+) {
+  const leftMetrics = evaluateWeekEconomy(left, pantryStock)
+  const rightMetrics = evaluateWeekEconomy(right, pantryStock)
+  const purchaseDifference = leftMetrics.uniquePurchaseCount - rightMetrics.uniquePurchaseCount
+  if (purchaseDifference !== 0) return purchaseDifference
+  const reuseDifference = rightMetrics.reusedIngredientCount - leftMetrics.reusedIngredientCount
+  if (reuseDifference !== 0) return reuseDifference
+  return left.map((recipe) => recipe.id).join('|').localeCompare(right.map((recipe) => recipe.id).join('|'))
 }
 
 export type TScoringContext = {
@@ -222,6 +301,7 @@ export type TScoringContext = {
   selection?: TDaySelection
   recentMealIds?: TRecentMealIds
   fatiguedMealIds?: string[]
+  preferredPrepRecipeIds?: Set<string>
 }
 
 export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number {
@@ -233,6 +313,7 @@ export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number 
   score += scoreWeekConstraints(recipe, ctx.weekCtx)
   score += scoreRecency(recipe, ctx.recentMealIds)
   score += scoreFatigue(recipe, ctx.fatiguedMealIds)
+  score += scoreIngredientEconomy(recipe, ctx.weekCtx, ctx.preferredPrepRecipeIds)
   return score
 }
 

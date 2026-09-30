@@ -2293,6 +2293,33 @@
             },
             "maxItems": 2
           },
+          "economy": {
+            "type": "object",
+            "properties": {
+              "uniqueIngredientCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "uniquePurchaseCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pantryCoveredIngredientCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reusedIngredientCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "uniqueIngredientCount",
+              "uniquePurchaseCount",
+              "pantryCoveredIngredientCount",
+              "reusedIngredientCount"
+            ]
+          },
           "days": {
             "type": "array",
             "items": {
@@ -2305,6 +2332,7 @@
           "weekStartDate",
           "updatedAt",
           "explanations",
+          "economy",
           "days"
         ]
       },

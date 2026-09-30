@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   computeCurrentStreak,
+  compareApprovedWeeksByEconomy,
   createWeekContext,
   deriveAssignmentReason,
   detectFatiguedMeals,
   evaluateAssignmentConfidence,
+  evaluateWeekEconomy,
   extractRecentMealIds,
   rankCandidates,
   scoreCookingTolerance,
@@ -13,6 +15,7 @@ import {
   scoreFatigue,
   scoreLateEvening,
   scoreHouseholdMealSignal,
+  scoreIngredientEconomy,
   scoreMeal,
   scoreMealFromFeedback,
   scoreRecency,
@@ -219,6 +222,65 @@ describe('week constraint scoring', () => {
 
     expect(scoreWeekConstraints(heartyNext, ctx)).toBe(-4)
     expect(scoreWeekConstraints(lightNext, ctx)).toBe(0)
+  })
+})
+
+describe('ingredient economy scoring', () => {
+  it('prefers a candidate that reuses a real ingredient when quality is otherwise equal', () => {
+    const ctx = createWeekContext()
+    updateWeekContext(ctx, recipe({ id: 'first', ingredients: [{ item: 'Spinach', unit: 'g', category: 'produce' }] }))
+    const overlap = recipe({ id: 'overlap', ingredients: [{ item: 'spinach', unit: 'g', category: 'produce' }] })
+    const unrelated = recipe({ id: 'unrelated', ingredients: [{ item: 'zucchini', unit: 'g', category: 'produce' }] })
+
+    expect(scoreIngredientEconomy(overlap, ctx, undefined)).toBeGreaterThan(scoreIngredientEconomy(unrelated, ctx, undefined))
+    expect(rankCandidates([unrelated, overlap], baseContext({ allRecipes: [overlap, unrelated], weekCtx: ctx }))[0]?.id).toBe('overlap')
+  })
+
+  it('uses pantry stock as a modest signal without treating it as an exact balance', () => {
+    const pantryRecipe = recipe({ id: 'pantry', ingredients: [{ item: 'rice', unit: 'g', category: 'pantry' }] })
+    const other = recipe({ id: 'other', ingredients: [{ item: 'pasta', unit: 'g', category: 'pantry' }] })
+    const ctx = createWeekContext({ 'pantry:rice:g': 1 })
+
+    expect(scoreIngredientEconomy(pantryRecipe, ctx, undefined)).toBeGreaterThan(scoreIngredientEconomy(other, ctx, undefined))
+  })
+
+  it('makes an explicit prep chain stronger than raw ingredient overlap', () => {
+    const prepared = recipe({ id: 'prepared', ingredients: [{ item: 'beans', unit: 'g' }] })
+    const overlap = recipe({ id: 'overlap', ingredients: [
+      { item: 'spinach', unit: 'g' }, { item: 'rice', unit: 'g' }, { item: 'tomato', unit: 'g' },
+    ] })
+    const ctx = createWeekContext()
+    updateWeekContext(ctx, recipe({ id: 'first', ingredients: overlap.ingredients }))
+
+    expect(scoreIngredientEconomy(prepared, ctx, new Set(['prepared']))).toBeGreaterThan(scoreIngredientEconomy(overlap, ctx, undefined))
+  })
+
+  it('calculates deterministic purchases, pantry coverage, and reuse from actual ingredients', () => {
+    const meals = [
+      recipe({ id: 'a', ingredients: [{ item: 'Tomatoes', unit: 'pc', category: 'produce' }, { item: 'rice', unit: 'g', category: 'pantry' }] }),
+      recipe({ id: 'b', ingredients: [{ item: 'tomato', unit: 'pc', category: 'produce' }, { item: 'beans', unit: 'g', category: 'pantry' }] }),
+    ]
+
+    expect(evaluateWeekEconomy(meals, { 'pantry:rice:g': 200 })).toEqual({
+      uniqueIngredientCount: 3,
+      uniquePurchaseCount: 2,
+      pantryCoveredIngredientCount: 1,
+      reusedIngredientCount: 1,
+    })
+  })
+
+  it('prefers the approved week with fewer unique purchases when other quality is equal', () => {
+    const sharedWeek = [
+      recipe({ id: 'shared-a', ingredients: [{ item: 'tomato', unit: 'pc' }, { item: 'rice', unit: 'g' }] }),
+      recipe({ id: 'shared-b', ingredients: [{ item: 'tomatoes', unit: 'pc' }, { item: 'beans', unit: 'g' }] }),
+    ]
+    const broadWeek = [
+      recipe({ id: 'broad-a', ingredients: [{ item: 'zucchini', unit: 'pc' }, { item: 'pasta', unit: 'g' }] }),
+      recipe({ id: 'broad-b', ingredients: [{ item: 'spinach', unit: 'g' }, { item: 'beans', unit: 'g' }] }),
+    ]
+
+    expect(compareApprovedWeeksByEconomy(sharedWeek, broadWeek, {})).toBeLessThan(0)
+    expect(compareApprovedWeeksByEconomy(broadWeek, sharedWeek, {})).toBeGreaterThan(0)
   })
 })
 

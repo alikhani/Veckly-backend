@@ -1267,6 +1267,7 @@
               "week_context_override_upserted",
               "week_context_override_cleared",
               "week_rescued",
+              "previous_week_reused",
               "week_plan_cleared"
             ]
           },
@@ -1364,6 +1365,85 @@
           "afterRecipeTitle",
           "beforeServings",
           "afterServings"
+        ]
+      },
+      "PreviousWeekReuseReason": {
+        "type": "string",
+        "enum": [
+          "worked-last-week",
+          "not-cooked",
+          "family-veto",
+          "disliked",
+          "fatigued",
+          "changed-plan-often",
+          "week-context",
+          "fills-selected-day"
+        ]
+      },
+      "PreviousWeekProposalDay": {
+        "type": "object",
+        "properties": {
+          "dayOfWeek": {
+            "type": "string",
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          },
+          "date": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "kept",
+              "replaced",
+              "added"
+            ]
+          },
+          "reason": {
+            "$ref": "#/components/schemas/PreviousWeekReuseReason"
+          },
+          "previousRecipeRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "previousRecipeTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipeRef": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipeTitle": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "dayOfWeek",
+          "date",
+          "action",
+          "reason",
+          "previousRecipeRef",
+          "previousRecipeTitle",
+          "recipeRef",
+          "recipeTitle",
+          "servings"
         ]
       },
       "AppendWeekPlanEventRequest": {
@@ -1909,6 +1989,37 @@
                   "eventType": {
                     "type": "string",
                     "enum": [
+                      "previous_week_reused"
+                    ]
+                  },
+                  "proposalId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "sourceWeekStartDate": {
+                    "type": "string"
+                  },
+                  "days": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PreviousWeekProposalDay"
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "proposalId",
+                  "sourceWeekStartDate",
+                  "days"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
                       "week_plan_cleared"
                     ]
                   }
@@ -2334,6 +2445,104 @@
           "ok",
           "alreadyApplied",
           "preview"
+        ]
+      },
+      "PreviousWeekProposal": {
+        "type": "object",
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceWeekStartDate": {
+            "type": "string"
+          },
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keptCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "changedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviousWeekProposalDay"
+            }
+          }
+        },
+        "required": [
+          "proposalId",
+          "sourceWeekStartDate",
+          "expectedUpdatedAt",
+          "keptCount",
+          "changedCount",
+          "days"
+        ]
+      },
+      "PreviousWeekProposalError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "NO_COMPLETED_WEEK",
+              "NO_RECIPES",
+              "ALL_RECIPES_EXCLUDED",
+              "STALE_WEEK_PLAN"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "PreviousWeekProposalRequest": {
+        "type": "object",
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "proposalId",
+          "expectedUpdatedAt"
+        ]
+      },
+      "PreviousWeekProposalApplyResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyApplied": {
+            "type": "boolean"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/PreviousWeekProposal"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyApplied",
+          "proposal"
         ]
       },
       "WeekHistoryListItem": {
@@ -6623,6 +6832,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WeekRescueError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/previous-week/preview": {
+      "post": {
+        "operationId": "previewPreviousWeekProposal",
+        "summary": "Preview an improved reuse of the latest completed week",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviousWeekProposalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A non-mutating improved-week proposal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          },
+          "409": {
+            "description": "The target week changed since the request was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposalError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No completed week or safe recipe pool is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposalError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/previous-week/apply": {
+      "post": {
+        "operationId": "applyPreviousWeekProposal",
+        "summary": "Apply an improved previous-week proposal idempotently",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviousWeekProposalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The proposal was applied or had already been applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposalApplyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          },
+          "409": {
+            "description": "The target week changed since preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposalError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No completed week or safe recipe pool is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviousWeekProposalError"
                 }
               }
             }

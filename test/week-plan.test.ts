@@ -10,6 +10,8 @@ import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdMealOutcomes, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
+  previewPreviousWeekProposal,
+  applyPreviousWeekProposal,
   deriveWeekExplanations,
   deriveWeekRescuePreview,
   applyWeekRescue,
@@ -658,6 +660,20 @@ describeWithDb('Week-plan event log + projection', () => {
 
       const afterUnassign = foldEventIntoProjection(afterUnskip, { eventType: 'meal_unassigned', dayOfWeek: 'tuesday' })
       expect(afterUnassign.meals.tuesday).toBeUndefined()
+
+      const reused = foldEventIntoProjection(afterLock, {
+        eventType: 'previous_week_reused',
+        proposalId: '33333333-3333-3333-3333-333333333333',
+        sourceWeekStartDate: '2026-06-01',
+        days: [{
+          dayOfWeek: 'monday', date: '2026-06-08', action: 'kept', reason: 'worked-last-week',
+          previousRecipeRef: '11111111-1111-1111-1111-111111111111', previousRecipeTitle: 'Pasta',
+          recipeRef: '11111111-1111-1111-1111-111111111111', recipeTitle: 'Pasta', servings: 4,
+        }],
+      })
+      expect(reused.weekStarted).toBe(true)
+      expect(reused.meals).toEqual({ monday: { recipeRef: '11111111-1111-1111-1111-111111111111', servings: 4 } })
+      expect(reused.lockedDays).toEqual(['monday'])
 
       const cleared = foldEventIntoProjection(afterUnassign, { eventType: 'week_plan_cleared' })
       expect(cleared).toEqual(emptyProjectionState())
@@ -1738,6 +1754,46 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[0]?.recipe?.title).toBe('Manual Pick')
       expect(summary?.days[0]?.reason).toBeNull()
       expect(summary?.days[0]?.confidence).toBeNull()
+    })
+
+    it('keeps cooked meals but replaces a family veto in an improved previous-week proposal', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      const keeper = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Keeper' })
+      const vetoed = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Vetoed' })
+      const replacement = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Replacement', tags: ['quick'] })
+      await seedOutcome({ weekStartDate: '2026-06-01', date: '2026-06-01', plannedRecipeId: keeper.id, status: 'cooked' })
+      await seedOutcome({ weekStartDate: '2026-06-01', date: '2026-06-02', plannedRecipeId: vetoed.id, status: 'cooked' })
+      await upsertHouseholdMealSignal(db, fakeAccessToken(userA), userA, householdAId, vetoed.id, 'not_for_us')
+
+      const proposal = await previewPreviousWeekProposal(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, {
+        proposalId: '33333333-3333-3333-3333-333333333333', expectedUpdatedAt: null,
+      })
+
+      expect(proposal).toMatchObject({ keptCount: 1, changedCount: 1 })
+      if ('error' in proposal) throw new Error('Expected proposal')
+      expect(proposal.days[0]).toMatchObject({ action: 'kept', reason: 'worked-last-week', recipeRef: keeper.id })
+      expect(proposal.days[1]).toMatchObject({ action: 'replaced', reason: 'family-veto' })
+      expect(proposal.days[1]?.recipeRef).not.toBe(vetoed.id)
+      expect([keeper.id, replacement.id]).toContain(proposal.days[1]?.recipeRef)
+    })
+
+    it('applies the proposal only once and replaces the target week as one event', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const keeper = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Keeper' })
+      await seedOutcome({ weekStartDate: '2026-06-01', plannedRecipeId: keeper.id, status: 'cooked' })
+      const request = { proposalId: '44444444-4444-4444-4444-444444444444', expectedUpdatedAt: null }
+
+      const first = await applyPreviousWeekProposal(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, request)
+      const second = await applyPreviousWeekProposal(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, request)
+
+      expect(first).toMatchObject({ ok: true, alreadyApplied: false })
+      expect(second).toMatchObject({ ok: true, alreadyApplied: true })
+      const events = await db.select().from(weekPlanEvents).where(and(
+        eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.eventType, 'previous_week_reused'),
+      ))
+      expect(events).toHaveLength(1)
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]?.recipe?.id).toBe(keeper.id)
     })
   })
 })

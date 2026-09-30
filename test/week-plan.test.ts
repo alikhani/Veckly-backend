@@ -10,6 +10,7 @@ import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdMealOutcomes, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
+  deriveWeekExplanations,
   clearWeekContextOverride,
   finalizeWeekHistoryPlan,
   foldEventIntoProjection,
@@ -29,6 +30,49 @@ import { fakeAccessToken } from './fake-access-token.js'
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
+
+describe('deriveWeekExplanations', () => {
+  it('returns at most two deterministic, evidence-backed explanations', () => {
+    const explanations = deriveWeekExplanations({
+      days: [
+        { date: '2026-06-08', reason: 'week-override', recipe: { id: 'pasta', title: 'Snabb pasta' } },
+        { date: '2026-06-10', reason: null, recipe: { id: 'soup', title: 'Tomatsoppa' } },
+      ],
+      recipeIngredients: new Map([
+        ['pasta', [{ item: 'Tomat' }, { item: 'salt' }]],
+        ['soup', [{ item: 'Tomat' }, { item: 'salt' }]],
+      ]),
+      prepLinks: [{
+        recipeId: 'pasta',
+        recipeTitle: 'Snabb pasta',
+        cookDate: '2026-06-08',
+        coveredDates: ['2026-06-08', '2026-06-11'],
+      }],
+    })
+
+    expect(explanations).toEqual([
+      { kind: 'week-context', date: '2026-06-08', recipeTitle: 'Snabb pasta' },
+      { kind: 'leftover-chain', recipeTitle: 'Snabb pasta', cookDate: '2026-06-08', coveredDates: ['2026-06-11'] },
+    ])
+  })
+
+  it('only claims a shared ingredient when distinct planned recipes use it', () => {
+    const explanations = deriveWeekExplanations({
+      days: [
+        { date: '2026-06-08', reason: null, recipe: { id: 'one', title: 'One' } },
+        { date: '2026-06-09', reason: null, recipe: { id: 'one', title: 'One again' } },
+        { date: '2026-06-10', reason: null, recipe: { id: 'two', title: 'Two' } },
+      ],
+      recipeIngredients: new Map([
+        ['one', [{ item: 'Citron' }]],
+        ['two', [{ item: 'citron' }]],
+      ]),
+      prepLinks: [],
+    })
+
+    expect(explanations).toEqual([{ kind: 'shared-ingredient', ingredient: 'Citron', dinnerCount: 2 }])
+  })
+})
 
 describe('recipeMatchesAvoided', () => {
   it('does not match on the title when the recipe has itemized ingredients', () => {
@@ -749,6 +793,36 @@ describeWithDb('Week-plan event log + projection', () => {
           tags: ['weekday'],
         },
       })
+    })
+
+    it('explains a shared ingredient only when separate planned recipes use it', async () => {
+      const pasta = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Tomato pasta',
+        ingredients: [{ item: 'Tomat', amount: '4', unit: 'st', category: 'produce' }],
+      })
+      const soup = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Tomato soup',
+        ingredients: [{ item: 'tomat', amount: '6', unit: 'st', category: 'produce' }],
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: { monday: { recipeRef: pasta.id }, tuesday: { recipeRef: soup.id } },
+          lockedDays: [],
+          skippedDays: [],
+        },
+      })
+
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.explanations).toEqual([
+        { kind: 'shared-ingredient', ingredient: 'Tomat', dinnerCount: 2 },
+      ])
     })
 
     it('surfaces a satiation streak when a recipe has been cooked 3+ consecutive weeks', async () => {

@@ -1812,6 +1812,84 @@
           "updatedAt"
         ]
       },
+      "WeekPlanExplanation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "week-context"
+                ]
+              },
+              "date": {
+                "type": "string"
+              },
+              "recipeTitle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "date",
+              "recipeTitle"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "leftover-chain"
+                ]
+              },
+              "recipeTitle": {
+                "type": "string"
+              },
+              "cookDate": {
+                "type": "string"
+              },
+              "coveredDates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind",
+              "recipeTitle",
+              "cookDate",
+              "coveredDates"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "shared-ingredient"
+                ]
+              },
+              "ingredient": {
+                "type": "string"
+              },
+              "dinnerCount": {
+                "type": "integer",
+                "minimum": 2
+              }
+            },
+            "required": [
+              "kind",
+              "ingredient",
+              "dinnerCount"
+            ]
+          }
+        ]
+      },
       "WeekPlanSummaryRecipe": {
         "type": [
           "object",
@@ -1963,6 +2041,13 @@
               "null"
             ]
           },
+          "explanations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WeekPlanExplanation"
+            },
+            "maxItems": 2
+          },
           "days": {
             "type": "array",
             "items": {
@@ -1974,6 +2059,7 @@
           "household",
           "weekStartDate",
           "updatedAt",
+          "explanations",
           "days"
         ]
       },

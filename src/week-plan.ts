@@ -8,7 +8,8 @@ import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeekl
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdMealOutcomes, householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdMealOutcomes, householdMealSignals, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { readRecipeIngredients } from './ingredient-categories.js'
 import {
   DayPlanningContextSchema,
   HouseholdDaySelectionSchema,
@@ -242,10 +243,30 @@ const WeekPlanSummaryDaySchema = z.object({
   streakWeeks: z.number().int().nullable(),
 }).openapi('WeekPlanSummaryDay')
 
+const WeekPlanExplanationSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('week-context'),
+    date: z.string(),
+    recipeTitle: z.string(),
+  }),
+  z.object({
+    kind: z.literal('leftover-chain'),
+    recipeTitle: z.string(),
+    cookDate: z.string(),
+    coveredDates: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal('shared-ingredient'),
+    ingredient: z.string(),
+    dinnerCount: z.number().int().min(2),
+  }),
+]).openapi('WeekPlanExplanation')
+
 const WeekPlanSummarySchema = z.object({
   household: z.object({ id: z.string().uuid(), name: z.string() }),
   weekStartDate: z.string(),
   updatedAt: z.string().nullable(),
+  explanations: z.array(WeekPlanExplanationSchema).max(2),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
 
@@ -1012,6 +1033,62 @@ export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userI
   })
 }
 
+type TWeekExplanation = z.infer<typeof WeekPlanExplanationSchema>
+
+const EXCLUDED_SHARED_INGREDIENTS = new Set([
+  'salt', 'salt and pepper', 'pepper', 'black pepper', 'water', 'oil', 'olive oil',
+  'salt och peppar', 'svartpeppar', 'vatten', 'olja', 'olivolja',
+])
+
+function normalizedIngredientName(value: string) {
+  return value.trim().toLocaleLowerCase('sv-SE').replace(/\s+/g, ' ')
+}
+
+export function deriveWeekExplanations(input: {
+  days: Array<{ date: string; reason: string | null; recipe: { id: string; title: string } | null }>
+  recipeIngredients: Map<string, Array<{ item: string }>>
+  prepLinks: Array<{ recipeId: string | null; recipeTitle: string | null; cookDate: string; coveredDates: string[] }>
+}): TWeekExplanation[] {
+  const explanations: TWeekExplanation[] = []
+
+  const contextDay = input.days.find((day) => day.reason === 'week-override' && day.recipe)
+  if (contextDay?.recipe) {
+    explanations.push({ kind: 'week-context', date: contextDay.date, recipeTitle: contextDay.recipe.title })
+  }
+
+  const prepLink = input.prepLinks
+    .filter((link) => link.recipeTitle && link.coveredDates.some((date) => date > link.cookDate))
+    .sort((left, right) => left.cookDate.localeCompare(right.cookDate))[0]
+  if (prepLink?.recipeTitle) {
+    explanations.push({
+      kind: 'leftover-chain',
+      recipeTitle: prepLink.recipeTitle,
+      cookDate: prepLink.cookDate,
+      coveredDates: [...new Set(prepLink.coveredDates.filter((date) => date > prepLink.cookDate))].sort(),
+    })
+  }
+
+  const ingredientUsage = new Map<string, { label: string; recipeIds: Set<string> }>()
+  for (const day of input.days) {
+    if (!day.recipe) continue
+    for (const ingredient of input.recipeIngredients.get(day.recipe.id) ?? []) {
+      const normalized = normalizedIngredientName(ingredient.item)
+      if (!normalized || EXCLUDED_SHARED_INGREDIENTS.has(normalized)) continue
+      const usage = ingredientUsage.get(normalized) ?? { label: ingredient.item.trim(), recipeIds: new Set<string>() }
+      usage.recipeIds.add(day.recipe.id)
+      ingredientUsage.set(normalized, usage)
+    }
+  }
+  const sharedIngredient = [...ingredientUsage.entries()]
+    .filter(([, usage]) => usage.recipeIds.size >= 2)
+    .sort(([leftKey, left], [rightKey, right]) => right.recipeIds.size - left.recipeIds.size || leftKey.localeCompare(rightKey))[0]?.[1]
+  if (sharedIngredient) {
+    explanations.push({ kind: 'shared-ingredient', ingredient: sharedIngredient.label, dinnerCount: sharedIngredient.recipeIds.size })
+  }
+
+  return explanations.slice(0, 2)
+}
+
 export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
   return withRls(db, accessToken, async (tx) => {
     const [household] = await tx
@@ -1084,6 +1161,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           prepTimeMinutes: recipes.prepTimeMinutes,
           cookTimeMinutes: recipes.cookTimeMinutes,
           tags: recipes.tags,
+          ingredients: recipes.ingredients,
         })
         .from(recipes)
         .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
@@ -1091,34 +1169,65 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
 
     const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
 
+    const prepBatches = await tx
+      .select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId, cookDate: householdPrepBatches.cookDate })
+      .from(householdPrepBatches)
+      .where(and(
+        eq(householdPrepBatches.householdId, householdId),
+        gte(householdPrepBatches.cookDate, weekStartDate),
+        lte(householdPrepBatches.cookDate, addDays(weekStartDate, 6)),
+      ))
+    const prepAssignments = prepBatches.length
+      ? await tx
+        .select({ batchId: householdPrepBatchAssignments.batchId, date: householdPrepBatchAssignments.date })
+        .from(householdPrepBatchAssignments)
+        .where(inArray(householdPrepBatchAssignments.batchId, prepBatches.map((batch) => batch.id)))
+      : []
+    const assignmentsByBatch = new Map<string, string[]>()
+    for (const assignment of prepAssignments) {
+      assignmentsByBatch.set(assignment.batchId, [...(assignmentsByBatch.get(assignment.batchId) ?? []), assignment.date])
+    }
+
+    const days = orderedDays.map((dayOfWeek, index) => {
+      const meal = projectionState.meals[dayOfWeek]
+      const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
+      const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
+
+      return {
+        dayOfWeek,
+        date: addDays(weekStartDate, index),
+        state,
+        isLocked: projectionState.lockedDays.includes(dayOfWeek),
+        reason: meal?.reason ?? null,
+        confidence: meal?.confidence ?? null,
+        streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
+        recipe: recipe ? {
+          id: recipe.id,
+          title: recipe.title,
+          description: recipe.description,
+          servings: meal?.servings ?? recipe.servings,
+          prepTimeMinutes: recipe.prepTimeMinutes ?? null,
+          cookTimeMinutes: recipe.cookTimeMinutes ?? null,
+          tags: readStringArray(recipe.tags),
+        } : null,
+      }
+    })
+
     return {
       household,
       weekStartDate,
       updatedAt: projection?.updatedAt.toISOString() ?? null,
-      days: orderedDays.map((dayOfWeek, index) => {
-        const meal = projectionState.meals[dayOfWeek]
-        const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
-        const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
-
-        return {
-          dayOfWeek,
-          date: addDays(weekStartDate, index),
-          state,
-          isLocked: projectionState.lockedDays.includes(dayOfWeek),
-          reason: meal?.reason ?? null,
-          confidence: meal?.confidence ?? null,
-          streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
-          recipe: recipe ? {
-            id: recipe.id,
-            title: recipe.title,
-            description: recipe.description,
-            servings: meal?.servings ?? recipe.servings,
-            prepTimeMinutes: recipe.prepTimeMinutes ?? null,
-            cookTimeMinutes: recipe.cookTimeMinutes ?? null,
-            tags: readStringArray(recipe.tags),
-          } : null,
-        }
+      explanations: deriveWeekExplanations({
+        days,
+        recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
+        prepLinks: prepBatches.map((batch) => ({
+          recipeId: batch.recipeId,
+          recipeTitle: batch.recipeId ? recipesById.get(batch.recipeId)?.title ?? null : null,
+          cookDate: batch.cookDate,
+          coveredDates: assignmentsByBatch.get(batch.id) ?? [],
+        })),
       }),
+      days,
     }
   })
 }

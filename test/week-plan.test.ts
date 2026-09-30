@@ -936,6 +936,59 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days.slice(0, 3).every((day) => day.state === 'planned')).toBe(true)
     })
 
+    it('fills only empty relevant days while preserving and composing against manual and locked anchors', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }, { day: 'wednesday' }, { day: 'thursday' }])
+      const manual = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Manual Monday' })
+      const locked = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Locked Tuesday' })
+      const gapA = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Gap A' })
+      const gapB = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Gap B' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, manual.id, { vote: 'up' })
+      await upsertMealFeedback(db, fakeAccessToken(userA), userA, householdAId, locked.id, { vote: 'up' })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: {
+            monday: { recipeRef: manual.id },
+            tuesday: { recipeRef: locked.id },
+          },
+          lockedDays: ['tuesday'],
+          skippedDays: [],
+        } satisfies TWeekPlanProjectionState,
+      })
+
+      const result = await doGenerateWeekPlan(
+        db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03',
+      )
+
+      expect(result).toEqual({ ok: true, generated: true })
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[0]).toMatchObject({
+        dayOfWeek: 'monday',
+        state: 'planned',
+        isLocked: false,
+        recipe: { id: manual.id, title: 'Manual Monday' },
+      })
+      expect(summary?.days[1]).toMatchObject({
+        dayOfWeek: 'tuesday',
+        state: 'planned',
+        isLocked: true,
+        recipe: { id: locked.id, title: 'Locked Tuesday' },
+      })
+      const generatedIds = [summary?.days[2]?.recipe?.id, summary?.days[3]?.recipe?.id]
+      expect(generatedIds).toHaveLength(2)
+      expect(new Set(generatedIds)).toEqual(new Set([gapA.id, gapB.id]))
+
+      const assignmentEvents = await asUser(userA, (tx) => tx
+        .select({ payload: weekPlanEvents.payload })
+        .from(weekPlanEvents)
+        .where(and(eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.eventType, 'meal_assigned'))))
+      expect(assignmentEvents).toHaveLength(2)
+      expect(assignmentEvents.map((event) => (event.payload as { dayOfWeek: string }).dayOfWeek).sort()).toEqual(['thursday', 'wednesday'])
+    })
+
     it('never assigns a meal to a day the household has explicitly skipped', async () => {
       await insertProfile([{ day: 'monday' }, { day: 'wednesday' }])
       await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Monday Pasta' })

@@ -139,6 +139,28 @@ describeWithDb('Recipe recommendation routes', () => {
     expect(body.recommendations).toEqual([{ mealId: 'tacos', reason: 'Good fit.' }])
   })
 
+  it('falls back deterministically when allow and avoid filtering removes every AI result', async () => {
+    setRecipeRecommendationGeneratorForTests(async () => JSON.stringify({
+      recommendations: [
+        { mealId: 'invented-meal', reason: 'Invented.' },
+        { mealId: 'pasta', reason: 'Conflicts with avoid data.' },
+      ],
+    }))
+    const response = await request({
+      ...validBody,
+      householdProfile: { ...validBody.householdProfile, avoidIngredients: ['peanut'] },
+      candidateMeals: [
+        { id: 'tacos', title: 'Tacos', tags: ['quick'], ingredients: ['beans'] },
+        { id: 'pasta', title: 'Pasta', tags: [], ingredients: ['peanut butter'] },
+      ],
+    }, 'user-filtered-empty')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      recommendations: [{ mealId: 'tacos', reason: 'A meal your family already enjoys.' }],
+    })
+  })
+
   it('filters AI recommendations that conflict with avoid ingredients when recipe metadata is supplied', async () => {
     setRecipeRecommendationGeneratorForTests(async () => JSON.stringify({
       recommendations: [

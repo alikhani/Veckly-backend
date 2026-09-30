@@ -77,6 +77,8 @@ export const weekPlanEventType = pgEnum('week_plan_event_type', [
   'day_skipped',
   'day_unskipped',
   'servings_changed',
+  'week_context_override_upserted',
+  'week_context_override_cleared',
   'week_plan_cleared',
 ])
 

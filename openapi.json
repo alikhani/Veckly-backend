@@ -1055,6 +1055,77 @@
           "expiresAt"
         ]
       },
+      "WeekContextOverride": {
+        "type": "object",
+        "properties": {
+          "servingsOverride": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "occasion": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "guests",
+              "treat"
+            ]
+          },
+          "effortLevel": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "busy"
+            ]
+          },
+          "leftoversIntent": {
+            "type": "boolean"
+          },
+          "lateEvening": {
+            "type": "boolean"
+          },
+          "cookingTolerance": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "relaxed"
+            ]
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date"
+        ]
+      },
+      "WeekContextOverridesResponse": {
+        "type": "object",
+        "properties": {
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WeekContextOverride"
+            }
+          }
+        },
+        "required": [
+          "overrides"
+        ]
+      },
+      "ClearWeekContextOverrideResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "GenerateWeekPlanResponse": {
         "type": "object",
         "properties": {
@@ -1193,6 +1264,8 @@
               "day_skipped",
               "day_unskipped",
               "servings_changed",
+              "week_context_override_upserted",
+              "week_context_override_cleared",
               "week_plan_cleared"
             ]
           },
@@ -1391,7 +1464,8 @@
                       "back-after-break",
                       "based-on-feedback",
                       "new-for-variety",
-                      "quick-weekday"
+                      "quick-weekday",
+                      "week-override"
                     ]
                   },
                   "confidence": {
@@ -1400,6 +1474,10 @@
                       "ok",
                       "low"
                     ]
+                  },
+                  "servings": {
+                    "type": "integer",
+                    "minimum": 1
                   }
                 },
                 "required": [
@@ -1621,6 +1699,82 @@
                   "eventType": {
                     "type": "string",
                     "enum": [
+                      "week_context_override_upserted"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "override": {
+                    "type": "object",
+                    "properties": {
+                      "servingsOverride": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "occasion": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "guests",
+                          "treat"
+                        ]
+                      },
+                      "effortLevel": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "busy"
+                        ]
+                      },
+                      "leftoversIntent": {
+                        "type": "boolean"
+                      },
+                      "lateEvening": {
+                        "type": "boolean"
+                      },
+                      "cookingTolerance": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "relaxed"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "date",
+                  "override"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "week_context_override_cleared"
+                    ]
+                  },
+                  "date": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "date"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
                       "week_plan_cleared"
                     ]
                   }
@@ -1749,7 +1903,8 @@
               "back-after-break",
               "based-on-feedback",
               "new-for-variety",
-              "quick-weekday"
+              "quick-weekday",
+              "week-override"
             ]
           },
           "confidence": {
@@ -5510,6 +5665,221 @@
           },
           "409": {
             "description": "Invite is no longer acceptable (revoked, expired, or already used by someone else)"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/context-overrides": {
+      "get": {
+        "operationId": "getWeekContextOverrides",
+        "summary": "Read date-specific planning context for one week",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The explicit overrides saved for this week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekContextOverridesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week start date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/context-overrides/{date}": {
+      "put": {
+        "operationId": "upsertWeekContextOverride",
+        "summary": "Create or replace date-specific planning context for one week",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "servingsOverride": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "occasion": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "guests",
+                      "treat"
+                    ]
+                  },
+                  "effortLevel": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "busy"
+                    ]
+                  },
+                  "leftoversIntent": {
+                    "type": "boolean"
+                  },
+                  "lateEvening": {
+                    "type": "boolean"
+                  },
+                  "cookingTolerance": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "relaxed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekContextOverride"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week or date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "clearWeekContextOverride",
+        "summary": "Clear date-specific planning context for one week",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The override was cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearWeekContextOverrideResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week or date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

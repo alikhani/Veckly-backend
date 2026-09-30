@@ -10,14 +10,17 @@ import { upsertMealFeedback } from '../src/meal-feedback.js'
 import { householdMealOutcomes, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
+  clearWeekContextOverride,
   finalizeWeekHistoryPlan,
   foldEventIntoProjection,
   emptyProjectionState,
   getWeekHistoryPlan,
+  getWeekContextOverrides,
   getWeekPlanSummary,
   listWeekHistoryPlans,
   recipeMatchesAvoided,
   requestToday,
+  upsertWeekContextOverride,
   upsertWeekHistoryPlan,
   type TWeekPlanProjectionState,
 } from '../src/week-plan.js'
@@ -269,6 +272,8 @@ describeWithDb('Week-plan event log + projection', () => {
     | 'day_skipped'
     | 'day_unskipped'
     | 'servings_changed'
+    | 'week_context_override_upserted'
+    | 'week_context_override_cleared'
     | 'week_plan_cleared'
 
   async function appendAsUser(
@@ -374,6 +379,7 @@ describeWithDb('Week-plan event log + projection', () => {
         meals: { monday: { recipeRef: 'recipe-123' } },
         lockedDays: [],
         skippedDays: [],
+        contextOverrides: {},
       })
     })
 
@@ -862,7 +868,71 @@ describeWithDb('Week-plan event log + projection', () => {
     })
   })
 
-  describe('(g) generate week plan', () => {
+  describe('(g) week-specific planning context', () => {
+    it('stores overrides only in their week and clear restores an empty override layer', async () => {
+      const tuesday = '2026-06-09'
+      const nextWeek = '2026-06-15'
+
+      await upsertWeekContextOverride(
+        db,
+        fakeAccessToken(userA),
+        userA,
+        householdAId,
+        weekStartDate,
+        tuesday,
+        { effortLevel: 'busy', lateEvening: true, servingsOverride: 6 },
+      )
+
+      await expect(getWeekContextOverrides(db, fakeAccessToken(userA), householdAId, weekStartDate)).resolves.toEqual([
+        { date: tuesday, effortLevel: 'busy', lateEvening: true, servingsOverride: 6 },
+      ])
+      await expect(getWeekContextOverrides(db, fakeAccessToken(userA), householdAId, nextWeek)).resolves.toEqual([])
+
+      await clearWeekContextOverride(
+        db,
+        fakeAccessToken(userA),
+        userA,
+        householdAId,
+        weekStartDate,
+        tuesday,
+      )
+
+      await expect(getWeekContextOverrides(db, fakeAccessToken(userA), householdAId, weekStartDate)).resolves.toEqual([])
+      const eventTypes = await asUser(userA, (tx) => tx
+        .select({ eventType: weekPlanEvents.eventType })
+        .from(weekPlanEvents)
+        .where(and(eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.weekStartDate, weekStartDate))))
+      expect(eventTypes.map((event) => event.eventType)).toEqual([
+        'week_context_override_upserted',
+        'week_context_override_cleared',
+      ])
+    })
+
+    it('keeps overrides behind household RLS', async () => {
+      await upsertWeekContextOverride(
+        db,
+        fakeAccessToken(userB),
+        userB,
+        householdBId,
+        weekStartDate,
+        '2026-06-09',
+        { effortLevel: 'busy' },
+      )
+
+      await expect(getWeekContextOverrides(db, fakeAccessToken(userA), householdBId, weekStartDate)).resolves.toEqual([])
+      await expect(upsertWeekContextOverride(
+        db,
+        fakeAccessToken(userA),
+        userA,
+        householdBId,
+        weekStartDate,
+        '2026-06-09',
+        { effortLevel: 'busy' },
+      )).rejects.toThrow(/row-level security/i)
+    })
+  })
+
+  describe('(h) generate week plan', () => {
     const baseRecipe = {
       description: 'Fast family pasta',
       servings: 4,
@@ -875,7 +945,7 @@ describeWithDb('Week-plan event log + projection', () => {
       isPublic: false,
     }
 
-    async function insertProfile(selectedDays: Array<{ day: string }>, avoidIngredients: string[] = []) {
+    async function insertProfile(selectedDays: Array<{ day: string } & Record<string, unknown>>, avoidIngredients: string[] = []) {
       await db.insert(householdProfiles).values({
         householdId: householdAId,
         adults: 2,
@@ -934,6 +1004,83 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days.slice(0, 3).every((day) => day.state === 'planned')).toBe(true)
+    })
+
+    it('ranks the right recipe for a date override, carries servings, and returns to the household default after clear', async () => {
+      await insertProfile([{ day: 'tuesday', cookingTolerance: 'relaxed' }])
+      const quick = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Quick Tuesday',
+        tags: ['quick'],
+        prepTimeMinutes: 10,
+      })
+      const relaxed = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Slow Treat',
+        tags: ['treat'],
+        prepTimeMinutes: 45,
+      })
+      const tuesday = '2026-06-09'
+      await upsertWeekContextOverride(
+        db,
+        fakeAccessToken(userA),
+        userA,
+        householdAId,
+        weekStartDate,
+        tuesday,
+        { effortLevel: 'busy', cookingTolerance: 'standard', servingsOverride: 6 },
+      )
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03')
+      let summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[1]).toMatchObject({
+        date: tuesday,
+        reason: 'week-override',
+        recipe: { id: quick.id, servings: 6 },
+      })
+
+      await clearWeekContextOverride(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, tuesday)
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true, '2026-06-03')
+      summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      expect(summary?.days[1]).toMatchObject({
+        date: tuesday,
+        recipe: { id: relaxed.id, servings: 4 },
+      })
+      expect(summary?.days[1]?.reason).not.toBe('week-override')
+    })
+
+    it('preserves locked meals while regeneration uses overrides for the remaining days', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      const locked = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Locked Monday',
+        tags: ['treat'],
+        prepTimeMinutes: 45,
+      })
+      const quick = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Quick Tuesday',
+        tags: ['quick'],
+        prepTimeMinutes: 10,
+      })
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: {
+          weekStarted: true,
+          request: null,
+          meals: { monday: { recipeRef: locked.id } },
+          lockedDays: ['monday'],
+          skippedDays: [],
+          contextOverrides: { '2026-06-09': { effortLevel: 'busy' } },
+        } satisfies TWeekPlanProjectionState,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, true, '2026-06-03')
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]).toMatchObject({ isLocked: true, recipe: { id: locked.id } })
+      expect(summary?.days[1]).toMatchObject({ reason: 'week-override', recipe: { id: quick.id } })
     })
 
     it('fills only empty relevant days while preserving and composing against manual and locked anchors', async () => {

@@ -38,4 +38,17 @@ describe('app-level HTTP contracts', () => {
     expect(transactionResponse.status).toBe(401)
     expect(notificationResponse.status).toBe(503)
   })
+
+  it('publishes read, upsert, and clear contracts for week-specific context', async () => {
+    const response = await app.request('/openapi.json')
+    const spec = await response.json() as {
+      paths: Record<string, Record<string, { operationId?: string }>>
+    }
+    const collection = spec.paths['/households/{householdId}/week-plans/{weekStartDate}/context-overrides']
+    const item = spec.paths['/households/{householdId}/week-plans/{weekStartDate}/context-overrides/{date}']
+
+    expect(collection?.get?.operationId).toBe('getWeekContextOverrides')
+    expect(item?.put?.operationId).toBe('upsertWeekContextOverride')
+    expect(item?.delete?.operationId).toBe('clearWeekContextOverride')
+  })
 })

@@ -346,6 +346,26 @@ function baseReasonContext(overrides: Partial<TReasonContext> = {}): TReasonCont
 }
 
 describe('deriveAssignmentReason', () => {
+  it('identifies a recipe that won because of a week-specific override', () => {
+    const soup = recipe({ id: 'soup', tags: ['quick'] })
+    const ctx = baseReasonContext({
+      selection: { effortLevel: 'busy' },
+      selectionSource: 'week-override',
+    })
+
+    expect(deriveAssignmentReason(soup, ctx)).toBe('week-override')
+  })
+
+  it('does not claim a week override when the winning recipe did not match it', () => {
+    const slowPasta = recipe({ id: 'pasta', prepTimeMinutes: 45 })
+    const ctx = baseReasonContext({
+      selection: { effortLevel: 'busy' },
+      selectionSource: 'week-override',
+    })
+
+    expect(deriveAssignmentReason(slowPasta, ctx)).toBeUndefined()
+  })
+
   it('picks liked-before first, even when the recipe is also the household\'s own', () => {
     const pasta = recipe({ id: 'pasta', householdId: 'household-1' })
     const ctx = baseReasonContext({ feedback: { pasta: { vote: 'up' } } })

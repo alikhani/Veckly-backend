@@ -4,19 +4,10 @@ import { requireAuth, requireInternalAuth, type AuthedUser } from './auth.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdMemberships, householdProfiles, householdRecipeRecommendations } from './schema.js'
+import { HouseholdDaySelectionSchema } from './planning-context.js'
 import type { Db } from './db.js'
 
 const PrioritySchema = z.enum(['quick', 'budget', 'child-friendly', 'meal-prep', 'varied'])
-const WeekdaySchema = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
-const DaySelectionSchema = z.object({
-  day: WeekdaySchema,
-  servingsOverride: z.number().int().min(1).optional(),
-  occasion: z.enum(['standard', 'guests', 'treat']).optional(),
-  effortLevel: z.enum(['standard', 'busy']).optional(),
-  leftoversIntent: z.boolean().optional(),
-  lateEvening: z.boolean().optional(),
-  cookingTolerance: z.enum(['standard', 'relaxed']).optional(),
-})
 
 const HouseholdProfileSchema = z.object({
   householdId: z.string().uuid(),
@@ -24,7 +15,7 @@ const HouseholdProfileSchema = z.object({
   children: z.number().int().min(0),
   priorities: z.array(PrioritySchema),
   avoidIngredients: z.array(z.string()),
-  selectedDays: z.array(DaySelectionSchema).min(1),
+  selectedDays: z.array(HouseholdDaySelectionSchema).min(1),
   updatedBy: z.string().uuid(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -49,7 +40,7 @@ function toProfileResponse(row: typeof householdProfiles.$inferSelect) {
     children: row.children,
     priorities: row.priorities as z.infer<typeof PrioritySchema>[],
     avoidIngredients: row.avoidIngredients as string[],
-    selectedDays: row.selectedDays as z.infer<typeof DaySelectionSchema>[],
+    selectedDays: row.selectedDays as z.infer<typeof HouseholdDaySelectionSchema>[],
     updatedBy: row.updatedBy,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

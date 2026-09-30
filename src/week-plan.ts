@@ -9,6 +9,14 @@ import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
 import { householdMealOutcomes, householdMealSignals, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
+import {
+  DayPlanningContextSchema,
+  HouseholdDaySelectionSchema,
+  WeekContextOverrideSchema,
+  WeekdaySchema,
+  mergeDayPlanningContext,
+  type TWeekContextOverride,
+} from './planning-context.js'
 import type { Db } from './db.js'
 import {
   computeCurrentStreak,
@@ -38,7 +46,7 @@ const CausedBySchema = z.discriminatedUnion('source', [
   z.object({ source: z.literal('system'), reason: z.string() }),
 ]).openapi('CausedBy')
 
-const dayOfWeek = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
+const dayOfWeek = WeekdaySchema
 const WeekPlanEventTypeSchema = z.enum([
   'week_started',
   'planning_request_updated',
@@ -50,19 +58,13 @@ const WeekPlanEventTypeSchema = z.enum([
   'day_skipped',
   'day_unskipped',
   'servings_changed',
+  'week_context_override_upserted',
+  'week_context_override_cleared',
   'week_plan_cleared',
 ])
 
 const PrioritySchema = z.enum(['quick', 'budget', 'child-friendly', 'meal-prep', 'varied'])
-const PlanningDaySelectionSchema = z.object({
-  day: dayOfWeek,
-  servingsOverride: z.number().int().min(1).optional(),
-  occasion: z.enum(['standard', 'guests', 'treat']).optional(),
-  effortLevel: z.enum(['standard', 'busy']).optional(),
-  leftoversIntent: z.boolean().optional(),
-  lateEvening: z.boolean().optional(),
-  cookingTolerance: z.enum(['standard', 'relaxed']).optional(),
-})
+const PlanningDaySelectionSchema = HouseholdDaySelectionSchema
 const PlanningRequestSchema = z.object({
   household: z.object({
     adults: z.number().int().min(1),
@@ -97,7 +99,7 @@ const PlanningRequestUpdatedPayloadSchema = z.object({
 // Populated only for algorithm-assigned meals (see `doGenerateWeekPlan`) —
 // a manual pick via the meal picker has no algorithmic "why", so both are
 // simply omitted for `source: 'user'` events.
-const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety', 'quick-weekday'])
+const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety', 'quick-weekday', 'week-override'])
 const AssignmentConfidenceSchema = z.enum(['ok', 'low'])
 
 // `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
@@ -110,6 +112,7 @@ const MealAssignedPayloadSchema = z.object({
   recipeRef: z.string().uuid(),
   reason: AssignmentReasonSchema.optional(),
   confidence: AssignmentConfidenceSchema.optional(),
+  servings: z.number().int().min(1).optional(),
 })
 
 const MealUnassignedPayloadSchema = z.object({
@@ -149,6 +152,17 @@ const ServingsChangedPayloadSchema = z.object({
   servings: z.number().int().min(1),
 })
 
+const WeekContextOverrideUpsertedPayloadSchema = z.object({
+  eventType: z.literal('week_context_override_upserted'),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
+  override: WeekContextOverrideSchema,
+})
+
+const WeekContextOverrideClearedPayloadSchema = z.object({
+  eventType: z.literal('week_context_override_cleared'),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
+})
+
 const WeekPlanClearedPayloadSchema = z.object({
   eventType: z.literal('week_plan_cleared'),
 })
@@ -164,6 +178,8 @@ const WeekPlanEventPayloadSchema = z.discriminatedUnion('eventType', [
   DaySkippedPayloadSchema,
   DayUnskippedPayloadSchema,
   ServingsChangedPayloadSchema,
+  WeekContextOverrideUpsertedPayloadSchema,
+  WeekContextOverrideClearedPayloadSchema,
   WeekPlanClearedPayloadSchema,
 ])
 
@@ -192,6 +208,9 @@ const WeekPlanProjectionSchema = z.object({
 const ParamsSchema = z.object({
   householdId: z.string().uuid(),
   weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
+})
+const ContextOverrideParamsSchema = ParamsSchema.extend({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
 })
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
 const WeekHistoryQuerySchema = z.object({
@@ -229,6 +248,18 @@ const WeekPlanSummarySchema = z.object({
   updatedAt: z.string().nullable(),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
+
+const WeekContextOverrideItemSchema = DayPlanningContextSchema.extend({
+  date: z.string(),
+}).openapi('WeekContextOverride')
+
+const WeekContextOverridesResponseSchema = z.object({
+  overrides: z.array(WeekContextOverrideItemSchema),
+}).openapi('WeekContextOverridesResponse')
+
+const ClearWeekContextOverrideResponseSchema = z.object({
+  ok: z.literal(true),
+}).openapi('ClearWeekContextOverrideResponse')
 
 const WeekHistoryPlanSchema = z.object({
   householdId: z.string().uuid(),
@@ -307,6 +338,9 @@ type TWeekPlanProjectionState = {
   }>>
   lockedDays: z.infer<typeof dayOfWeek>[]
   skippedDays: z.infer<typeof dayOfWeek>[]
+  // Optional for projections written before AVL-007. New folds always write
+  // the field, while readers treat its absence as an empty override layer.
+  contextOverrides?: Record<string, TWeekContextOverride>
 }
 
 const emptyProjectionState = (): TWeekPlanProjectionState => ({
@@ -315,6 +349,7 @@ const emptyProjectionState = (): TWeekPlanProjectionState => ({
   meals: {},
   lockedDays: [],
   skippedDays: [],
+  contextOverrides: {},
 })
 
 function toggleSortedDay(days: z.infer<typeof dayOfWeek>[], day: z.infer<typeof dayOfWeek>, enabled: boolean) {
@@ -341,7 +376,7 @@ function foldEventIntoProjection(
         meals: {
           ...state.meals,
           [payload.dayOfWeek]: {
-            servings: state.meals[payload.dayOfWeek]?.servings,
+            servings: payload.servings ?? state.meals[payload.dayOfWeek]?.servings,
             recipeRef: payload.recipeRef,
             reason: payload.reason,
             confidence: payload.confidence,
@@ -388,6 +423,19 @@ function foldEventIntoProjection(
       const existing = state.meals[payload.dayOfWeek]
       if (!existing) return state
       return { ...state, meals: { ...state.meals, [payload.dayOfWeek]: { ...existing, servings: payload.servings } } }
+    }
+    case 'week_context_override_upserted':
+      return {
+        ...state,
+        contextOverrides: {
+          ...(state.contextOverrides ?? {}),
+          [payload.date]: payload.override,
+        },
+      }
+    case 'week_context_override_cleared': {
+      const contextOverrides = { ...(state.contextOverrides ?? {}) }
+      delete contextOverrides[payload.date]
+      return { ...state, contextOverrides }
     }
     case 'week_plan_cleared':
       return emptyProjectionState()
@@ -454,6 +502,63 @@ const getWeekPlanSummaryRoute = createRoute({
     },
     404: { description: 'Household not found or caller is not a member' },
     401: { description: 'Missing or invalid session' },
+  },
+})
+
+const getWeekContextOverridesRoute = createRoute({
+  method: 'get',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/context-overrides',
+  operationId: 'getWeekContextOverrides',
+  summary: 'Read date-specific planning context for one week',
+  security: [{ bearerAuth: [] }],
+  request: { params: ParamsSchema },
+  responses: {
+    200: {
+      description: 'The explicit overrides saved for this week',
+      content: { 'application/json': { schema: WeekContextOverridesResponseSchema } },
+    },
+    400: { description: 'Invalid week start date' },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
+  },
+})
+
+const upsertWeekContextOverrideRoute = createRoute({
+  method: 'put',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/context-overrides/{date}',
+  operationId: 'upsertWeekContextOverride',
+  summary: 'Create or replace date-specific planning context for one week',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ContextOverrideParamsSchema,
+    body: { content: { 'application/json': { schema: WeekContextOverrideSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'The saved override',
+      content: { 'application/json': { schema: WeekContextOverrideItemSchema } },
+    },
+    400: { description: 'Invalid week or date' },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
+  },
+})
+
+const clearWeekContextOverrideRoute = createRoute({
+  method: 'delete',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/context-overrides/{date}',
+  operationId: 'clearWeekContextOverride',
+  summary: 'Clear date-specific planning context for one week',
+  security: [{ bearerAuth: [] }],
+  request: { params: ContextOverrideParamsSchema },
+  responses: {
+    200: {
+      description: 'The override was cleared',
+      content: { 'application/json': { schema: ClearWeekContextOverrideResponseSchema } },
+    },
+    400: { description: 'Invalid week or date' },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -584,6 +689,10 @@ export function isMonday(yyyyMmDd: string) {
   return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
 }
 
+function isDateInWeek(weekStartDate: string, date: string) {
+  return date >= weekStartDate && date <= addDays(weekStartDate, 6)
+}
+
 function isValidISODateString(value: string | undefined): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00.000Z`)
@@ -625,7 +734,78 @@ function readProjectionState(state: unknown): TWeekPlanProjectionState {
     meals: candidate?.meals && typeof candidate.meals === 'object' ? candidate.meals : {},
     lockedDays: Array.isArray(candidate?.lockedDays) ? candidate.lockedDays : [],
     skippedDays: Array.isArray(candidate?.skippedDays) ? candidate.skippedDays : [],
+    contextOverrides: candidate?.contextOverrides && typeof candidate.contextOverrides === 'object'
+      ? candidate.contextOverrides
+      : {},
   }
+}
+
+function contextOverrideItems(state: TWeekPlanProjectionState, weekStartDate: string) {
+  return Object.entries(state.contextOverrides ?? {})
+    .filter(([date]) => isDateInWeek(weekStartDate, date))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, override]) => ({ date, ...override }))
+}
+
+export async function getWeekContextOverrides(
+  db: Db,
+  accessToken: string,
+  householdId: string,
+  weekStartDate: string,
+) {
+  const projection = await getStreamProjection(
+    db,
+    accessToken,
+    weekPlanProjections,
+    { householdId, weekStartDate },
+  )
+  return contextOverrideItems(readProjectionState(projection?.state), weekStartDate)
+}
+
+export async function upsertWeekContextOverride(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string,
+  weekStartDate: string,
+  date: string,
+  override: TWeekContextOverride,
+) {
+  await appendStreamEvent(
+    db,
+    accessToken,
+    { events: weekPlanEvents, projections: weekPlanProjections },
+    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+    {
+      householdId,
+      weekStartDate,
+      causedBy: { source: 'user', userId },
+      payload: { eventType: 'week_context_override_upserted', date, override },
+    },
+  )
+  return { date, ...override }
+}
+
+export async function clearWeekContextOverride(
+  db: Db,
+  accessToken: string,
+  userId: string,
+  householdId: string,
+  weekStartDate: string,
+  date: string,
+) {
+  await appendStreamEvent(
+    db,
+    accessToken,
+    { events: weekPlanEvents, projections: weekPlanProjections },
+    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+    {
+      householdId,
+      weekStartDate,
+      causedBy: { source: 'user', userId },
+      payload: { eventType: 'week_context_override_cleared', date },
+    },
+  )
 }
 
 function readJsonArray(value: unknown): unknown[] {
@@ -932,7 +1112,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
             id: recipe.id,
             title: recipe.title,
             description: recipe.description,
-            servings: recipe.servings,
+            servings: meal?.servings ?? recipe.servings,
             prepTimeMinutes: recipe.prepTimeMinutes ?? null,
             cookTimeMinutes: recipe.cookTimeMinutes ?? null,
             tags: readStringArray(recipe.tags),
@@ -1123,7 +1303,9 @@ export async function doGenerateWeekPlan(
   for (const day of daysToFill) {
     const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
     const scoringPool = unused.length > 0 ? unused : candidates
-    const selection = selectedDaysByName.get(day)
+    const date = addDays(weekStartDate, orderedDays.indexOf(day))
+    const weekOverride = projState.contextOverrides?.[date]
+    const selection = mergeDayPlanningContext(selectedDaysByName.get(day), weekOverride)
     const ranked = rankCandidates(scoringPool, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, recentMealIds, fatiguedMealIds })
     const next = ranked[0]
     if (!next) continue
@@ -1138,6 +1320,7 @@ export async function doGenerateWeekPlan(
       fatiguedMealIds: confirmedFatiguedMealIds,
       everCookedRecipeIds,
       legacyPlannedRecipeIds,
+      selectionSource: weekOverride ? 'week-override' : 'household-default',
     })
     const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
 
@@ -1147,7 +1330,19 @@ export async function doGenerateWeekPlan(
       db, accessToken,
       { events: weekPlanEvents, projections: weekPlanProjections },
       { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy, payload: { eventType: 'meal_assigned', dayOfWeek: day, recipeRef: next.id, reason, confidence } },
+      {
+        householdId,
+        weekStartDate,
+        causedBy,
+        payload: {
+          eventType: 'meal_assigned',
+          dayOfWeek: day,
+          recipeRef: next.id,
+          reason,
+          confidence,
+          servings: selection?.servingsOverride ?? next.servings,
+        },
+      },
     )
   }
 
@@ -1162,6 +1357,47 @@ export function buildWeekPlanRoutes(db: Db) {
   // and so must this one (it doesn't inherit the registration when mounted
   // into the parent app via `.route('/', ...)`).
   app.use('/households/*', requireAuth)
+
+  app.openapi(getWeekContextOverridesRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+
+    const overrides = await getWeekContextOverrides(db, accessToken, householdId, weekStartDate)
+    return c.json({ overrides }, 200)
+  })
+
+  app.openapi(upsertWeekContextOverrideRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate, date } = c.req.valid('param')
+    if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, date)) {
+      return c.json({ error: 'INVALID_WEEK_CONTEXT_DATE' } as never, 400)
+    }
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+    const override = c.req.valid('json')
+
+    const saved = await upsertWeekContextOverride(db, accessToken, user.id, householdId, weekStartDate, date, override)
+    return c.json(saved, 200)
+  })
+
+  app.openapi(clearWeekContextOverrideRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate, date } = c.req.valid('param')
+    if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, date)) {
+      return c.json({ error: 'INVALID_WEEK_CONTEXT_DATE' } as never, 400)
+    }
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
+
+    await clearWeekContextOverride(db, accessToken, user.id, householdId, weekStartDate, date)
+    return c.json({ ok: true }, 200)
+  })
 
   app.openapi(generateWeekPlanRoute, async (c) => {
     const accessToken = c.get('accessToken')
@@ -1220,6 +1456,12 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
+    if (
+      (payload.eventType === 'week_context_override_upserted' || payload.eventType === 'week_context_override_cleared')
+      && !isDateInWeek(weekStartDate, payload.date)
+    ) {
+      return c.json({ error: 'INVALID_WEEK_CONTEXT_DATE' } as never, 400)
+    }
 
     const event = await appendStreamEvent(
       db,

@@ -169,6 +169,13 @@ export function scoreCookingTolerance(recipe: TScoringRecipe, selection: TDaySel
   return score
 }
 
+export function scoreDayPlanningContext(recipe: TScoringRecipe, selection: TDaySelection | undefined): number {
+  return scoreOccasion(recipe, selection)
+    + scoreEffortAndLeftovers(recipe, selection)
+    + scoreLateEvening(recipe, selection)
+    + scoreCookingTolerance(recipe, selection)
+}
+
 export type TWeekContext = {
   placedCuisines: Record<string, number>
   placedProteins: Record<string, number>
@@ -220,10 +227,7 @@ export type TScoringContext = {
 export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number {
   let score = 0
   score += scoreFamilyRecipe(recipe, ctx.householdId)
-  score += scoreOccasion(recipe, ctx.selection)
-  score += scoreEffortAndLeftovers(recipe, ctx.selection)
-  score += scoreLateEvening(recipe, ctx.selection)
-  score += scoreCookingTolerance(recipe, ctx.selection)
+  score += scoreDayPlanningContext(recipe, ctx.selection)
   score += scoreHouseholdMealSignal(recipe, ctx.householdSignals)
   score += scoreMealFromFeedback(recipe, ctx.feedback, ctx.allRecipes)
   score += scoreWeekConstraints(recipe, ctx.weekCtx)
@@ -276,7 +280,7 @@ function processWeekRecord(state: TMealStreakState, present: boolean): TMealStre
   return { streak: 0, streakBroke: state.streakBroke, weeksSinceBreak: state.streakBroke ? state.weeksSinceBreak + 1 : state.weeksSinceBreak }
 }
 
-export type TAssignmentReason = 'family-recipe' | 'liked-before' | 'back-after-break' | 'based-on-feedback' | 'new-for-variety' | 'quick-weekday'
+export type TAssignmentReason = 'family-recipe' | 'liked-before' | 'back-after-break' | 'based-on-feedback' | 'new-for-variety' | 'quick-weekday' | 'week-override'
 export type TAssignmentConfidence = 'ok' | 'low'
 
 export type TReasonContext = {
@@ -287,6 +291,7 @@ export type TReasonContext = {
   fatiguedMealIds?: string[]
   everCookedRecipeIds?: Set<string>
   legacyPlannedRecipeIds?: Set<string>
+  selectionSource?: 'household-default' | 'week-override'
 }
 
 /** Picks the single most salient explanation for why this recipe won its
@@ -298,6 +303,7 @@ export type TReasonContext = {
  * user-facing reason this backend exposes today: a quick fit for a busy or
  * late evening. */
 export function deriveAssignmentReason(recipe: TScoringRecipe, ctx: TReasonContext): TAssignmentReason | undefined {
+  if (ctx.selectionSource === 'week-override' && scoreDayPlanningContext(recipe, ctx.selection) > 0) return 'week-override'
   if (ctx.feedback[recipe.id]?.vote === 'up') return 'liked-before'
   if (recipe.householdId === ctx.householdId) return 'family-recipe'
   if ((ctx.selection?.effortLevel === 'busy' || ctx.selection?.lateEvening) && recipe.tags.includes('quick')) return 'quick-weekday'

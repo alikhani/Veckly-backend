@@ -10,6 +10,7 @@ import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gat
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
 import { householdMealOutcomes, householdMealSignals, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
+import { upsertMealOutcome } from './meal-outcomes.js'
 import {
   DayPlanningContextSchema,
   HouseholdDaySelectionSchema,
@@ -61,6 +62,7 @@ const WeekPlanEventTypeSchema = z.enum([
   'servings_changed',
   'week_context_override_upserted',
   'week_context_override_cleared',
+  'week_rescued',
   'week_plan_cleared',
 ])
 
@@ -164,6 +166,26 @@ const WeekContextOverrideClearedPayloadSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
 })
 
+const RescueIntentSchema = z.enum(['quick', 'no-energy', 'missing-ingredient', 'extra-guest', 'swap-day']).openapi('WeekRescueIntent')
+const RescueChangeSchema = z.object({
+  date: z.string(),
+  dayOfWeek,
+  beforeRecipeRef: z.string().uuid().nullable(),
+  beforeRecipeTitle: z.string().nullable(),
+  afterRecipeRef: z.string().uuid().nullable(),
+  afterRecipeTitle: z.string().nullable(),
+  beforeServings: z.number().int().min(1).nullable(),
+  afterServings: z.number().int().min(1).nullable(),
+}).openapi('WeekRescueChange')
+
+const WeekRescuedPayloadSchema = z.object({
+  eventType: z.literal('week_rescued'),
+  rescueId: z.string().uuid(),
+  rescueReason: RescueIntentSchema,
+  changes: z.array(RescueChangeSchema).min(1),
+  shoppingDiff: z.object({ added: z.array(z.string()), removed: z.array(z.string()) }),
+})
+
 const WeekPlanClearedPayloadSchema = z.object({
   eventType: z.literal('week_plan_cleared'),
 })
@@ -181,6 +203,7 @@ const WeekPlanEventPayloadSchema = z.discriminatedUnion('eventType', [
   ServingsChangedPayloadSchema,
   WeekContextOverrideUpsertedPayloadSchema,
   WeekContextOverrideClearedPayloadSchema,
+  WeekRescuedPayloadSchema,
   WeekPlanClearedPayloadSchema,
 ])
 
@@ -269,6 +292,38 @@ const WeekPlanSummarySchema = z.object({
   explanations: z.array(WeekPlanExplanationSchema).max(2),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
+
+const WeekRescueRequestSchema = z.object({
+  rescueId: z.string().uuid(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  intent: RescueIntentSchema,
+  missingIngredient: z.string().trim().min(1).max(80).optional(),
+  expectedUpdatedAt: z.string().nullable(),
+}).superRefine((value, context) => {
+  if (value.intent === 'missing-ingredient' && !value.missingIngredient) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['missingIngredient'], message: 'Required for missing-ingredient rescue' })
+  }
+}).openapi('WeekRescueRequest')
+
+const WeekRescuePreviewSchema = z.object({
+  rescueId: z.string().uuid(),
+  intent: RescueIntentSchema,
+  reason: z.enum(['faster', 'less-effort', 'avoids-ingredient', 'more-portions', 'swaps-days']),
+  primaryChange: RescueChangeSchema,
+  followUpChanges: z.array(RescueChangeSchema),
+  shoppingDiff: z.object({ added: z.array(z.string()), removed: z.array(z.string()) }),
+  expectedUpdatedAt: z.string().nullable(),
+}).openapi('WeekRescuePreview')
+
+const WeekRescueApplyResponseSchema = z.object({
+  ok: z.literal(true),
+  alreadyApplied: z.boolean(),
+  preview: WeekRescuePreviewSchema,
+}).openapi('WeekRescueApplyResponse')
+
+const WeekRescueErrorSchema = z.object({
+  error: z.enum(['NO_PLAN', 'LOCKED_DAY', 'NO_RESCUE_FOUND', 'STALE_WEEK_PLAN']),
+}).openapi('WeekRescueError')
 
 const WeekContextOverrideItemSchema = DayPlanningContextSchema.extend({
   date: z.string(),
@@ -458,6 +513,23 @@ function foldEventIntoProjection(
       delete contextOverrides[payload.date]
       return { ...state, contextOverrides }
     }
+    case 'week_rescued': {
+      const meals = { ...state.meals }
+      const skippedDays = [...state.skippedDays]
+      for (const change of payload.changes) {
+        if (change.afterRecipeRef) {
+          meals[change.dayOfWeek] = {
+            recipeRef: change.afterRecipeRef,
+            servings: change.afterServings ?? undefined,
+          }
+        } else {
+          delete meals[change.dayOfWeek]
+        }
+        const skippedIndex = skippedDays.indexOf(change.dayOfWeek)
+        if (skippedIndex >= 0) skippedDays.splice(skippedIndex, 1)
+      }
+      return { ...state, meals, skippedDays }
+    }
     case 'week_plan_cleared':
       return emptyProjectionState()
   }
@@ -523,6 +595,44 @@ const getWeekPlanSummaryRoute = createRoute({
     },
     404: { description: 'Household not found or caller is not a member' },
     401: { description: 'Missing or invalid session' },
+  },
+})
+
+const previewWeekRescueRoute = createRoute({
+  method: 'post',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/rescue/preview',
+  operationId: 'previewWeekRescue',
+  summary: 'Preview one concrete rescue for a disrupted dinner plan',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ParamsSchema,
+    body: { content: { 'application/json': { schema: WeekRescueRequestSchema } } },
+  },
+  responses: {
+    200: { description: 'A non-mutating rescue preview', content: { 'application/json': { schema: WeekRescuePreviewSchema } } },
+    409: { description: 'The plan changed since the request was created', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
+  },
+})
+
+const applyWeekRescueRoute = createRoute({
+  method: 'post',
+  path: '/households/{householdId}/week-plans/{weekStartDate}/rescue/apply',
+  operationId: 'applyWeekRescue',
+  summary: 'Apply a previously previewed rescue idempotently',
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ParamsSchema,
+    body: { content: { 'application/json': { schema: WeekRescueRequestSchema } } },
+  },
+  responses: {
+    200: { description: 'The rescue was applied or had already been applied', content: { 'application/json': { schema: WeekRescueApplyResponseSchema } } },
+    409: { description: 'The plan changed since preview', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    401: { description: 'Missing or invalid session' },
+    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -1089,6 +1199,256 @@ export function deriveWeekExplanations(input: {
   return explanations.slice(0, 2)
 }
 
+type TWeekRescueRequest = z.infer<typeof WeekRescueRequestSchema>
+type TWeekRescuePreview = z.infer<typeof WeekRescuePreviewSchema>
+type TWeekRescueFailure = 'NO_PLAN' | 'LOCKED_DAY' | 'NO_RESCUE_FOUND' | 'STALE_WEEK_PLAN'
+
+type TRescueRecipe = {
+  id: string
+  title: string
+  servings: number
+  prepTimeMinutes: number | null
+  cookTimeMinutes: number | null
+  ingredients: unknown
+  tags: unknown
+}
+
+function ingredientNames(recipe: TRescueRecipe | undefined) {
+  return readRecipeIngredients(recipe?.ingredients).map((ingredient) => ingredient.item.trim()).filter(Boolean)
+}
+
+function normalizedIngredientSet(recipe: TRescueRecipe | undefined) {
+  return new Set(ingredientNames(recipe).map(normalizedIngredientName))
+}
+
+function rescueChange(
+  date: string,
+  weekday: z.infer<typeof dayOfWeek>,
+  before: TRescueRecipe | undefined,
+  after: TRescueRecipe | undefined,
+  beforeServings: number | null,
+  afterServings: number | null,
+) {
+  return {
+    date,
+    dayOfWeek: weekday,
+    beforeRecipeRef: before?.id ?? null,
+    beforeRecipeTitle: before?.title ?? null,
+    afterRecipeRef: after?.id ?? null,
+    afterRecipeTitle: after?.title ?? null,
+    beforeServings,
+    afterServings,
+  }
+}
+
+export function deriveWeekRescuePreview(input: {
+  request: TWeekRescueRequest
+  weekStartDate: string
+  updatedAt: string | null
+  projection: TWeekPlanProjectionState
+  recipes: TRescueRecipe[]
+  preferredLeftoverRecipeIds?: Set<string>
+}): TWeekRescuePreview | { error: TWeekRescueFailure } {
+  if (input.request.expectedUpdatedAt !== input.updatedAt) return { error: 'STALE_WEEK_PLAN' }
+  const dayIndex = Math.round((Date.parse(`${input.request.date}T00:00:00Z`) - Date.parse(`${input.weekStartDate}T00:00:00Z`)) / 86400000)
+  const targetDay = orderedDays[dayIndex]
+  if (!targetDay) return { error: 'NO_PLAN' }
+  if (input.projection.lockedDays.includes(targetDay)) return { error: 'LOCKED_DAY' }
+  const targetMeal = input.projection.meals[targetDay]
+  if (!targetMeal) return { error: 'NO_PLAN' }
+  const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]))
+  const before = recipesById.get(targetMeal.recipeRef)
+  if (!before) return { error: 'NO_PLAN' }
+
+  if (input.request.intent === 'extra-guest') {
+    return {
+      rescueId: input.request.rescueId,
+      intent: input.request.intent,
+      reason: 'more-portions',
+      primaryChange: rescueChange(input.request.date, targetDay, before, before, targetMeal.servings ?? before.servings, (targetMeal.servings ?? before.servings) + 1),
+      followUpChanges: [],
+      shoppingDiff: { added: [], removed: [] },
+      expectedUpdatedAt: input.updatedAt,
+    }
+  }
+
+  if (input.request.intent === 'swap-day') {
+    const swapIndex = orderedDays.findIndex((day, index) => index > dayIndex
+      && !input.projection.lockedDays.includes(day)
+      && Boolean(input.projection.meals[day]))
+    if (swapIndex < 0) return { error: 'NO_RESCUE_FOUND' }
+    const swapDay = orderedDays[swapIndex]!
+    const swapMeal = input.projection.meals[swapDay]!
+    const swapRecipe = recipesById.get(swapMeal.recipeRef)
+    if (!swapRecipe) return { error: 'NO_RESCUE_FOUND' }
+    return {
+      rescueId: input.request.rescueId,
+      intent: input.request.intent,
+      reason: 'swaps-days',
+      primaryChange: rescueChange(input.request.date, targetDay, before, swapRecipe, targetMeal.servings ?? before.servings, swapMeal.servings ?? swapRecipe.servings),
+      followUpChanges: [rescueChange(addDays(input.weekStartDate, swapIndex), swapDay, swapRecipe, before, swapMeal.servings ?? swapRecipe.servings, targetMeal.servings ?? before.servings)],
+      shoppingDiff: { added: [], removed: [] },
+      expectedUpdatedAt: input.updatedAt,
+    }
+  }
+
+  const missing = normalizedIngredientName(input.request.missingIngredient ?? '')
+  const weekIngredientNames = new Set<string>()
+  for (const meal of Object.values(input.projection.meals)) {
+    for (const name of normalizedIngredientSet(recipesById.get(meal.recipeRef))) weekIngredientNames.add(name)
+  }
+  const candidates = input.recipes
+    .filter((recipe) => recipe.id !== before.id)
+    .filter((recipe) => input.request.intent !== 'missing-ingredient'
+      || ![...normalizedIngredientSet(recipe)].some((name) => name.includes(missing) || missing.includes(name)))
+    .map((recipe) => {
+      const totalMinutes = (recipe.prepTimeMinutes ?? 0) + (recipe.cookTimeMinutes ?? 0)
+      const overlap = [...normalizedIngredientSet(recipe)].filter((name) => weekIngredientNames.has(name)).length
+      const ingredientCount = ingredientNames(recipe).length
+      let score = overlap * 4 - ingredientCount
+      if (input.preferredLeftoverRecipeIds?.has(recipe.id)) score += 100
+      if (totalMinutes > 0 && totalMinutes <= 20) score += 30
+      else if (totalMinutes > 0 && totalMinutes <= 30) score += 15
+      if (input.request.intent === 'quick' && (totalMinutes <= 0 || totalMinutes > 20)) score -= 100
+      if (input.request.intent === 'no-energy' && (totalMinutes <= 0 || totalMinutes > 30 || ingredientCount > 8)) score -= 100
+      return { recipe, score }
+    })
+    .filter(({ score }) => score > -90)
+    .sort((left, right) => right.score - left.score || left.recipe.title.localeCompare(right.recipe.title))
+  const replacement = candidates[0]?.recipe
+  if (!replacement) return { error: 'NO_RESCUE_FOUND' }
+
+  const beforePlan = new Map(Object.entries(input.projection.meals).map(([day, meal]) => [day, meal.recipeRef]))
+  const afterPlan = new Map(beforePlan)
+  afterPlan.set(targetDay, replacement.id)
+  const union = (plan: Map<string, string>) => {
+    const labels = new Map<string, string>()
+    for (const recipeId of plan.values()) {
+      for (const label of ingredientNames(recipesById.get(recipeId))) labels.set(normalizedIngredientName(label), label)
+    }
+    return labels
+  }
+  const beforeIngredients = union(beforePlan)
+  const afterIngredients = union(afterPlan)
+  const added = [...afterIngredients].filter(([key]) => !beforeIngredients.has(key)).map(([, label]) => label).sort()
+  const removed = [...beforeIngredients].filter(([key]) => !afterIngredients.has(key)).map(([, label]) => label).sort()
+
+  return {
+    rescueId: input.request.rescueId,
+    intent: input.request.intent,
+    reason: input.request.intent === 'quick' ? 'faster' : input.request.intent === 'no-energy' ? 'less-effort' : 'avoids-ingredient',
+    primaryChange: rescueChange(input.request.date, targetDay, before, replacement, targetMeal.servings ?? before.servings, targetMeal.servings ?? replacement.servings),
+    followUpChanges: [],
+    shoppingDiff: { added, removed },
+    expectedUpdatedAt: input.updatedAt,
+  }
+}
+
+export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
+  return withRls(db, accessToken, async (tx) => {
+    const [[projection], recipeRows, prepBatches] = await Promise.all([
+      tx.select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
+        .from(weekPlanProjections)
+        .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
+        .limit(1),
+      tx.select({
+        id: recipes.id,
+        title: recipes.title,
+        servings: recipes.servings,
+        prepTimeMinutes: recipes.prepTimeMinutes,
+        cookTimeMinutes: recipes.cookTimeMinutes,
+        ingredients: recipes.ingredients,
+        tags: recipes.tags,
+      }).from(recipes).where(and(
+        or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)),
+        eq(recipes.isArchived, false),
+      )),
+      tx.select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId })
+        .from(householdPrepBatches)
+        .where(and(eq(householdPrepBatches.householdId, householdId), lte(householdPrepBatches.cookDate, request.date))),
+    ])
+    if (!projection) return { error: 'NO_PLAN' as const }
+    const assignments = prepBatches.length
+      ? await tx.select({ batchId: householdPrepBatchAssignments.batchId })
+        .from(householdPrepBatchAssignments)
+        .where(and(
+          inArray(householdPrepBatchAssignments.batchId, prepBatches.map((batch) => batch.id)),
+          eq(householdPrepBatchAssignments.date, request.date),
+        ))
+      : []
+    const assignedBatchIds = new Set(assignments.map((assignment) => assignment.batchId))
+    const preferredLeftoverRecipeIds = new Set(prepBatches
+      .filter((batch) => assignedBatchIds.has(batch.id) && batch.recipeId)
+      .map((batch) => batch.recipeId!))
+    return deriveWeekRescuePreview({
+      request,
+      weekStartDate,
+      updatedAt: projection.updatedAt.toISOString(),
+      projection: readProjectionState(projection.state),
+      recipes: recipeRows,
+      preferredLeftoverRecipeIds,
+    })
+  })
+}
+
+export async function applyWeekRescue(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
+  const existing = await withRls(db, accessToken, async (tx) => tx
+    .select({ eventType: weekPlanEvents.eventType, payload: weekPlanEvents.payload })
+    .from(weekPlanEvents)
+    .where(and(eq(weekPlanEvents.householdId, householdId), eq(weekPlanEvents.weekStartDate, weekStartDate))))
+  const existingPayload = existing
+    .filter((row) => row.eventType === 'week_rescued')
+    .map((row) => row.payload as Omit<z.infer<typeof WeekRescuedPayloadSchema>, 'eventType'>)
+    .find((payload) => payload.rescueId === request.rescueId)
+  if (existingPayload) {
+    const changes = existingPayload.changes
+    return { ok: true as const, alreadyApplied: true, preview: {
+      rescueId: request.rescueId,
+      intent: existingPayload.rescueReason,
+      reason: existingPayload.rescueReason === 'extra-guest' ? 'more-portions' as const : existingPayload.rescueReason === 'swap-day' ? 'swaps-days' as const : existingPayload.rescueReason === 'quick' ? 'faster' as const : existingPayload.rescueReason === 'no-energy' ? 'less-effort' as const : 'avoids-ingredient' as const,
+      primaryChange: changes[0]!, followUpChanges: changes.slice(1), shoppingDiff: existingPayload.shoppingDiff, expectedUpdatedAt: request.expectedUpdatedAt,
+    } }
+  }
+
+  const preview = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
+  if ('error' in preview) return preview
+  try {
+    await appendStreamEvent(
+      db,
+      accessToken,
+      { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy: { source: 'user', userId }, payload: {
+        eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
+        changes: [preview.primaryChange, ...preview.followUpChanges],
+        shoppingDiff: preview.shoppingDiff,
+      } },
+    )
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      return applyWeekRescue(db, accessToken, userId, householdId, weekStartDate, request)
+    }
+    throw error
+  }
+  if (preview.primaryChange.beforeRecipeRef && preview.primaryChange.afterRecipeRef
+    && preview.primaryChange.beforeRecipeRef !== preview.primaryChange.afterRecipeRef) {
+    // The rescue event is the source of truth for the plan mutation. Outcome
+    // attribution is secondary memory; never report a failed rescue after the
+    // plan has committed, since the client would correctly assume no change.
+    try {
+      await upsertMealOutcome(db, accessToken, userId, householdId, preview.primaryChange.date, {
+        weekStartDate,
+        plannedRecipeId: preview.primaryChange.beforeRecipeRef,
+        status: 'changed_plan',
+        actualRecipeId: preview.primaryChange.afterRecipeRef,
+      })
+    } catch (error) {
+      console.error('[week-rescue] failed to record changed_plan outcome', error)
+    }
+  }
+  return { ok: true as const, alreadyApplied: false, preview }
+}
+
 export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
   return withRls(db, accessToken, async (tx) => {
     const [household] = await tx
@@ -1634,6 +1994,32 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(summary, 200)
+  })
+
+  app.openapi(previewWeekRescueRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const request = c.req.valid('json')
+    if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, request.date)) return c.json({ error: 'NO_PLAN' }, 422)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const result = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
+    if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
+    return c.json(result, 200)
+  })
+
+  app.openapi(applyWeekRescueRoute, async (c) => {
+    const accessToken = c.get('accessToken')
+    const user = c.get('user')
+    const { householdId, weekStartDate } = c.req.valid('param')
+    const request = c.req.valid('json')
+    if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, request.date)) return c.json({ error: 'NO_PLAN' }, 422)
+    const member = await assertMembership(db, accessToken, householdId, user.id)
+    if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
+    const result = await applyWeekRescue(db, accessToken, user.id, householdId, weekStartDate, request)
+    if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
+    return c.json(result, 200)
   })
 
   app.openapi(listWeekHistoryPlansRoute, async (c) => {

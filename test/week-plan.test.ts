@@ -11,6 +11,8 @@ import { householdMealOutcomes, householdProfiles, householdWeekPlans, household
 import {
   doGenerateWeekPlan,
   deriveWeekExplanations,
+  deriveWeekRescuePreview,
+  applyWeekRescue,
   clearWeekContextOverride,
   finalizeWeekHistoryPlan,
   foldEventIntoProjection,
@@ -71,6 +73,64 @@ describe('deriveWeekExplanations', () => {
     })
 
     expect(explanations).toEqual([{ kind: 'shared-ingredient', ingredient: 'Citron', dinnerCount: 2 }])
+  })
+})
+
+describe('deriveWeekRescuePreview', () => {
+  const slow = {
+    id: '11111111-1111-1111-1111-111111111111', title: 'Slow stew', servings: 4,
+    prepTimeMinutes: 20, cookTimeMinutes: 40, ingredients: [{ item: 'Beef' }, { item: 'Onion' }], tags: [],
+  }
+  const quick = {
+    id: '22222222-2222-2222-2222-222222222222', title: 'Quick pasta', servings: 4,
+    prepTimeMinutes: 5, cookTimeMinutes: 10, ingredients: [{ item: 'Pasta' }, { item: 'Onion' }], tags: ['quick'],
+  }
+  const projection: TWeekPlanProjectionState = {
+    weekStarted: true, request: null, meals: { monday: { recipeRef: slow.id } }, lockedDays: [], skippedDays: [],
+  }
+  const request = {
+    rescueId: '33333333-3333-3333-3333-333333333333', date: '2026-06-08', intent: 'quick' as const,
+    expectedUpdatedAt: '2026-06-08T10:00:00.000Z',
+  }
+
+  it('chooses one fast replacement and calculates the whole-week shopping diff', () => {
+    const preview = deriveWeekRescuePreview({
+      request, weekStartDate: '2026-06-08', updatedAt: request.expectedUpdatedAt,
+      projection, recipes: [slow, quick],
+    })
+
+    expect(preview).toMatchObject({
+      reason: 'faster',
+      primaryChange: { beforeRecipeTitle: 'Slow stew', afterRecipeTitle: 'Quick pasta' },
+      shoppingDiff: { added: ['Pasta'], removed: ['Beef'] },
+    })
+  })
+
+  it('never proposes changing a locked dinner', () => {
+    const preview = deriveWeekRescuePreview({
+      request, weekStartDate: '2026-06-08', updatedAt: request.expectedUpdatedAt,
+      projection: { ...projection, lockedDays: ['monday'] }, recipes: [slow, quick],
+    })
+    expect(preview).toEqual({ error: 'LOCKED_DAY' })
+  })
+
+  it('prioritizes a concrete leftover assignment over another valid easy meal', () => {
+    const leftover = { ...quick, id: '55555555-5555-5555-5555-555555555555', title: 'Saved leftovers' }
+    const preview = deriveWeekRescuePreview({
+      request: { ...request, intent: 'no-energy' },
+      weekStartDate: '2026-06-08', updatedAt: request.expectedUpdatedAt,
+      projection, recipes: [slow, quick, leftover],
+      preferredLeftoverRecipeIds: new Set([leftover.id]),
+    })
+    expect(preview).toMatchObject({ primaryChange: { afterRecipeTitle: 'Saved leftovers' } })
+  })
+
+  it('rejects a stale preview without producing changes', () => {
+    const preview = deriveWeekRescuePreview({
+      request, weekStartDate: '2026-06-08', updatedAt: '2026-06-08T11:00:00.000Z',
+      projection, recipes: [slow, quick],
+    })
+    expect(preview).toEqual({ error: 'STALE_WEEK_PLAN' })
   })
 })
 
@@ -823,6 +883,55 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.explanations).toEqual([
         { kind: 'shared-ingredient', ingredient: 'Tomat', dinnerCount: 2 },
       ])
+    })
+
+    it('applies a rescue once, records the original plan, and marks changed_plan', async () => {
+      const slow = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Slow stew',
+        prepTimeMinutes: 20,
+        cookTimeMinutes: 40,
+        ingredients: [{ item: 'beef', amount: '500', unit: 'g', category: 'protein' }],
+      })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Quick pasta',
+        prepTimeMinutes: 5,
+        cookTimeMinutes: 10,
+        ingredients: [{ item: 'pasta', amount: '400', unit: 'g', category: 'pantry' }],
+      })
+      const [projection] = await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, request: null, meals: { monday: { recipeRef: slow.id } }, lockedDays: [], skippedDays: [] },
+      }).returning()
+      const request = {
+        rescueId: '44444444-4444-4444-4444-444444444444',
+        date: weekStartDate,
+        intent: 'quick' as const,
+        expectedUpdatedAt: projection!.updatedAt.toISOString(),
+      }
+
+      const first = await applyWeekRescue(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, request)
+      const second = await applyWeekRescue(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, request)
+      const rescueEvents = await db.select().from(weekPlanEvents).where(and(
+        eq(weekPlanEvents.householdId, householdAId),
+        eq(weekPlanEvents.eventType, 'week_rescued'),
+      ))
+      const outcomes = await db.select().from(householdMealOutcomes).where(and(
+        eq(householdMealOutcomes.householdId, householdAId),
+        eq(householdMealOutcomes.weekStartDate, weekStartDate),
+      ))
+
+      expect(first).toMatchObject({ ok: true, alreadyApplied: false })
+      expect(second).toMatchObject({ ok: true, alreadyApplied: true })
+      expect(rescueEvents).toHaveLength(1)
+      expect(rescueEvents[0]?.payload).toMatchObject({
+        rescueId: request.rescueId,
+        rescueReason: 'quick',
+        changes: [{ beforeRecipeRef: slow.id }],
+      })
+      expect(outcomes).toMatchObject([{ status: 'changed_plan', plannedRecipeId: slow.id }])
     })
 
     it('surfaces a satiation streak when a recipe has been cooked 3+ consecutive weeks', async () => {

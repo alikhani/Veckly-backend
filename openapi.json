@@ -1266,6 +1266,7 @@
               "servings_changed",
               "week_context_override_upserted",
               "week_context_override_cleared",
+              "week_rescued",
               "week_plan_cleared"
             ]
           },
@@ -1283,6 +1284,86 @@
           "causedBy",
           "eventType",
           "payload"
+        ]
+      },
+      "WeekRescueIntent": {
+        "type": "string",
+        "enum": [
+          "quick",
+          "no-energy",
+          "missing-ingredient",
+          "extra-guest",
+          "swap-day"
+        ]
+      },
+      "WeekRescueChange": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "dayOfWeek": {
+            "type": "string",
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          },
+          "beforeRecipeRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "beforeRecipeTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "afterRecipeRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "afterRecipeTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "beforeServings": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "afterServings": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "required": [
+          "date",
+          "dayOfWeek",
+          "beforeRecipeRef",
+          "beforeRecipeTitle",
+          "afterRecipeRef",
+          "afterRecipeTitle",
+          "beforeServings",
+          "afterServings"
         ]
       },
       "AppendWeekPlanEventRequest": {
@@ -1775,6 +1856,59 @@
                   "eventType": {
                     "type": "string",
                     "enum": [
+                      "week_rescued"
+                    ]
+                  },
+                  "rescueId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "rescueReason": {
+                    "$ref": "#/components/schemas/WeekRescueIntent"
+                  },
+                  "changes": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/WeekRescueChange"
+                    },
+                    "minItems": 1
+                  },
+                  "shoppingDiff": {
+                    "type": "object",
+                    "properties": {
+                      "added": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "removed": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "added",
+                      "removed"
+                    ]
+                  }
+                },
+                "required": [
+                  "eventType",
+                  "rescueId",
+                  "rescueReason",
+                  "changes",
+                  "shoppingDiff"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
                       "week_plan_cleared"
                     ]
                   }
@@ -2061,6 +2195,145 @@
           "updatedAt",
           "explanations",
           "days"
+        ]
+      },
+      "WeekRescuePreview": {
+        "type": "object",
+        "properties": {
+          "rescueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/WeekRescueIntent"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "faster",
+              "less-effort",
+              "avoids-ingredient",
+              "more-portions",
+              "swaps-days"
+            ]
+          },
+          "primaryChange": {
+            "$ref": "#/components/schemas/WeekRescueChange"
+          },
+          "followUpChanges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WeekRescueChange"
+            }
+          },
+          "shoppingDiff": {
+            "type": "object",
+            "properties": {
+              "added": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "removed": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "added",
+              "removed"
+            ]
+          },
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rescueId",
+          "intent",
+          "reason",
+          "primaryChange",
+          "followUpChanges",
+          "shoppingDiff",
+          "expectedUpdatedAt"
+        ]
+      },
+      "WeekRescueError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "NO_PLAN",
+              "LOCKED_DAY",
+              "NO_RESCUE_FOUND",
+              "STALE_WEEK_PLAN"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "WeekRescueRequest": {
+        "type": "object",
+        "properties": {
+          "rescueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/WeekRescueIntent"
+          },
+          "missingIngredient": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "expectedUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rescueId",
+          "date",
+          "intent",
+          "expectedUpdatedAt"
+        ]
+      },
+      "WeekRescueApplyResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyApplied": {
+            "type": "boolean"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/WeekRescuePreview"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyApplied",
+          "preview"
         ]
       },
       "WeekHistoryListItem": {
@@ -6197,6 +6470,162 @@
           },
           "404": {
             "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/rescue/preview": {
+      "post": {
+        "operationId": "previewWeekRescue",
+        "summary": "Preview one concrete rescue for a disrupted dinner plan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeekRescueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A non-mutating rescue preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescuePreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          },
+          "409": {
+            "description": "The plan changed since the request was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescueError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No safe rescue is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescueError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-plans/{weekStartDate}/rescue/apply": {
+      "post": {
+        "operationId": "applyWeekRescue",
+        "summary": "Apply a previously previewed rescue idempotently",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeekRescueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The rescue was applied or had already been applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescueApplyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          },
+          "409": {
+            "description": "The plan changed since preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescueError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No safe rescue is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekRescueError"
+                }
+              }
+            }
           }
         }
       }

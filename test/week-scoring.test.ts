@@ -101,6 +101,16 @@ describe('scoreMealFromFeedback', () => {
   })
 })
 
+describe('household pulse wishes', () => {
+  it('strongly prefers an available requested meal without bypassing the candidate pool', () => {
+    const tacos = recipe({ id: 'tacos', title: 'Friday tacos' })
+    const pasta = recipe({ id: 'pasta', title: 'Quick pasta', householdId: 'household-1' })
+    const ranked = rankCandidates([pasta, tacos], baseContext({ allRecipes: [pasta, tacos], wishedMeals: ['tacos'] }))
+
+    expect(ranked[0]?.id).toBe('tacos')
+  })
+})
+
 describe('scoreRecency', () => {
   it('penalizes a recipe cooked last week more than one cooked two weeks ago', () => {
     const meal = recipe({ id: 'a' })

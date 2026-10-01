@@ -8,7 +8,7 @@ import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeekl
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdMealOutcomes, householdMealSignals, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, households, mealFeedback, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
 import { canonicalIngredientItemKey } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
@@ -30,6 +30,7 @@ import {
   evaluateWeekEconomy,
   extractRecentMealIds,
   rankCandidates,
+  recipeMatchesWish,
   scoreMeal,
   updateWeekContext,
   type TFeedbackState,
@@ -330,6 +331,16 @@ const WeekPlanSummarySchema = z.object({
     uniquePurchaseCount: z.number().int().min(0),
     pantryCoveredIngredientCount: z.number().int().min(0),
     reusedIngredientCount: z.number().int().min(0),
+  }),
+  pulse: z.object({
+    responseCount: z.number().int().min(0),
+    memberCount: z.number().int().min(1),
+    wishes: z.array(z.object({
+      userId: z.string().uuid(),
+      givenName: z.string().nullable(),
+      wishedMeal: z.string(),
+      status: z.enum(['fulfilled', 'unavailable', 'not-selected']),
+    })),
   }),
   days: z.array(WeekPlanSummaryDaySchema),
 }).openapi('WeekPlanSummary')
@@ -1584,7 +1595,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
     const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
     const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
-    const [[projection], priorWeekProjections, outcomeRows, [shoppingProjection]] = await Promise.all([
+    const [[projection], priorWeekProjections, outcomeRows, [shoppingProjection], pulseMembers] = await Promise.all([
       tx
         .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
         .from(weekPlanProjections)
@@ -1612,6 +1623,20 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
         .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
         .orderBy(desc(shoppingListProjections.weekStartDate))
         .limit(1),
+      tx.select({
+        userId: householdMemberships.userId,
+        givenName: userProfiles.givenName,
+        wishedMeal: householdWeekPulses.wishedMeal,
+        respondedAt: householdWeekPulses.updatedAt,
+      })
+        .from(householdMemberships)
+        .leftJoin(userProfiles, eq(userProfiles.userId, householdMemberships.userId))
+        .leftJoin(householdWeekPulses, and(
+          eq(householdWeekPulses.householdId, householdMemberships.householdId),
+          eq(householdWeekPulses.weekStartDate, weekStartDate),
+          eq(householdWeekPulses.userId, householdMemberships.userId),
+        ))
+        .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active'))),
     ])
 
     const projectionState = readProjectionState(projection?.state)
@@ -1654,6 +1679,18 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       : []
 
     const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
+    const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
+    const accessibleRecipeTitles = await tx.select({ title: recipes.title }).from(recipes).where(and(
+      eq(recipes.isArchived, false),
+      or(
+        eq(recipes.householdId, householdId),
+        eq(recipes.source, 'builtin'),
+        inArray(
+          recipes.id,
+          tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
+        ),
+      ),
+    ))
 
     const prepBatches = await tx
       .select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId, cookDate: householdPrepBatches.cookDate })
@@ -1718,6 +1755,21 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
         })),
         readPantryStock(shoppingProjection?.state),
       ),
+      pulse: {
+        responseCount: pulseMembers.filter((member) => member.respondedAt !== null).length,
+        memberCount: pulseMembers.length,
+        wishes: pulseMembers.flatMap((member) => {
+          if (!member.wishedMeal) return []
+          const fulfilled = plannedRecipeTitles.some((title) => recipeMatchesWish(title, member.wishedMeal!))
+          const available = accessibleRecipeTitles.some((recipe) => recipeMatchesWish(recipe.title, member.wishedMeal!))
+          return [{
+            userId: member.userId,
+            givenName: member.givenName,
+            wishedMeal: member.wishedMeal,
+            status: fulfilled ? 'fulfilled' as const : available ? 'not-selected' as const : 'unavailable' as const,
+          }]
+        }),
+      },
       explanations: deriveWeekExplanations({
         days,
         recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
@@ -1912,7 +1964,7 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseRows, activeMemberRows] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
@@ -1988,6 +2040,14 @@ export async function doGenerateWeekPlan(
         gte(householdPrepBatchAssignments.date, weekStartDate),
         lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
       ))),
+    withRls(db, accessToken, (tx) => tx
+      .select({ userId: householdWeekPulses.userId, awayDates: householdWeekPulses.awayDates, wishedMeal: householdWeekPulses.wishedMeal, simpleDate: householdWeekPulses.simpleDate })
+      .from(householdWeekPulses)
+      .where(and(eq(householdWeekPulses.householdId, householdId), eq(householdWeekPulses.weekStartDate, weekStartDate)))),
+    withRls(db, accessToken, (tx) => tx
+      .select({ userId: householdMemberships.userId })
+      .from(householdMemberships)
+      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active')))),
   ])
 
   const profile = profileRows[0] ?? null
@@ -2000,11 +2060,20 @@ export async function doGenerateWeekPlan(
       : selectedDayNames.map((day) => [day, { day }]),
   )
   const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
+  const memberCount = activeMemberRows.length
+  const unanimousAwayDates = new Set(orderedDays.map((_, index) => addDays(weekStartDate, index)).filter((date) =>
+    memberCount > 0
+      && pulseRows.length === memberCount
+      && pulseRows.every((row) => Array.isArray(row.awayDates) && row.awayDates.includes(date)),
+  ))
+  const simpleDates = new Set(pulseRows.map((row) => row.simpleDate).filter((date): date is string => Boolean(date)))
+  const remainingWishedMeals = pulseRows.map((row) => row.wishedMeal).filter((wish): wish is string => Boolean(wish))
 
   const projState = readProjectionState(projection?.state)
   const daysToFill = orderedDays.filter((day) => {
     if (!selectedDayNames.includes(day)) return false
     if (addDays(weekStartDate, orderedDays.indexOf(day)) < today) return false
+    if (unanimousAwayDates.has(addDays(weekStartDate, orderedDays.indexOf(day)))) return false
     if (projState.lockedDays.includes(day)) return false
     if (projState.skippedDays.includes(day)) return false
     return regenerate ? true : !projState.meals[day]
@@ -2096,15 +2165,28 @@ export async function doGenerateWeekPlan(
     )
   }
 
+  for (const date of unanimousAwayDates) {
+    const day = orderedDays[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7]
+    if (!day) continue
+    if (!selectedDayNames.includes(day) || projState.skippedDays.includes(day) || projState.lockedDays.includes(day) || projState.meals[day]) continue
+    await appendStreamEvent(
+      db, accessToken,
+      { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId, weekStartDate, causedBy, payload: { eventType: 'day_skipped', dayOfWeek: day } },
+    )
+  }
+
   for (const day of daysToFill) {
     const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
     const scoringPool = unused.length > 0 ? unused : candidates
     const date = addDays(weekStartDate, orderedDays.indexOf(day))
     const weekOverride = projState.contextOverrides?.[date]
-    const selection = mergeDayPlanningContext(selectedDaysByName.get(day), weekOverride)
+    const baseSelection = mergeDayPlanningContext(selectedDaysByName.get(day), weekOverride)
+    const selection = simpleDates.has(date) ? { ...baseSelection, effortLevel: 'busy' as const } : baseSelection
     const ranked = rankCandidates(scoringPool, {
       householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection,
-      recentMealIds, fatiguedMealIds, preferredPrepRecipeIds: prepRecipeIdsByDate.get(date),
+      recentMealIds, fatiguedMealIds, preferredPrepRecipeIds: prepRecipeIdsByDate.get(date), wishedMeals: remainingWishedMeals,
     })
     const next = ranked[0]
     if (!next) continue
@@ -2124,6 +2206,10 @@ export async function doGenerateWeekPlan(
     const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
 
     alreadyUsed.add(next.id)
+    for (let index = remainingWishedMeals.length - 1; index >= 0; index -= 1) {
+      const wishedMeal = remainingWishedMeals[index]
+      if (wishedMeal && recipeMatchesWish(next.title, wishedMeal)) remainingWishedMeals.splice(index, 1)
+    }
     updateWeekContext(weekCtx, next)
     await appendStreamEvent(
       db, accessToken,

@@ -302,6 +302,17 @@ export type TScoringContext = {
   recentMealIds?: TRecentMealIds
   fatiguedMealIds?: string[]
   preferredPrepRecipeIds?: Set<string>
+  wishedMeals?: string[]
+}
+
+export function normalizedMealWish(value: string) {
+  return value.trim().toLocaleLowerCase('sv-SE').replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export function recipeMatchesWish(recipeTitle: string, wishedMeal: string) {
+  const title = normalizedMealWish(recipeTitle)
+  const wish = normalizedMealWish(wishedMeal)
+  return wish.length >= 2 && (title === wish || title.includes(wish) || wish.includes(title))
 }
 
 export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number {
@@ -314,6 +325,7 @@ export function scoreMeal(recipe: TScoringRecipe, ctx: TScoringContext): number 
   score += scoreRecency(recipe, ctx.recentMealIds)
   score += scoreFatigue(recipe, ctx.fatiguedMealIds)
   score += scoreIngredientEconomy(recipe, ctx.weekCtx, ctx.preferredPrepRecipeIds)
+  if (ctx.wishedMeals?.some((wish) => recipeMatchesWish(recipe.title, wish))) score += 18
   return score
 }
 

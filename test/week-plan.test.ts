@@ -7,7 +7,7 @@ import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
-import { householdMealOutcomes, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdWeekPlans, households, householdMemberships, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { householdMealOutcomes, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdWeekPlans, householdWeekPulses, households, householdMemberships, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
   previewPreviousWeekProposal,
@@ -1209,6 +1209,56 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(result).toMatchObject({ ok: true })
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days.slice(0, 3).every((day) => day.state === 'planned')).toBe(true)
+    })
+
+    it('fulfills an available member wish and reports the result', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Ordinary pasta' })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Friday tacos' })
+      await db.insert(householdWeekPulses).values({
+        householdId: householdAId, weekStartDate, userId: userA,
+        awayDates: [], wishedMeal: 'tacos', simpleDate: null,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03')
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days.some((day) => day.recipe?.title === 'Friday tacos')).toBe(true)
+      expect(summary?.pulse.wishes).toMatchObject([{ wishedMeal: 'tacos', status: 'fulfilled' }])
+    })
+
+    it('uses a member simple-night signal as a quick-meal constraint', async () => {
+      await insertProfile([{ day: 'monday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Slow dinner', prepTimeMinutes: 60, tags: ['treat'],
+      })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Quick dinner', prepTimeMinutes: 10, tags: ['quick'],
+      })
+      await db.insert(householdWeekPulses).values({
+        householdId: householdAId, weekStartDate, userId: userA,
+        awayDates: [], wishedMeal: null, simpleDate: weekStartDate,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03')
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]?.recipe?.title).toBe('Quick dinner')
+    })
+
+    it('leaves a selected evening open when every active member is away', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Weeknight dinner' })
+      await db.insert(householdWeekPulses).values({
+        householdId: householdAId, weekStartDate, userId: userA,
+        awayDates: [weekStartDate], wishedMeal: null, simpleDate: null,
+      })
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03')
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]).toMatchObject({ state: 'skipped', recipe: null })
+      expect(summary?.days[1]).toMatchObject({ state: 'planned' })
     })
 
     it('ranks the right recipe for a date override, carries servings, and returns to the household default after clear', async () => {

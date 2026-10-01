@@ -22,6 +22,7 @@ import { buildInternalUserProfileRoutes, buildUserProfileRoutes } from './user-p
 import { buildProductEventsRoutes } from './product-events.js'
 import { buildEntitlementRoutes } from './entitlement-routes.js'
 import { buildAppStoreBillingRoutes } from './app-store-billing-routes.js'
+import { buildWeekPulseRoutes } from './week-pulse.js'
 import type { Db } from './db.js'
 
 export function buildApp(db: Db) {
@@ -73,6 +74,7 @@ export function buildApp(db: Db) {
   app.route('/', buildProductEventsRoutes(db))
   app.route('/', buildEntitlementRoutes(db))
   app.route('/', buildAppStoreBillingRoutes(db))
+  app.route('/', buildWeekPulseRoutes(db))
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',

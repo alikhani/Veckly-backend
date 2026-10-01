@@ -43,6 +43,22 @@ export const householdMemberships = pgTable('household_memberships', {
   uniqueIndex('household_memberships_household_id_user_id_idx').on(table.householdId, table.userId),
 ])
 
+// One lightweight planning contribution per member and week. Every active
+// household member may read the combined pulse, while RLS only permits the
+// caller to create, change, or remove their own row.
+export const householdWeekPulses = pgTable('household_week_pulses', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  weekStartDate: date('week_start_date', { mode: 'string' }).notNull(),
+  userId: uuid('user_id').notNull(),
+  awayDates: jsonb('away_dates').notNull(),
+  wishedMeal: text('wished_meal'),
+  simpleDate: date('simple_date', { mode: 'string' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.weekStartDate, table.userId], name: 'household_week_pulses_pk' }),
+  index('household_week_pulses_household_week_idx').on(table.householdId, table.weekStartDate),
+])
+
 export const userProfiles = pgTable('user_profiles', {
   userId: uuid('user_id').primaryKey(),
   givenName: text('given_name').notNull(),

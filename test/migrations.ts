@@ -71,6 +71,7 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [weekPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_plans') as exists`)
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
+  const [weekPulsesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_pulses') as exists`)
   const alreadyHasRateLimitHitsMigration = Boolean(rateLimitHitsMarker?.exists)
   const alreadyHasHouseholdEntitlementsMigration = Boolean(householdEntitlementsMarker?.exists)
   const alreadyHasHouseholdAiUsageMigration = Boolean(householdAiUsageMarker?.exists)
@@ -95,8 +96,10 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasWeekPlansMigration = Boolean(weekPlansMarker?.exists)
   const alreadyHasMealFeedbackMigration = Boolean(mealFeedbackMarker?.exists)
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
+  const alreadyHasWeekPulsesMigration = Boolean(weekPulsesMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasWeekPulsesMigration && file < '0045_') continue
     if (alreadyHasMealOutcomesMigration && file < '0041_') continue
     if (alreadyHasSubscriptionSponsorshipMigration && file < '0040_') continue
     if (alreadyHasGateHardeningMigration && file < '0039_') continue
@@ -164,5 +167,6 @@ export async function ensureAuthenticatedRoleGranted(db: Db) {
     grant select, insert, delete on "household_prep_batch_assignments" to authenticated;
     grant select, insert, update on "user_profiles" to authenticated;
     grant select, insert, update, delete on "household_recipe_recommendations" to authenticated;
+    grant select, insert, update, delete on "household_week_pulses" to authenticated;
   `))
 }

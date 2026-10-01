@@ -2320,6 +2320,59 @@
               "reusedIngredientCount"
             ]
           },
+          "pulse": {
+            "type": "object",
+            "properties": {
+              "responseCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "memberCount": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "wishes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "givenName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "wishedMeal": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "fulfilled",
+                        "unavailable",
+                        "not-selected"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "userId",
+                    "givenName",
+                    "wishedMeal",
+                    "status"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "responseCount",
+              "memberCount",
+              "wishes"
+            ]
+          },
           "days": {
             "type": "array",
             "items": {
@@ -2333,6 +2386,7 @@
           "updatedAt",
           "explanations",
           "economy",
+          "pulse",
           "days"
         ]
       },
@@ -4997,6 +5051,132 @@
         "required": [
           "signedPayload"
         ]
+      },
+      "WeekPulseMember": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "givenName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "familyName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "responded": {
+            "type": "boolean"
+          },
+          "isCurrentUser": {
+            "type": "boolean"
+          },
+          "awayDates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "wishedMeal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "simpleDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "userId",
+          "givenName",
+          "familyName",
+          "responded",
+          "isCurrentUser",
+          "awayDates",
+          "wishedMeal",
+          "simpleDate",
+          "updatedAt"
+        ]
+      },
+      "WeekPulse": {
+        "type": "object",
+        "properties": {
+          "householdId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekStartDate": {
+            "type": "string"
+          },
+          "responseCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memberCount": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WeekPulseMember"
+            }
+          }
+        },
+        "required": [
+          "householdId",
+          "weekStartDate",
+          "responseCount",
+          "memberCount",
+          "members"
+        ]
+      },
+      "WeekPulseInput": {
+        "type": "object",
+        "properties": {
+          "awayDates": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "maxItems": 7,
+            "default": []
+          },
+          "wishedMeal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 80,
+            "default": null
+          },
+          "simpleDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "default": null
+          }
+        }
       }
     },
     "parameters": {}
@@ -9226,6 +9406,118 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-pulses/{weekStartDate}": {
+      "get": {
+        "operationId": "getWeekPulse",
+        "summary": "Get the combined household pulse for a week",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household pulse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekPulse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid week start date"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/week-pulses/{weekStartDate}/me": {
+      "put": {
+        "operationId": "putMyWeekPulse",
+        "summary": "Create or replace the current member week pulse",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "weekStartDate",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeekPulseInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated household pulse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekPulse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Dates must belong to the requested week"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

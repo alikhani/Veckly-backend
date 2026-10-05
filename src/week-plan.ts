@@ -12,6 +12,7 @@ import { householdMealOutcomes, householdMealSignals, householdMemberships, hous
 import { readRecipeIngredients } from './ingredient-categories.js'
 import { canonicalIngredientItemKey } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
+import { listWeekPulseRows } from './week-pulse.js'
 import {
   DayPlanningContextSchema,
   HouseholdDaySelectionSchema,
@@ -1964,7 +1965,7 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseRows, activeMemberRows] = await Promise.all([
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseMemberRows] = await Promise.all([
     withRls(db, accessToken, (tx) =>
       tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
         .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
@@ -2040,14 +2041,7 @@ export async function doGenerateWeekPlan(
         gte(householdPrepBatchAssignments.date, weekStartDate),
         lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
       ))),
-    withRls(db, accessToken, (tx) => tx
-      .select({ userId: householdWeekPulses.userId, awayDates: householdWeekPulses.awayDates, wishedMeal: householdWeekPulses.wishedMeal, simpleDate: householdWeekPulses.simpleDate })
-      .from(householdWeekPulses)
-      .where(and(eq(householdWeekPulses.householdId, householdId), eq(householdWeekPulses.weekStartDate, weekStartDate)))),
-    withRls(db, accessToken, (tx) => tx
-      .select({ userId: householdMemberships.userId })
-      .from(householdMemberships)
-      .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active')))),
+    listWeekPulseRows(db, accessToken, householdId, weekStartDate),
   ])
 
   const profile = profileRows[0] ?? null
@@ -2060,14 +2054,15 @@ export async function doGenerateWeekPlan(
       : selectedDayNames.map((day) => [day, { day }]),
   )
   const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
-  const memberCount = activeMemberRows.length
+  const respondedPulseRows = pulseMemberRows.filter((row) => row.updatedAt !== null)
+  const memberCount = pulseMemberRows.length
   const unanimousAwayDates = new Set(orderedDays.map((_, index) => addDays(weekStartDate, index)).filter((date) =>
     memberCount > 0
-      && pulseRows.length === memberCount
-      && pulseRows.every((row) => Array.isArray(row.awayDates) && row.awayDates.includes(date)),
+      && respondedPulseRows.length === memberCount
+      && respondedPulseRows.every((row) => Array.isArray(row.awayDates) && row.awayDates.includes(date)),
   ))
-  const simpleDates = new Set(pulseRows.map((row) => row.simpleDate).filter((date): date is string => Boolean(date)))
-  const remainingWishedMeals = pulseRows.map((row) => row.wishedMeal).filter((wish): wish is string => Boolean(wish))
+  const simpleDates = new Set(respondedPulseRows.map((row) => row.simpleDate).filter((date): date is string => Boolean(date)))
+  const remainingWishedMeals = respondedPulseRows.map((row) => row.wishedMeal).filter((wish): wish is string => Boolean(wish))
 
   const projState = readProjectionState(projection?.state)
   const daysToFill = orderedDays.filter((day) => {

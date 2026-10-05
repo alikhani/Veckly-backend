@@ -1261,6 +1261,30 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(summary?.days[1]).toMatchObject({ state: 'planned' })
     })
 
+    it('ignores a departed member pulse when evaluating the active household', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Weeknight dinner' })
+      await db.insert(householdMemberships).values({
+        householdId: householdAId, userId: userB, role: 'member', status: 'removed',
+      })
+      await db.insert(householdWeekPulses).values([
+        {
+          householdId: householdAId, weekStartDate, userId: userA,
+          awayDates: [weekStartDate], wishedMeal: null, simpleDate: null,
+        },
+        {
+          householdId: householdAId, weekStartDate, userId: userB,
+          awayDates: [], wishedMeal: 'tacos', simpleDate: weekStartDate,
+        },
+      ])
+
+      await doGenerateWeekPlan(db, fakeAccessToken(userA), userA, householdAId, weekStartDate, false, '2026-06-03')
+      const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
+
+      expect(summary?.days[0]).toMatchObject({ state: 'skipped', recipe: null })
+      expect(summary?.pulse.wishes).toEqual([])
+    })
+
     it('ranks the right recipe for a date override, carries servings, and returns to the household default after clear', async () => {
       await insertProfile([{ day: 'tuesday', cookingTolerance: 'relaxed' }])
       const quick = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {

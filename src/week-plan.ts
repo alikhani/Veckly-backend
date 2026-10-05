@@ -10,7 +10,7 @@ import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gat
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
 import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
-import { canonicalIngredientItemKey } from './ingredient-identity.js'
+import { canonicalIngredientItemKey, pantryCoversIngredient } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
 import { listWeekPulseRows } from './week-pulse.js'
 import {
@@ -108,7 +108,7 @@ const PlanningRequestUpdatedPayloadSchema = z.object({
 // Populated only for algorithm-assigned meals (see `doGenerateWeekPlan`) —
 // a manual pick via the meal picker has no algorithmic "why", so both are
 // simply omitted for `source: 'user'` events.
-const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety', 'quick-weekday', 'week-override'])
+const AssignmentReasonSchema = z.enum(['family-recipe', 'liked-before', 'back-after-break', 'based-on-feedback', 'new-for-variety', 'quick-weekday', 'week-override', 'pantry-coverage'])
 const AssignmentConfidenceSchema = z.enum(['ok', 'low'])
 
 // `recipeRef` is the UUID of a recipe in the `recipes` table. Validated here
@@ -319,6 +319,10 @@ const WeekPlanExplanationSchema = z.discriminatedUnion('kind', [
     kind: z.literal('shared-ingredient'),
     ingredient: z.string(),
     dinnerCount: z.number().int().min(2),
+  }),
+  z.object({
+    kind: z.literal('pantry-coverage'),
+    ingredients: z.array(z.string()).min(1).max(5),
   }),
 ]).openapi('WeekPlanExplanation')
 
@@ -879,6 +883,7 @@ const upsertWeekHistoryPlanRoute = createRoute({
 
 const GenerateWeekPlanRequestSchema = z.object({
   regenerate: z.boolean().default(false),
+  pantryItemKeys: z.array(z.string().trim().min(1)).max(5).default([]),
 }).openapi('GenerateWeekPlanRequest')
 
 const GenerateWeekPlanResponseSchema = z.object({
@@ -1289,8 +1294,24 @@ export function deriveWeekExplanations(input: {
   days: Array<{ date: string; reason: string | null; recipe: { id: string; title: string } | null }>
   recipeIngredients: Map<string, Array<{ item: string; unit?: string | null; category?: string | null }>>
   prepLinks: Array<{ recipeId: string | null; recipeTitle: string | null; cookDate: string; coveredDates: string[] }>
+  pantryStock?: Record<string, number>
 }): TWeekExplanation[] {
   const explanations: TWeekExplanation[] = []
+
+  // An explicit pantry focus is a user instruction, so acknowledge its
+  // effect before lower-priority planning observations can fill the two
+  // explanation slots.
+  if (input.days.some((day) => day.reason === 'pantry-coverage')) {
+    const coveredIngredients = [...new Set(input.days.flatMap((day) => day.recipe
+      ? (input.recipeIngredients.get(day.recipe.id) ?? [])
+        .filter((ingredient) => pantryCoversIngredient(ingredient, input.pantryStock ?? {}))
+        .map((ingredient) => ingredient.item.trim())
+      : []))]
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, 5)
+    if (coveredIngredients.length > 0) explanations.push({ kind: 'pantry-coverage', ingredients: coveredIngredients })
+  }
 
   const contextDay = input.days.find((day) => day.reason === 'week-override' && day.recipe)
   if (contextDay?.recipe) {
@@ -1736,6 +1757,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
         } : null,
       }
     })
+    const pantryStock = readPantryStock(shoppingProjection?.state)
 
     return {
       household,
@@ -1754,7 +1776,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           mealWeight: null,
           householdId: null,
         })),
-        readPantryStock(shoppingProjection?.state),
+        pantryStock,
       ),
       pulse: {
         responseCount: pulseMembers.filter((member) => member.respondedAt !== null).length,
@@ -1780,6 +1802,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
           cookDate: batch.cookDate,
           coveredDates: assignmentsByBatch.get(batch.id) ?? [],
         })),
+        pantryStock,
       }),
       days,
     }
@@ -1957,6 +1980,7 @@ export async function doGenerateWeekPlan(
   weekStartDate: string,
   regenerate: boolean,
   today = defaultTodayForWeek(weekStartDate),
+  pantryItemKeys: string[] = [],
 ): Promise<{ ok: true; generated: boolean } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
   const member = await assertMembership(db, accessToken, householdId, userId)
   if (!member) return { error: 'NOT_MEMBER' as const }
@@ -2133,7 +2157,13 @@ export async function doGenerateWeekPlan(
     .map(([, meal]) => meal)
 
   const alreadyUsed = new Set(keptMeals.map((m) => m.recipeRef))
-  const weekCtx = createWeekContext(readPantryStock(shoppingRows[0]?.state))
+  const pantryStock = readPantryStock(shoppingRows[0]?.state)
+  const pantryFocusKeys = new Set(pantryItemKeys)
+  const focusedPantryStock = Object.fromEntries(
+    Object.entries(pantryStock).filter(([key, quantity]) => pantryFocusKeys.has(key) && quantity > 0),
+  )
+  const hasPantryFocus = Object.keys(focusedPantryStock).length > 0
+  const weekCtx = createWeekContext(hasPantryFocus ? focusedPantryStock : pantryStock, hasPantryFocus ? 4 : 0.75)
   const prepRecipeIdsByDate = new Map<string, Set<string>>()
   for (const row of prepAssignmentRows) {
     if (!row.recipeId) continue
@@ -2188,7 +2218,7 @@ export async function doGenerateWeekPlan(
 
     // Evaluated against `weekCtx` as it stood *before* this pick — same
     // order as the web engine (evaluateConfidence, then updateWeekContext).
-    const reason = deriveAssignmentReason(next, {
+    const baseReason = deriveAssignmentReason(next, {
       householdId,
       feedback,
       allRecipes: candidates,
@@ -2198,6 +2228,9 @@ export async function doGenerateWeekPlan(
       legacyPlannedRecipeIds,
       selectionSource: weekOverride ? 'week-override' : 'household-default',
     })
+    const reason = hasPantryFocus && readIngredientArray(next.ingredients).some((ingredient) => pantryCoversIngredient(ingredient, focusedPantryStock))
+      ? 'pantry-coverage' as const
+      : baseReason
     const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
 
     alreadyUsed.add(next.id)
@@ -2283,7 +2316,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const accessToken = c.get('accessToken')
     const user = c.get('user')
     const { householdId, weekStartDate } = c.req.valid('param')
-    const { regenerate } = c.req.valid('json')
+    const { regenerate, pantryItemKeys } = c.req.valid('json')
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
@@ -2314,6 +2347,7 @@ export function buildWeekPlanRoutes(db: Db) {
         weekStartDate,
         regenerate,
         today,
+        [...new Set(pantryItemKeys)],
       )
     } catch (error) {
       if (reservation.recorded && reservation.persisted) await releaseWeeklyGenerationBestEffort(db, householdId, usagePeriodStart, regenerate)

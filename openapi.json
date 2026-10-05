@@ -1161,6 +1161,15 @@
           "regenerate": {
             "type": "boolean",
             "default": false
+          },
+          "pantryItemKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 5,
+            "default": []
           }
         }
       },
@@ -1626,7 +1635,8 @@
                       "based-on-feedback",
                       "new-for-variety",
                       "quick-weekday",
-                      "week-override"
+                      "week-override",
+                      "pantry-coverage"
                     ]
                   },
                   "confidence": {
@@ -2132,6 +2142,29 @@
               "ingredient",
               "dinnerCount"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "pantry-coverage"
+                ]
+              },
+              "ingredients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "maxItems": 5
+              }
+            },
+            "required": [
+              "kind",
+              "ingredients"
+            ]
           }
         ]
       },
@@ -2227,7 +2260,8 @@
               "based-on-feedback",
               "new-for-variety",
               "quick-weekday",
-              "week-override"
+              "week-override",
+              "pantry-coverage"
             ]
           },
           "confidence": {
@@ -3618,6 +3652,59 @@
         },
         "required": [
           "state"
+        ]
+      },
+      "ShoppingPreferences": {
+        "type": "object",
+        "properties": {
+          "categoryOrder": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "produce",
+                "protein",
+                "dairy",
+                "pantry",
+                "frozen",
+                "bakery",
+                "other"
+              ]
+            }
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "categoryOrder",
+          "updatedAt"
+        ]
+      },
+      "UpdateShoppingPreferences": {
+        "type": "object",
+        "properties": {
+          "categoryOrder": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "produce",
+                "protein",
+                "dairy",
+                "pantry",
+                "frozen",
+                "bakery",
+                "other"
+              ]
+            }
+          }
+        },
+        "required": [
+          "categoryOrder"
         ]
       },
       "CreateRecipe": {
@@ -7705,6 +7792,97 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/households/{householdId}/shopping-preferences": {
+      "get": {
+        "operationId": "getShoppingPreferences",
+        "summary": "Read household shopping preferences",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shopping preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putShoppingPreferences",
+        "summary": "Replace household shopping preferences",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShoppingPreferences"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated shopping preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingPreferences"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category order"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
           }
         }
       }

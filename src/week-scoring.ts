@@ -183,10 +183,11 @@ export type TWeekContext = {
   placedWeights: Array<string | null>
   ingredientUseCounts: Record<string, number>
   pantryStock: Record<string, number>
+  pantryIngredientWeight: number
 }
 
-export function createWeekContext(pantryStock: Record<string, number> = {}): TWeekContext {
-  return { placedCuisines: {}, placedProteins: {}, placedWeights: [], ingredientUseCounts: {}, pantryStock }
+export function createWeekContext(pantryStock: Record<string, number> = {}, pantryIngredientWeight = 0.75): TWeekContext {
+  return { placedCuisines: {}, placedProteins: {}, placedWeights: [], ingredientUseCounts: {}, pantryStock, pantryIngredientWeight }
 }
 
 /** Penalizes repeating the same cuisine/protein a 3rd+ time in the week, and
@@ -248,7 +249,7 @@ export function scoreIngredientEconomy(
   const prepChainScore = preferredPrepRecipeIds?.has(recipe.id) ? 14 : 0
   return prepChainScore
     + Math.min(3, overlapCount) * 1.25
-    + Math.min(3, pantryCount) * 0.75
+    + Math.min(3, pantryCount) * ctx.pantryIngredientWeight
     - Math.min(10, newCount) * 0.15
 }
 

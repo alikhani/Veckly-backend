@@ -76,6 +76,48 @@ describe('deriveWeekExplanations', () => {
 
     expect(explanations).toEqual([{ kind: 'shared-ingredient', ingredient: 'Citron', dinnerCount: 2 }])
   })
+
+  it('explains which pantry ingredients shaped an explicit pantry-focused plan', () => {
+    const explanations = deriveWeekExplanations({
+      days: [{ date: '2026-06-08', reason: 'pantry-coverage', recipe: { id: 'curry', title: 'Curry' } }],
+      recipeIngredients: new Map([['curry', [
+        { item: 'Rice', unit: 'g', category: 'pantry' },
+        { item: 'Chicken', unit: 'g', category: 'protein' },
+      ]]]),
+      prepLinks: [],
+      pantryStock: { 'pantry:rice:g': 1 },
+    })
+
+    expect(explanations).toEqual([{ kind: 'pantry-coverage', ingredients: ['Rice'] }])
+  })
+
+  it('keeps an explicit pantry explanation visible when other planning signals exist', () => {
+    const explanations = deriveWeekExplanations({
+      days: [{
+        date: '2026-06-08',
+        reason: 'pantry-coverage',
+        recipe: { id: 'curry', title: 'Curry' },
+      }, {
+        date: '2026-06-09',
+        reason: 'week-override',
+        recipe: { id: 'soup', title: 'Soup' },
+      }],
+      recipeIngredients: new Map([
+        ['curry', [{ item: 'Rice', unit: 'g', category: 'pantry' }]],
+        ['soup', [{ item: 'Rice', unit: 'g', category: 'pantry' }]],
+      ]),
+      prepLinks: [{
+        recipeId: 'curry',
+        recipeTitle: 'Curry',
+        cookDate: '2026-06-08',
+        coveredDates: ['2026-06-08', '2026-06-10'],
+      }],
+      pantryStock: { 'pantry:rice:g': 1 },
+    })
+
+    expect(explanations).toHaveLength(2)
+    expect(explanations[0]).toEqual({ kind: 'pantry-coverage', ingredients: ['Rice'] })
+  })
 })
 
 describe('deriveWeekRescuePreview', () => {

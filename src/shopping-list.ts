@@ -5,7 +5,7 @@ import { appendStreamEvent, getStreamProjection } from './event-stream.js'
 import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
-import { households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
+import { householdShoppingPreferences, households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
 import { normalizeIngredientCategory, readRecipeIngredients } from './ingredient-categories.js'
 import {
@@ -15,6 +15,7 @@ import {
   normalizeIngredientKeyPart,
   singularizeIngredientName,
 } from './ingredient-identity.js'
+import { DEFAULT_SHOPPING_CATEGORY_ORDER } from './shopping-preferences.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -607,6 +608,15 @@ export async function getShoppingListSummary(
       .from(householdProfiles)
       .where(eq(householdProfiles.householdId, householdId))
       .limit(1)
+    const [preferencesRow] = await tx
+      .select({ categoryOrder: householdShoppingPreferences.categoryOrder })
+      .from(householdShoppingPreferences)
+      .where(eq(householdShoppingPreferences.householdId, householdId))
+      .limit(1)
+    const categoryOrder = Array.isArray(preferencesRow?.categoryOrder)
+      ? preferencesRow.categoryOrder.filter((value): value is string => typeof value === 'string')
+      : DEFAULT_SHOPPING_CATEGORY_ORDER
+    const categorySortIndex = new Map(categoryOrder.map((category, index) => [normalizeKeyPart(category), index]))
     // No profile row at all → no household size to scale to; each meal falls
     // back to the recipe's own base servings (i.e. unscaled) per decision 17.
     const householdSize = profileRow ? profileRow.adults + profileRow.children : undefined
@@ -756,7 +766,10 @@ export async function getShoppingListSummary(
     }
 
     const groups = Array.from(groupsByCategory.entries())
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) =>
+        (categorySortIndex.get(left) ?? Number.MAX_SAFE_INTEGER) - (categorySortIndex.get(right) ?? Number.MAX_SAFE_INTEGER)
+          || left.localeCompare(right)
+      )
       .map(([, group]) => ({
         category: group.category,
         items: group.items.sort((left, right) => left.label.localeCompare(right.label)),

@@ -254,6 +254,16 @@ describe('ingredient economy scoring', () => {
     expect(scoreIngredientEconomy(pantryRecipe, ctx, undefined)).toBeGreaterThan(scoreIngredientEconomy(other, ctx, undefined))
   })
 
+  it('makes pantry coverage materially stronger only after the household explicitly asks for it', () => {
+    const pantryRecipe = recipe({ id: 'pantry', ingredients: [{ item: 'rice', unit: 'g', category: 'pantry' }] })
+    const stock = { 'pantry:rice:g': 1 }
+
+    const backgroundScore = scoreIngredientEconomy(pantryRecipe, createWeekContext(stock), undefined)
+    const explicitScore = scoreIngredientEconomy(pantryRecipe, createWeekContext(stock, 4), undefined)
+
+    expect(explicitScore).toBeGreaterThan(backgroundScore + 3)
+  })
+
   it('makes an explicit prep chain stronger than raw ingredient overlap', () => {
     const prepared = recipe({ id: 'prepared', ingredients: [{ item: 'beans', unit: 'g' }] })
     const overlap = recipe({ id: 'overlap', ingredients: [

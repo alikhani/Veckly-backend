@@ -3,14 +3,9 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
-import { ensureAuthenticatedRoleGranted, ensureMigrationsApplied } from './migrations.js'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
-
-const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations')
 
 describeWithDb('Prep batches + RLS', () => {
   const db = createDb(testDatabaseUrl!)
@@ -22,8 +17,6 @@ describeWithDb('Prep batches + RLS', () => {
   let householdBId: string
 
   beforeAll(async () => {
-    await ensureMigrationsApplied(db, migrationsDir)
-    await ensureAuthenticatedRoleGranted(db)
     process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
   })
 

@@ -273,6 +273,7 @@ export const householdMealOutcomes = pgTable('household_meal_outcomes', {
   plannedRecipeId: uuid('planned_recipe_id').notNull(),
   status: mealOutcomeStatus('status').notNull(),
   portionOutcome: mealPortionOutcome('portion_outcome'),
+  intentionalLeftovers: boolean('intentional_leftovers').notNull().default(false),
   reason: mealOutcomeReason('reason'),
   actualRecipeId: uuid('actual_recipe_id'),
   actualMealLabel: text('actual_meal_label'),
@@ -283,6 +284,16 @@ export const householdMealOutcomes = pgTable('household_meal_outcomes', {
   primaryKey({ columns: [table.householdId, table.weekStartDate, table.date], name: 'household_meal_outcomes_pk' }),
   index('household_meal_outcomes_household_week_idx').on(table.householdId, table.weekStartDate),
   index('household_meal_outcomes_planned_recipe_idx').on(table.plannedRecipeId),
+])
+
+export const householdPortionMemories = pgTable('household_portion_memories', {
+  householdId: uuid('household_id').notNull().references(() => households.id, { onDelete: 'cascade' }),
+  recipeId: uuid('recipe_id').notNull(),
+  ignoredThrough: timestamp('ignored_through', { withTimezone: true }).notNull(),
+  updatedBy: uuid('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.householdId, table.recipeId], name: 'household_portion_memories_pk' }),
 ])
 
 // Server-side cache for `/recipes/recommend` (see recipe-recommendations.ts).

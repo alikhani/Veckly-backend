@@ -306,6 +306,9 @@
               "too_much"
             ]
           },
+          "intentionalLeftovers": {
+            "type": "boolean"
+          },
           "reason": {
             "type": [
               "string",
@@ -351,6 +354,7 @@
           "plannedRecipeId",
           "status",
           "portionOutcome",
+          "intentionalLeftovers",
           "reason",
           "actualRecipeId",
           "actualMealLabel",
@@ -394,6 +398,10 @@
           },
           "portionOutcome": {
             "$ref": "#/components/schemas/MealPortionOutcome"
+          },
+          "intentionalLeftovers": {
+            "type": "boolean",
+            "default": false
           },
           "reason": {
             "$ref": "#/components/schemas/MealOutcomeReason"
@@ -2216,6 +2224,39 @@
           "tags"
         ]
       },
+      "PortionSuggestion": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": [
+              "more",
+              "less"
+            ]
+          },
+          "suggestedServings": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidenceCount": {
+            "type": "integer",
+            "minimum": 3
+          },
+          "matchingCount": {
+            "type": "integer",
+            "minimum": 2
+          }
+        },
+        "required": [
+          "direction",
+          "suggestedServings",
+          "evidenceCount",
+          "matchingCount"
+        ]
+      },
       "WeekPlanSummaryDay": {
         "type": "object",
         "properties": {
@@ -2279,6 +2320,9 @@
               "integer",
               "null"
             ]
+          },
+          "portionSuggestion": {
+            "$ref": "#/components/schemas/PortionSuggestion"
           }
         },
         "required": [
@@ -2289,7 +2333,8 @@
           "recipe",
           "reason",
           "confidence",
-          "streakWeeks"
+          "streakWeeks",
+          "portionSuggestion"
         ]
       },
       "WeekPlanSummary": {
@@ -3705,6 +3750,40 @@
         },
         "required": [
           "categoryOrder"
+        ]
+      },
+      "PortionMemoryUpdate": {
+        "type": "object",
+        "properties": {
+          "ignoredThrough": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "ignore",
+              "reset"
+            ]
+          }
+        },
+        "required": [
+          "ignoredThrough",
+          "action"
+        ]
+      },
+      "UpdatePortionMemory": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "ignore",
+              "reset"
+            ]
+          }
+        },
+        "required": [
+          "action"
         ]
       },
       "CreateRecipe": {
@@ -7877,6 +7956,65 @@
           },
           "400": {
             "description": "Invalid category order"
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Household not found or caller is not a member"
+          }
+        }
+      }
+    },
+    "/households/{householdId}/portion-memory/{recipeId}": {
+      "put": {
+        "operationId": "updatePortionMemory",
+        "summary": "Ignore the current portion suggestion or reset learned portion history",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "householdId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "recipeId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePortionMemory"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Portion memory updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortionMemoryUpdate"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"

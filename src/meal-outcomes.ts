@@ -29,6 +29,7 @@ const MealOutcomeRecordSchema = z.object({
   plannedRecipeId: z.string().uuid(),
   status: MealOutcomeStatusSchema,
   portionOutcome: z.enum(mealPortionOutcomeValues).nullable(),
+  intentionalLeftovers: z.boolean(),
   reason: z.enum(mealOutcomeReasonValues).nullable(),
   actualRecipeId: z.string().uuid().nullable(),
   actualMealLabel: z.string().nullable(),
@@ -42,6 +43,7 @@ const UpsertMealOutcomeSchema = z.object({
   plannedRecipeId: z.string().uuid(),
   status: MealOutcomeStatusSchema,
   portionOutcome: MealPortionOutcomeSchema.optional(),
+  intentionalLeftovers: z.boolean().optional().default(false),
   reason: MealOutcomeReasonSchema.optional(),
   // These describe what was eaten instead. Both are optional because
   // `changed_plan` may be recorded before the replacement is known.
@@ -62,6 +64,13 @@ const UpsertMealOutcomeSchema = z.object({
       message: 'A skipped meal cannot have a portion outcome',
     })
   }
+  if (value.intentionalLeftovers && value.portionOutcome !== 'too_much') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['intentionalLeftovers'],
+      message: 'Intentional leftovers only apply when the portion outcome is too_much',
+    })
+  }
 }).openapi('UpsertMealOutcome')
 
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })
@@ -80,6 +89,7 @@ function toMealOutcomeRecord(row: typeof householdMealOutcomes.$inferSelect) {
     plannedRecipeId: row.plannedRecipeId,
     status: row.status,
     portionOutcome: row.portionOutcome,
+    intentionalLeftovers: row.intentionalLeftovers,
     reason: row.reason,
     actualRecipeId: row.actualRecipeId,
     actualMealLabel: row.actualMealLabel,
@@ -121,7 +131,7 @@ export async function upsertMealOutcome(
   userId: string,
   householdId: string,
   date: string,
-  input: z.infer<typeof UpsertMealOutcomeSchema>,
+  input: z.input<typeof UpsertMealOutcomeSchema>,
 ) {
   return withRls(db, accessToken, async (tx) => {
     const now = new Date()
@@ -134,6 +144,7 @@ export async function upsertMealOutcome(
         plannedRecipeId: input.plannedRecipeId,
         status: input.status,
         portionOutcome: input.portionOutcome ?? null,
+        intentionalLeftovers: input.intentionalLeftovers ?? false,
         reason: input.reason ?? null,
         actualRecipeId: input.actualRecipeId ?? null,
         actualMealLabel: input.actualMealLabel ?? null,
@@ -150,6 +161,7 @@ export async function upsertMealOutcome(
           plannedRecipeId: input.plannedRecipeId,
           status: input.status,
           portionOutcome: input.portionOutcome ?? null,
+          intentionalLeftovers: input.intentionalLeftovers ?? false,
           reason: input.reason ?? null,
           actualRecipeId: input.actualRecipeId ?? null,
           actualMealLabel: input.actualMealLabel ?? null,

@@ -907,6 +907,7 @@ describeWithDb('Week-plan event log + projection', () => {
         reason: null,
         confidence: null,
         streakWeeks: null,
+        portionSuggestion: null,
         recipe: {
           id: recipe.id,
           title: 'Monday Pasta',

@@ -12,6 +12,7 @@ import { buildInvitesRoutes, buildInternalInvitesRoutes } from './invites.js'
 import { buildWeekPlanRoutes } from './week-plan.js'
 import { buildShoppingListRoutes } from './shopping-list.js'
 import { buildShoppingPreferencesRoutes } from './shopping-preferences.js'
+import { buildPortionMemoryRoutes } from './portion-memory.js'
 import { buildInternalRecipesRoutes, buildRecipesRoutes } from './recipes.js'
 import { buildInternalRecipeFillInRoutes, buildRecipeFillInRoutes } from './recipe-fill-in.js'
 import { buildInternalRecipeImportRoutes, buildRecipeImportRoutes } from './recipe-import.js'
@@ -65,6 +66,7 @@ export function buildApp(db: Db) {
   app.route('/', buildWeekPlanRoutes(db))
   app.route('/', buildShoppingListRoutes(db))
   app.route('/', buildShoppingPreferencesRoutes(db))
+  app.route('/', buildPortionMemoryRoutes(db))
   app.route('/', buildRecipesRoutes(db))
   app.route('/', buildRecipeFillInRoutes(db))
   app.route('/', buildRecipeImportRoutes(db))

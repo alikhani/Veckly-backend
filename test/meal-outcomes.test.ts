@@ -119,6 +119,18 @@ describeWithDb('Meal outcomes + RLS', () => {
     })
   })
 
+  it('records when surplus was intentionally planned for leftovers', async () => {
+    const outcome = await upsertMealOutcome(db, fakeAccessToken(userA), userA, householdAId, date, {
+      weekStartDate,
+      plannedRecipeId,
+      status: 'cooked',
+      portionOutcome: 'too_much',
+      intentionalLeftovers: true,
+    })
+
+    expect(outcome.intentionalLeftovers).toBe(true)
+  })
+
   it('invalidates every localized recommendation cache entry when history changes', async () => {
     await db.insert(householdRecipeRecommendations).values([
       { householdId: householdAId, language: 'en', recommendations: [{ mealId: plannedRecipeId, reason: 'Old' }] },
@@ -204,6 +216,17 @@ describeWithDb('Meal outcomes + RLS', () => {
       portionOutcome: 'too_much',
       updatedBy: userA,
     })).rejects.toThrow(/household_meal_outcomes_skipped_portion_check/i)
+
+    await expect(db.insert(householdMealOutcomes).values({
+      householdId: householdAId,
+      weekStartDate,
+      date,
+      plannedRecipeId,
+      status: 'cooked',
+      portionOutcome: 'right_amount',
+      intentionalLeftovers: true,
+      updatedBy: userA,
+    })).rejects.toThrow(/household_meal_outcomes_intentional_leftovers_check/i)
   })
 
   it('returns 401 from both public routes without a bearer token', async () => {

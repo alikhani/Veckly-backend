@@ -4,15 +4,10 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { households, householdMemberships } from '../src/schema.js'
 import { getMyProfile, upsertMyProfile } from '../src/user-profile.js'
-import { ensureAuthenticatedRoleGranted, ensureMigrationsApplied } from './migrations.js'
 import { fakeAccessToken } from './fake-access-token.js'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithDb = testDatabaseUrl ? describe : describe.skip
-
-const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations')
 
 describeWithDb('User profiles (given/family name) + RLS', () => {
   const db = createDb(testDatabaseUrl!)
@@ -23,8 +18,6 @@ describeWithDb('User profiles (given/family name) + RLS', () => {
   const stranger = 'cccccccc-3333-3333-3333-333333333333'
 
   beforeAll(async () => {
-    await ensureMigrationsApplied(db, migrationsDir)
-    await ensureAuthenticatedRoleGranted(db)
     process.env.VECKLY_INTERNAL_API_KEY = 'test-internal-key'
   })
 

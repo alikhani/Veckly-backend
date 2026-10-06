@@ -8,11 +8,12 @@ import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeekl
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPortionMemories, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
 import { canonicalIngredientItemKey, pantryCoversIngredient } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
 import { listWeekPulseRows } from './week-pulse.js'
+import { derivePortionSuggestion, PortionSuggestionSchema } from './portion-memory.js'
 import {
   DayPlanningContextSchema,
   HouseholdDaySelectionSchema,
@@ -301,6 +302,7 @@ const WeekPlanSummaryDaySchema = z.object({
   // null below the satiation-hint threshold (3). Presentation-only — has no
   // bearing on generation/scoring (see `computeCurrentStreak`).
   streakWeeks: z.number().int().nullable(),
+  portionSuggestion: PortionSuggestionSchema.nullable(),
 }).openapi('WeekPlanSummaryDay')
 
 const WeekPlanExplanationSchema = z.discriminatedUnion('kind', [
@@ -1701,6 +1703,30 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
       : []
 
     const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
+    const [portionOutcomeRows, portionMemoryRows] = recipeIds.length ? await Promise.all([
+      tx.select({
+        plannedRecipeId: householdMealOutcomes.plannedRecipeId,
+        status: householdMealOutcomes.status,
+        portionOutcome: householdMealOutcomes.portionOutcome,
+        intentionalLeftovers: householdMealOutcomes.intentionalLeftovers,
+        updatedAt: householdMealOutcomes.updatedAt,
+      }).from(householdMealOutcomes).where(and(
+        eq(householdMealOutcomes.householdId, householdId),
+        inArray(householdMealOutcomes.plannedRecipeId, recipeIds),
+      )),
+      tx.select({
+        recipeId: householdPortionMemories.recipeId,
+        ignoredThrough: householdPortionMemories.ignoredThrough,
+      }).from(householdPortionMemories).where(and(
+        eq(householdPortionMemories.householdId, householdId),
+        inArray(householdPortionMemories.recipeId, recipeIds),
+      )),
+    ]) : [[], []]
+    const portionOutcomesByRecipe = new Map<string, typeof portionOutcomeRows>()
+    for (const outcome of portionOutcomeRows) {
+      portionOutcomesByRecipe.set(outcome.plannedRecipeId, [...(portionOutcomesByRecipe.get(outcome.plannedRecipeId) ?? []), outcome])
+    }
+    const ignoredThroughByRecipe = new Map(portionMemoryRows.map((row) => [row.recipeId, row.ignoredThrough]))
     const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
     const accessibleRecipeTitles = await tx.select({ title: recipes.title }).from(recipes).where(and(
       eq(recipes.isArchived, false),
@@ -1746,6 +1772,11 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
         reason: meal?.reason ?? null,
         confidence: meal?.confidence ?? null,
         streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
+        portionSuggestion: recipe ? derivePortionSuggestion(
+          portionOutcomesByRecipe.get(recipe.id) ?? [],
+          meal?.servings ?? recipe.servings,
+          ignoredThroughByRecipe.get(recipe.id),
+        ) : null,
         recipe: recipe ? {
           id: recipe.id,
           title: recipe.title,

@@ -438,12 +438,12 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(summary?.groups).toEqual([
         {
-          category: 'Pantry',
-          items: [{ itemKey: 'pantry:spaghetti:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true, isCustom: false }],
-        },
-        {
           category: 'Produce',
           items: [{ itemKey: 'produce:tomatoes:can', label: 'tomatoes', amount: '2', unit: 'can', checked: false, isCustom: false }],
+        },
+        {
+          category: 'Pantry',
+          items: [{ itemKey: 'pantry:spaghetti:g', label: 'spaghetti', amount: '400', unit: 'g', checked: true, isCustom: false }],
         },
       ])
     })
@@ -540,16 +540,16 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(summary?.groups).toEqual([
         {
-          category: 'Pantry',
-          items: [{ itemKey: 'pantry:soy-sauce:tbsp', label: 'soja', amount: '1.5', unit: 'msk', checked: false, isCustom: false }],
-        },
-        {
           category: 'Produce',
           items: [{ itemKey: 'produce:bell-peppers:pc', label: 'paprika', amount: '1', unit: 'st', checked: false, isCustom: false }],
         },
         {
           category: 'Protein',
           items: [{ itemKey: 'protein:chicken-breast:g', label: 'kycklingfilé', amount: '150', unit: 'g', checked: true, isCustom: false }],
+        },
+        {
+          category: 'Pantry',
+          items: [{ itemKey: 'pantry:soy-sauce:tbsp', label: 'soja', amount: '1.5', unit: 'msk', checked: false, isCustom: false }],
         },
       ])
     })
@@ -790,15 +790,15 @@ describeWithDb('Shopping-list event log + projection', () => {
       // pasta: 100 * (4 / 2) = 200 ; broth: 300 * (4 / 6) = 200 ; lettuce: 50 * (4 / 4) = 50
       expect(summary?.groups).toEqual([
         {
+          category: 'Produce',
+          items: [{ itemKey: 'produce:lettuce:g', label: 'lettuce', amount: '50', unit: 'g', checked: false, isCustom: false }],
+        },
+        {
           category: 'Pantry',
           items: [
             { itemKey: 'pantry:broth:ml', label: 'broth', amount: '200', unit: 'ml', checked: false, isCustom: false },
             { itemKey: 'pantry:pasta:g', label: 'pasta', amount: '200', unit: 'g', checked: false, isCustom: false },
           ],
-        },
-        {
-          category: 'Produce',
-          items: [{ itemKey: 'produce:lettuce:g', label: 'lettuce', amount: '50', unit: 'g', checked: false, isCustom: false }],
         },
       ])
     })

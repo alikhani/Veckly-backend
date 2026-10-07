@@ -15,6 +15,7 @@ import {
   deriveWeekExplanations,
   deriveWeekRescuePreview,
   applyWeekRescue,
+  previewWeekRescue,
   clearWeekContextOverride,
   finalizeWeekHistoryPlan,
   foldEventIntoProjection,
@@ -1030,6 +1031,67 @@ describeWithDb('Week-plan event log + projection', () => {
         changes: [{ beforeRecipeRef: slow.id }],
       })
       expect(outcomes).toMatchObject([{ status: 'changed_plan', plannedRecipeId: slow.id }])
+    })
+
+    async function planSlowMonday() {
+      const slow = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Slow stew',
+        prepTimeMinutes: 20,
+        cookTimeMinutes: 40,
+        ingredients: [{ item: 'beef', amount: '500', unit: 'g', category: 'protein' }],
+      })
+      const [projection] = await db.insert(weekPlanProjections).values({
+        householdId: householdAId,
+        weekStartDate,
+        state: { weekStarted: true, request: null, meals: { monday: { recipeRef: slow.id } }, lockedDays: [], skippedDays: [] },
+      }).returning()
+      return {
+        rescueId: '44444444-4444-4444-4444-444444444444',
+        date: weekStartDate,
+        intent: 'quick' as const,
+        expectedUpdatedAt: projection!.updatedAt.toISOString(),
+      }
+    }
+
+    it('never rescues with a recipe containing a household avoid ingredient', async () => {
+      await db.insert(householdProfiles).values({
+        householdId: householdAId, adults: 2, children: 0, priorities: [],
+        avoidIngredients: ['jordnöt'], selectedDays: [{ day: 'monday' }], updatedBy: userA,
+      })
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe,
+        title: 'Peanut noodles',
+        prepTimeMinutes: 5,
+        cookTimeMinutes: 10,
+        ingredients: [
+          { item: 'nudlar', amount: '400', unit: 'g', category: 'pantry' },
+          { item: 'jordnötssmör', amount: '3', unit: 'msk', category: 'pantry' },
+        ],
+      })
+      const request = await planSlowMonday()
+
+      const preview = await previewWeekRescue(db, fakeAccessToken(userA), householdAId, weekStartDate, request)
+
+      expect(preview).toEqual({ error: 'NO_RESCUE_FOUND' })
+    })
+
+    it("rescues only from the household's own and saved recipes, not other households' public ones", async () => {
+      const foreign = await createRecipe(db, fakeAccessToken(userB), userB, householdBId, {
+        ...baseRecipe,
+        title: 'Household B public quick pasta',
+        prepTimeMinutes: 5,
+        cookTimeMinutes: 10,
+        isPublic: true,
+      })
+      const request = await planSlowMonday()
+
+      const unsaved = await previewWeekRescue(db, fakeAccessToken(userA), householdAId, weekStartDate, request)
+      await addHouseholdSavedRecipe(db, fakeAccessToken(userA), userA, householdAId, foreign.id)
+      const saved = await previewWeekRescue(db, fakeAccessToken(userA), householdAId, weekStartDate, request)
+
+      expect(unsaved).toEqual({ error: 'NO_RESCUE_FOUND' })
+      expect(saved).toMatchObject({ primaryChange: { afterRecipeRef: foreign.id } })
     })
 
     it('surfaces a satiation streak when a recipe has been cooked 3+ consecutive weeks', async () => {

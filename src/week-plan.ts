@@ -1098,6 +1098,20 @@ function readPantryStock(state: unknown): Record<string, number> {
     .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] > 0))
 }
 
+// The recipes a household plans from: its own, builtins, and recipes it has
+// saved. Deliberately not "any public recipe" — another household's public
+// recipe only enters the pool once this household saves it.
+function householdRecipePool(tx: Db, householdId: string) {
+  return or(
+    eq(recipes.householdId, householdId),
+    eq(recipes.source, 'builtin'),
+    inArray(
+      recipes.id,
+      tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
+    ),
+  )
+}
+
 // Avoid-matching, in order of signal quality:
 //   - Itemized ingredients + tags are matched *always*. Ingredients are the
 //     strongest signal; tags are short curated labels (e.g. a "peanut" tag on
@@ -1402,6 +1416,7 @@ export function deriveWeekRescuePreview(input: {
   updatedAt: string | null
   projection: TWeekPlanProjectionState
   recipes: TRescueRecipe[]
+  avoidIngredients?: string[]
   preferredLeftoverRecipeIds?: Set<string>
 }): TWeekRescuePreview | { error: TWeekRescueFailure } {
   if (input.request.expectedUpdatedAt !== input.updatedAt) return { error: 'STALE_WEEK_PLAN' }
@@ -1456,6 +1471,7 @@ export function deriveWeekRescuePreview(input: {
   const plannedRecipeIds = new Set(Object.values(input.projection.meals).map((meal) => meal.recipeRef))
   const candidates = input.recipes
     .filter((recipe) => !plannedRecipeIds.has(recipe.id))
+    .filter((recipe) => !recipeMatchesAvoided(recipe, input.avoidIngredients ?? []))
     .filter((recipe) => input.request.intent !== 'missing-ingredient'
       || ![...normalizedIngredientSet(recipe)].some((name) => name.includes(missing) || missing.includes(name)))
     .map((recipe) => {
@@ -1503,28 +1519,37 @@ export function deriveWeekRescuePreview(input: {
 
 export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
   return withRls(db, accessToken, async (tx) => {
-    const [[projection], recipeRows, prepBatches] = await Promise.all([
+    const [[projection], [profile], prepBatches] = await Promise.all([
       tx.select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
         .from(weekPlanProjections)
         .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
         .limit(1),
-      tx.select({
-        id: recipes.id,
-        title: recipes.title,
-        servings: recipes.servings,
-        prepTimeMinutes: recipes.prepTimeMinutes,
-        cookTimeMinutes: recipes.cookTimeMinutes,
-        ingredients: recipes.ingredients,
-        tags: recipes.tags,
-      }).from(recipes).where(and(
-        or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)),
-        eq(recipes.isArchived, false),
-      )),
+      tx.select({ avoidIngredients: householdProfiles.avoidIngredients })
+        .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1),
       tx.select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId })
         .from(householdPrepBatches)
         .where(and(eq(householdPrepBatches.householdId, householdId), lte(householdPrepBatches.cookDate, request.date))),
     ])
     if (!projection) return { error: 'NO_PLAN' as const }
+    const projectionState = readProjectionState(projection.state)
+    // Candidates come from the same pool generation plans from. Already-planned
+    // recipes are loaded too (for the before-side and shopping diff) even when
+    // outside the pool; the derive step never offers a planned recipe.
+    const plannedRecipeIds = [...new Set(Object.values(projectionState.meals).map((meal) => meal.recipeRef))]
+    const recipeRows = await tx.select({
+      id: recipes.id,
+      title: recipes.title,
+      servings: recipes.servings,
+      prepTimeMinutes: recipes.prepTimeMinutes,
+      cookTimeMinutes: recipes.cookTimeMinutes,
+      ingredients: recipes.ingredients,
+      tags: recipes.tags,
+    }).from(recipes).where(and(
+      eq(recipes.isArchived, false),
+      plannedRecipeIds.length > 0
+        ? or(householdRecipePool(tx, householdId), inArray(recipes.id, plannedRecipeIds))
+        : householdRecipePool(tx, householdId),
+    ))
     const assignments = prepBatches.length
       ? await tx.select({ batchId: householdPrepBatchAssignments.batchId })
         .from(householdPrepBatchAssignments)
@@ -1541,8 +1566,9 @@ export async function previewWeekRescue(db: Db, accessToken: string, householdId
       request,
       weekStartDate,
       updatedAt: projection.updatedAt.toISOString(),
-      projection: readProjectionState(projection.state),
+      projection: projectionState,
       recipes: recipeRows,
+      avoidIngredients: (profile?.avoidIngredients as string[] | undefined) ?? [],
       preferredLeftoverRecipeIds,
     })
   })
@@ -1732,14 +1758,7 @@ export async function getWeekPlanSummary(db: Db, accessToken: string, householdI
     const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
     const accessibleRecipeTitles = await tx.select({ title: recipes.title }).from(recipes).where(and(
       eq(recipes.isArchived, false),
-      or(
-        eq(recipes.householdId, householdId),
-        eq(recipes.source, 'builtin'),
-        inArray(
-          recipes.id,
-          tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
-        ),
-      ),
+      householdRecipePool(tx, householdId),
     ))
 
     const prepBatches = await tx
@@ -1862,10 +1881,7 @@ export async function previewPreviousWeekProposal(
       id: recipes.id, title: recipes.title, servings: recipes.servings, prepTimeMinutes: recipes.prepTimeMinutes,
       tags: recipes.tags, ingredients: recipes.ingredients, cuisine: recipes.cuisine,
       proteinSource: recipes.proteinSource, mealWeight: recipes.mealWeight, householdId: recipes.householdId,
-    }).from(recipes).where(and(eq(recipes.isArchived, false), or(
-      eq(recipes.householdId, householdId), eq(recipes.source, 'builtin'),
-      inArray(recipes.id, tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId))),
-    )))),
+    }).from(recipes).where(and(eq(recipes.isArchived, false), householdRecipePool(tx, householdId)))),
     withRls(db, accessToken, (tx) => tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })
       .from(mealFeedback).where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId)))),
     withRls(db, accessToken, (tx) => tx.select({ mealId: householdMealSignals.mealId, signal: householdMealSignals.signal })
@@ -2044,14 +2060,7 @@ export async function doGenerateWeekPlan(
         .from(recipes)
         .where(and(
           eq(recipes.isArchived, false),
-          or(
-            eq(recipes.householdId, householdId),
-            eq(recipes.source, 'builtin'),
-            inArray(
-              recipes.id,
-              tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
-            ),
-          ),
+          householdRecipePool(tx, householdId),
         ))
     ),
     withRls(db, accessToken, (tx) =>

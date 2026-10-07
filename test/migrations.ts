@@ -72,6 +72,11 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const [mealFeedbackMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.meal_feedback') as exists`)
   const [savedPlansMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.saved_plans') as exists`)
   const [weekPulsesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_week_pulses') as exists`)
+  const [shoppingPreferencesMarker] = await db.execute<{ exists: string | null }>(sql`select to_regclass('public.household_shopping_preferences') as exists`)
+  const [portionMemoryMarker] = await db.execute<{ exists: string | null }>(sql`
+    select column_name as exists from information_schema.columns
+    where table_name = 'household_meal_outcomes' and column_name = 'intentional_leftovers'
+  `)
   const alreadyHasRateLimitHitsMigration = Boolean(rateLimitHitsMarker?.exists)
   const alreadyHasHouseholdEntitlementsMigration = Boolean(householdEntitlementsMarker?.exists)
   const alreadyHasHouseholdAiUsageMigration = Boolean(householdAiUsageMarker?.exists)
@@ -97,8 +102,12 @@ export async function ensureMigrationsApplied(db: Db, migrationsDir: string) {
   const alreadyHasMealFeedbackMigration = Boolean(mealFeedbackMarker?.exists)
   const alreadyHasSavedPlansMigration = Boolean(savedPlansMarker?.exists)
   const alreadyHasWeekPulsesMigration = Boolean(weekPulsesMarker?.exists)
+  const alreadyHasShoppingPreferencesMigration = Boolean(shoppingPreferencesMarker?.exists)
+  const alreadyHasPortionMemoryMigration = Boolean(portionMemoryMarker?.exists)
 
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+    if (alreadyHasPortionMemoryMigration && file < '0047_') continue
+    if (alreadyHasShoppingPreferencesMigration && file < '0046_') continue
     if (alreadyHasWeekPulsesMigration && file < '0045_') continue
     if (alreadyHasMealOutcomesMigration && file < '0041_') continue
     if (alreadyHasSubscriptionSponsorshipMigration && file < '0040_') continue

@@ -1574,7 +1574,25 @@ export async function previewWeekRescue(db: Db, accessToken: string, householdId
   })
 }
 
-export async function applyWeekRescue(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
+// Idempotent applies race: two requests with the same id both pass the
+// existing-event lookup, and the loser's append hits a unique violation.
+// Re-running once lets that lookup find the winner's event and answer
+// `alreadyApplied`. One retry only — a violation from any other cause must
+// surface, not loop.
+async function retryOnceOnUniqueViolation<T>(apply: () => Promise<T>): Promise<T> {
+  try {
+    return await apply()
+  } catch (error) {
+    if ((error as { code?: string }).code !== '23505') throw error
+    return apply()
+  }
+}
+
+export function applyWeekRescue(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
+  return retryOnceOnUniqueViolation(() => applyWeekRescueOnce(db, accessToken, userId, householdId, weekStartDate, request))
+}
+
+async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
   const existing = await withRls(db, accessToken, async (tx) => tx
     .select({ eventType: weekPlanEvents.eventType, payload: weekPlanEvents.payload })
     .from(weekPlanEvents)
@@ -1595,24 +1613,17 @@ export async function applyWeekRescue(db: Db, accessToken: string, userId: strin
 
   const preview = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
   if ('error' in preview) return preview
-  try {
-    await appendStreamEvent(
-      db,
-      accessToken,
-      { events: weekPlanEvents, projections: weekPlanProjections },
-      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy: { source: 'user', userId }, payload: {
-        eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
-        changes: [preview.primaryChange, ...preview.followUpChanges],
-        shoppingDiff: preview.shoppingDiff,
-      } },
-    )
-  } catch (error) {
-    if ((error as { code?: string }).code === '23505') {
-      return applyWeekRescue(db, accessToken, userId, householdId, weekStartDate, request)
-    }
-    throw error
-  }
+  await appendStreamEvent(
+    db,
+    accessToken,
+    { events: weekPlanEvents, projections: weekPlanProjections },
+    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+    { householdId, weekStartDate, causedBy: { source: 'user', userId }, payload: {
+      eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
+      changes: [preview.primaryChange, ...preview.followUpChanges],
+      shoppingDiff: preview.shoppingDiff,
+    } },
+  )
   if (preview.primaryChange.beforeRecipeRef && preview.primaryChange.afterRecipeRef
     && preview.primaryChange.beforeRecipeRef !== preview.primaryChange.afterRecipeRef) {
     // The rescue event is the source of truth for the plan mutation. Outcome
@@ -2001,7 +2012,13 @@ export async function previewPreviousWeekProposal(
   }
 }
 
-export async function applyPreviousWeekProposal(
+export function applyPreviousWeekProposal(
+  db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
+) {
+  return retryOnceOnUniqueViolation(() => applyPreviousWeekProposalOnce(db, accessToken, userId, householdId, weekStartDate, request))
+}
+
+async function applyPreviousWeekProposalOnce(
   db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
 ) {
   const existing = await withRls(db, accessToken, (tx) => tx.select({ payload: weekPlanEvents.payload })

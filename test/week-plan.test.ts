@@ -420,6 +420,46 @@ describeWithDb('Week-plan event log + projection', () => {
 
   const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
 
+  // `db` is a single-connection pool, so genuinely concurrent requests need
+  // their own clients — built the same way db.ts builds its own.
+  const separateClients: Array<{ end: () => Promise<void> }> = []
+  async function separateDb() {
+    const postgres = (await import('postgres')).default
+    const { drizzle } = await import('drizzle-orm/postgres-js')
+    const schema = await import('../src/schema.js')
+    const client = postgres(testDatabaseUrl!, { prepare: false, max: 1 })
+    separateClients.push(client)
+    return drizzle(client, { schema }) as unknown as typeof db
+  }
+  afterAll(async () => {
+    await Promise.all(separateClients.map((client) => client.end()))
+  })
+
+  // Deterministic interleaving for apply-path races: hold the week's
+  // projection row lock in an open transaction (optionally changing the row,
+  // uncommitted), start `work`, wait until `waiters` backends are blocked on a
+  // lock — i.e. past their preview and inside their append — then commit.
+  async function whileProjectionLocked<T>(
+    waiters: number,
+    change: ((tx: typeof db) => Promise<unknown>) | null,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    let pending!: Promise<T>
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`select 1 from "week_plan_projections" where household_id = ${householdAId} and week_start_date = ${weekStartDate} for update`)
+      await change?.(tx as unknown as typeof db)
+      pending = work()
+      pending.catch(() => {})
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline) {
+        const [row] = await tx.execute<{ n: number }>(sql`select count(distinct pid)::int as n from pg_locks where not granted`)
+        if ((row?.n ?? 0) >= waiters) break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    })
+    return pending
+  }
+
   async function seedOutcome(input: {
     weekStartDate: string
     date?: string
@@ -2065,6 +2105,31 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(events).toHaveLength(1)
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.id).toBe(keeper.id)
+    })
+
+    it('answers alreadyApplied, not a 500, when the same proposal is applied concurrently', async () => {
+      await insertProfile([{ day: 'monday' }])
+      const keeper = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Keeper' })
+      await seedOutcome({ weekStartDate: '2026-06-01', plannedRecipeId: keeper.id, status: 'cooked' })
+      const [projection] = await db.insert(weekPlanProjections).values({
+        householdId: householdAId, weekStartDate,
+        state: { weekStarted: true, request: null, meals: {}, lockedDays: [], skippedDays: [] },
+      }).returning()
+      const request = { proposalId: '55555555-5555-5555-5555-555555555555', expectedUpdatedAt: projection!.updatedAt.toISOString() }
+      const [first, second] = [await separateDb(), await separateDb()]
+
+      const results = await whileProjectionLocked(2, null, () => Promise.allSettled([
+        applyPreviousWeekProposal(first, fakeAccessToken(userA), userA, householdAId, weekStartDate, request),
+        applyPreviousWeekProposal(second, fakeAccessToken(userA), userA, householdAId, weekStartDate, request),
+      ]))
+
+      expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      const applied = results.map((result) => (result as PromiseFulfilledResult<{ alreadyApplied: boolean }>).value.alreadyApplied)
+      expect(applied.sort()).toEqual([false, true])
+      const events = await db.select().from(weekPlanEvents).where(and(
+        eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.eventType, 'previous_week_reused'),
+      ))
+      expect(events).toHaveLength(1)
     })
   })
 })

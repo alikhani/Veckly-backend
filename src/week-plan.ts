@@ -1453,8 +1453,9 @@ export function deriveWeekRescuePreview(input: {
   for (const meal of Object.values(input.projection.meals)) {
     for (const name of normalizedIngredientSet(recipesById.get(meal.recipeRef))) weekIngredientNames.add(name)
   }
+  const plannedRecipeIds = new Set(Object.values(input.projection.meals).map((meal) => meal.recipeRef))
   const candidates = input.recipes
-    .filter((recipe) => recipe.id !== before.id)
+    .filter((recipe) => !plannedRecipeIds.has(recipe.id))
     .filter((recipe) => input.request.intent !== 'missing-ingredient'
       || ![...normalizedIngredientSet(recipe)].some((name) => name.includes(missing) || missing.includes(name)))
     .map((recipe) => {

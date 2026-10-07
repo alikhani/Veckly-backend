@@ -187,6 +187,21 @@ describe('deriveWeekRescuePreview', () => {
     })
   })
 
+  it('never replaces a dinner with a recipe already planned elsewhere this week', () => {
+    // Overlap scoring favors recipes sharing the week's ingredients, so an
+    // exact duplicate of Tuesday's dinner would otherwise win outright.
+    const omelette = {
+      id: '77777777-7777-7777-7777-777777777777', title: 'Omelette', servings: 4,
+      prepTimeMinutes: 5, cookTimeMinutes: 5, ingredients: [{ item: 'Eggs' }, { item: 'Butter' }], tags: [],
+    }
+    const preview = deriveWeekRescuePreview({
+      request, weekStartDate: '2026-06-08', updatedAt: request.expectedUpdatedAt,
+      projection: { ...projection, meals: { monday: { recipeRef: slow.id }, tuesday: { recipeRef: quick.id } } },
+      recipes: [slow, quick, omelette],
+    })
+    expect(preview).toMatchObject({ primaryChange: { afterRecipeRef: omelette.id } })
+  })
+
   it('rejects a stale preview without producing changes', () => {
     const preview = deriveWeekRescuePreview({
       request, weekStartDate: '2026-06-08', updatedAt: '2026-06-08T11:00:00.000Z',

@@ -1430,6 +1430,7 @@ export function deriveWeekRescuePreview(input: {
   if (input.request.intent === 'swap-day') {
     const swapIndex = orderedDays.findIndex((day, index) => index > dayIndex
       && !input.projection.lockedDays.includes(day)
+      && !input.projection.skippedDays.includes(day)
       && Boolean(input.projection.meals[day]))
     if (swapIndex < 0) return { error: 'NO_RESCUE_FOUND' }
     const swapDay = orderedDays[swapIndex]!

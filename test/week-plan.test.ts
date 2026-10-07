@@ -169,6 +169,24 @@ describe('deriveWeekRescuePreview', () => {
     expect(preview).toMatchObject({ primaryChange: { afterRecipeTitle: 'Saved leftovers' } })
   })
 
+  it('never swaps with a skipped day, which would silently unskip it', () => {
+    const later = { ...quick, id: '66666666-6666-6666-6666-666666666666', title: 'Thursday tacos' }
+    const preview = deriveWeekRescuePreview({
+      request: { ...request, intent: 'swap-day' },
+      weekStartDate: '2026-06-08', updatedAt: request.expectedUpdatedAt,
+      projection: {
+        ...projection,
+        skippedDays: ['wednesday'],
+        meals: { monday: { recipeRef: slow.id }, wednesday: { recipeRef: quick.id }, thursday: { recipeRef: later.id } },
+      },
+      recipes: [slow, quick, later],
+    })
+    expect(preview).toMatchObject({
+      primaryChange: { afterRecipeRef: later.id },
+      followUpChanges: [{ dayOfWeek: 'thursday', afterRecipeRef: slow.id }],
+    })
+  })
+
   it('rejects a stale preview without producing changes', () => {
     const preview = deriveWeekRescuePreview({
       request, weekStartDate: '2026-06-08', updatedAt: '2026-06-08T11:00:00.000Z',

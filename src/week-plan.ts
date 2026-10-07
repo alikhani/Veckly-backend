@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, gte, inArray, lt, lte, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { appendStreamEvent, getStreamProjection } from './event-stream.js'
+import { appendStreamEvent, getStreamProjection, StaleProjectionError } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
@@ -1575,21 +1575,29 @@ export async function previewWeekRescue(db: Db, accessToken: string, householdId
 }
 
 // Idempotent applies race: two requests with the same id both pass the
-// existing-event lookup, and the loser's append hits a unique violation.
+// existing-event lookup, and the loser's append hits a unique violation — or,
+// once the winner has moved the projection, the append's stale precondition.
 // Re-running once lets that lookup find the winner's event and answer
-// `alreadyApplied`. One retry only — a violation from any other cause must
-// surface, not loop.
-async function retryOnceOnUniqueViolation<T>(apply: () => Promise<T>): Promise<T> {
-  try {
-    return await apply()
-  } catch (error) {
-    if ((error as { code?: string }).code !== '23505') throw error
-    return apply()
+// `alreadyApplied`; a genuinely different concurrent edit makes the re-run's
+// preview answer STALE_WEEK_PLAN. One retry only — a conflict from any other
+// cause must surface, not loop.
+async function retryOnceOnWriteConflict<T>(apply: () => Promise<T>): Promise<T | { error: 'STALE_WEEK_PLAN' }> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await apply()
+    } catch (error) {
+      const stale = error instanceof StaleProjectionError
+      if (!stale && (error as { code?: string }).code !== '23505') throw error
+      if (attempt === 2) {
+        if (stale) return { error: 'STALE_WEEK_PLAN' }
+        throw error
+      }
+    }
   }
 }
 
 export function applyWeekRescue(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  return retryOnceOnUniqueViolation(() => applyWeekRescueOnce(db, accessToken, userId, householdId, weekStartDate, request))
+  return retryOnceOnWriteConflict(() => applyWeekRescueOnce(db, accessToken, userId, householdId, weekStartDate, request))
 }
 
 async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
@@ -1622,7 +1630,7 @@ async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, 
       eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
       changes: [preview.primaryChange, ...preview.followUpChanges],
       shoppingDiff: preview.shoppingDiff,
-    } },
+    }, expectedUpdatedAt: preview.expectedUpdatedAt },
   )
   if (preview.primaryChange.beforeRecipeRef && preview.primaryChange.afterRecipeRef
     && preview.primaryChange.beforeRecipeRef !== preview.primaryChange.afterRecipeRef) {
@@ -2015,7 +2023,7 @@ export async function previewPreviousWeekProposal(
 export function applyPreviousWeekProposal(
   db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
 ) {
-  return retryOnceOnUniqueViolation(() => applyPreviousWeekProposalOnce(db, accessToken, userId, householdId, weekStartDate, request))
+  return retryOnceOnWriteConflict(() => applyPreviousWeekProposalOnce(db, accessToken, userId, householdId, weekStartDate, request))
 }
 
 async function applyPreviousWeekProposalOnce(
@@ -2034,6 +2042,7 @@ async function applyPreviousWeekProposalOnce(
     householdId, weekStartDate,
     causedBy: { source: 'algorithm', algorithmVersion: '2.0', triggeredByUserId: userId },
     payload: { eventType: 'previous_week_reused', proposalId: proposal.proposalId, sourceWeekStartDate: proposal.sourceWeekStartDate, days: proposal.days },
+    expectedUpdatedAt: proposal.expectedUpdatedAt,
   })
   return { ok: true as const, alreadyApplied: false, proposal }
 }

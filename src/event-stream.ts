@@ -21,6 +21,14 @@ export type PersistedStreamProjection = {
   updatedAt: Date
 }
 
+// Thrown when `expectedUpdatedAt` no longer matches the projection at write
+// time. Callers map it to their own stale-plan response.
+export class StaleProjectionError extends Error {
+  constructor() {
+    super('Projection changed since it was read')
+  }
+}
+
 type StreamTables = {
   events: PgTable
   projections: PgTable
@@ -48,12 +56,38 @@ export async function appendStreamEvent<TPayload extends { eventType: string }, 
     fold: (state: TState, payload: TPayload) => TState
     emptyState: () => TState
   },
-  args: { householdId: string; weekStartDate: string; causedBy: unknown; payload: TPayload },
+  args: {
+    householdId: string
+    weekStartDate: string
+    causedBy: unknown
+    payload: TPayload
+    // Optimistic-concurrency precondition: the projection's `updatedAt` as the
+    // caller last read it (null = no projection yet). Checked under a row lock
+    // in this transaction, so an edit committed after the caller's read can't
+    // be silently overwritten. Omitted = unconditional append.
+    expectedUpdatedAt?: string | null
+  },
 ): Promise<PersistedStreamEvent> {
   const events = tables.events as any
   const projections = tables.projections as any
 
   return withRls(db, accessToken, async (tx) => {
+    if (args.expectedUpdatedAt !== undefined) {
+      // Compared as the same millisecond ISO string callers were handed (via
+      // the same driver parse), never as a SQL timestamptz equality: Postgres
+      // keeps microseconds the API's strings don't carry. A missing row can't
+      // be locked; a concurrent first append is still caught by the
+      // sequence-number unique index below.
+      const [current] = await tx
+        .select({ updatedAt: projections.updatedAt })
+        .from(projections)
+        .where(and(eq(projections.householdId, args.householdId), eq(projections.weekStartDate, args.weekStartDate)))
+        .for('update')
+      if (((current?.updatedAt as Date | undefined)?.toISOString() ?? null) !== args.expectedUpdatedAt) {
+        throw new StaleProjectionError()
+      }
+    }
+
     // Read-then-insert is sufficient at this product's realistic scale (one
     // real session per household per week — design doc §6); the unique index
     // on (household_id, week_start_date, sequence_number) is the race backstop

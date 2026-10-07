@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
-import { appendStreamEvent } from '../src/event-stream.js'
+import { appendStreamEvent, StaleProjectionError } from '../src/event-stream.js'
 import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
@@ -635,6 +635,34 @@ describeWithDb('Week-plan event log + projection', () => {
       const events = await db.select().from(weekPlanEvents).where(eq(weekPlanEvents.householdId, householdAId))
       expect(events).toHaveLength(0)
     })
+
+    const appendWeekStarted = (expectedUpdatedAt: string | null) => appendStreamEvent(
+      db, fakeAccessToken(userA), { events: weekPlanEvents, projections: weekPlanProjections },
+      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+      { householdId: householdAId, weekStartDate, causedBy: userCausedBy(userA), payload: { eventType: 'week_started' }, expectedUpdatedAt },
+    )
+
+    it('accepts an expectedUpdatedAt read back from a microsecond-precision projection timestamp', async () => {
+      // Postgres keeps microseconds; the API hands out millisecond ISO strings.
+      // The precondition must compare like for like, not false-positive.
+      await db.insert(weekPlanProjections).values({
+        householdId: householdAId, weekStartDate, state: emptyProjectionState(),
+        updatedAt: sql`'2026-06-08T10:00:00.123999Z'::timestamptz` as never,
+      })
+      const [projection] = await db.select().from(weekPlanProjections).where(eq(weekPlanProjections.householdId, householdAId))
+
+      await expect(appendWeekStarted(projection!.updatedAt.toISOString())).resolves.toBeDefined()
+      await expect(appendWeekStarted(null)).rejects.toBeInstanceOf(StaleProjectionError)
+    })
+
+    it('rejects a stale expectedUpdatedAt without appending anything', async () => {
+      await db.insert(weekPlanProjections).values({ householdId: householdAId, weekStartDate, state: emptyProjectionState() })
+
+      await expect(appendWeekStarted('2026-06-08T10:00:00.000Z')).rejects.toBeInstanceOf(StaleProjectionError)
+
+      const events = await db.select().from(weekPlanEvents).where(eq(weekPlanEvents.householdId, householdAId))
+      expect(events).toHaveLength(0)
+    })
   })
 
   describe('(c) the read path reflects only the projection — never a replay of the log', () => {
@@ -1093,6 +1121,27 @@ describeWithDb('Week-plan event log + projection', () => {
         expectedUpdatedAt: projection!.updatedAt.toISOString(),
       }
     }
+
+    it('refuses a rescue when the day is locked between its preview and its write', async () => {
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        ...baseRecipe, title: 'Quick pasta', prepTimeMinutes: 5, cookTimeMinutes: 10,
+      })
+      const request = await planSlowMonday()
+      const [before] = await db.select().from(weekPlanProjections).where(eq(weekPlanProjections.householdId, householdAId))
+      const lockedState = { ...(before!.state as TWeekPlanProjectionState), lockedDays: ['monday'] }
+      const concurrent = await separateDb()
+
+      const result = await whileProjectionLocked(1, (tx) => tx.update(weekPlanProjections)
+        .set({ state: lockedState, updatedAt: new Date() })
+        .where(eq(weekPlanProjections.householdId, householdAId)),
+      () => applyWeekRescue(concurrent, fakeAccessToken(userA), userA, householdAId, weekStartDate, request))
+
+      expect(result).toEqual({ error: 'STALE_WEEK_PLAN' })
+      const [after] = await db.select().from(weekPlanProjections).where(eq(weekPlanProjections.householdId, householdAId))
+      expect(after!.state).toEqual(lockedState)
+      const events = await db.select().from(weekPlanEvents).where(eq(weekPlanEvents.householdId, householdAId))
+      expect(events).toHaveLength(0)
+    })
 
     it('never rescues with a recipe containing a household avoid ingredient', async () => {
       await db.insert(householdProfiles).values({
@@ -2105,6 +2154,32 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(events).toHaveLength(1)
       const summary = await getWeekPlanSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
       expect(summary?.days[0]?.recipe?.id).toBe(keeper.id)
+    })
+
+    it('refuses a previous-week proposal when the week changes between its preview and its write', async () => {
+      await insertProfile([{ day: 'monday' }, { day: 'tuesday' }])
+      const keeper = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Keeper' })
+      const other = await createRecipe(db, fakeAccessToken(userA), userA, householdAId, { ...baseRecipe, title: 'Other' })
+      await seedOutcome({ weekStartDate: '2026-06-01', plannedRecipeId: keeper.id, status: 'cooked' })
+      const [projection] = await db.insert(weekPlanProjections).values({
+        householdId: householdAId, weekStartDate,
+        state: { weekStarted: true, request: null, meals: {}, lockedDays: [], skippedDays: [] },
+      }).returning()
+      const editedState = { weekStarted: true, request: null, meals: { tuesday: { recipeRef: other.id } }, lockedDays: ['tuesday'], skippedDays: [] }
+      const concurrent = await separateDb()
+
+      const result = await whileProjectionLocked(1, (tx) => tx.update(weekPlanProjections)
+        .set({ state: editedState, updatedAt: new Date() })
+        .where(eq(weekPlanProjections.householdId, householdAId)),
+      () => applyPreviousWeekProposal(concurrent, fakeAccessToken(userA), userA, householdAId, weekStartDate, {
+        proposalId: '66666666-6666-6666-6666-666666666666', expectedUpdatedAt: projection!.updatedAt.toISOString(),
+      }))
+
+      expect(result).toEqual({ error: 'STALE_WEEK_PLAN' })
+      const [after] = await db.select().from(weekPlanProjections).where(eq(weekPlanProjections.householdId, householdAId))
+      expect(after!.state).toEqual(editedState)
+      const events = await db.select().from(weekPlanEvents).where(eq(weekPlanEvents.householdId, householdAId))
+      expect(events).toHaveLength(0)
     })
 
     it('answers alreadyApplied, not a 500, when the same proposal is applied concurrently', async () => {

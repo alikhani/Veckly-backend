@@ -46,7 +46,8 @@ docker start veckly-pg-strangle
 
 ## Before you commit
 
-CI (`.github/workflows/ci.yml`) runs the same three checks on every push and PR:
+CI (`.github/workflows/ci.yml`) runs the same three checks. It is **manual for now** to save CI minutes
+(`gh workflow run CI --ref <branch>`), so run the checks locally:
 
 1. `npx tsc --noEmit`
 2. `npm run openapi:write:backend` produces no diff. If it does, you changed the API contract: commit

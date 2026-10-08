@@ -1,9 +1,10 @@
 name: CI
 
+# Manual only for now, to avoid paying for CI minutes on every push.
+# Run from GitHub → Actions → CI → "Run workflow", or: gh workflow run CI --ref <branch>
+# To re-enable automatic runs, add back:  push: { branches: [...] }  and  pull_request:
 on:
-  push:
-    branches: [master]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:

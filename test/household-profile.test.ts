@@ -23,7 +23,7 @@ describeWithDb('Household profile', () => {
   const profile = {
     adults: 2,
     children: 1,
-    priorities: ['quick', 'child-friendly'] as const,
+    priorities: ['quick' as const, 'child-friendly' as const],
     avoidIngredients: ['peanuts'],
     selectedDays: [
       { day: 'monday' as const, effortLevel: 'busy' as const, lateEvening: true },

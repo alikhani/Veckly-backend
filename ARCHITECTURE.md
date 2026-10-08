@@ -82,7 +82,8 @@ npm run openapi:write:backend && git diff openapi.json   # empty unless you mean
 
 ## Known debt
 
-- Pre-pilot features are still single files (`shopping-list.ts`, `recipes.ts`, `recipe-import.ts`, …).
+- Pre-pilot features are still single files (`recipes.ts`, `recipe-import.ts`, …). Migrated so far:
+  `week-plan`, `shopping-list`.
 - Error bodies are not yet a typed code enum in OpenAPI, and some week-plan errors are free text or use
   non-standard statuses. They are listed in `PLAN-arkitektur-pilot-week-2026-10.md` ("Kända inkonsekvenser").
 - `buildInternal*Routes` (MealPlanner strangle path) is spread across feature files and is removed when the

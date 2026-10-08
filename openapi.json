@@ -7065,7 +7065,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "The week hasn't started yet — no projection exists"
+            "description": "The week hasn't started yet (no projection exists), or caller is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

@@ -2359,9 +2359,9 @@ describeWithDb('Week-plan event log + projection', () => {
       }), ...invalidContextDate)
     })
 
-    it('keeps the free-text 404 for a missing week plan and the code for a missing history plan', async () => {
+    it('answers a missing week plan on read and on finalize with 404 WEEK_PLAN_NOT_FOUND', async () => {
       const base = `/households/${householdAId}/week-plans/${weekStartDate}`
-      await expectResponse(await call(userA, 'GET', base), 404, { error: 'No week plan found for this week' })
+      await expectResponse(await call(userA, 'GET', base), 404, { error: 'WEEK_PLAN_NOT_FOUND' })
       await expectResponse(await call(userA, 'POST', `${base}/finalize`), 404, { error: 'WEEK_PLAN_NOT_FOUND' })
       await expectResponse(await call(userA, 'GET', `${base}/history`), 200, { week: null })
     })

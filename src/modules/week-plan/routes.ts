@@ -99,7 +99,7 @@ const getWeekPlanRoute = createRoute({
       description: 'The current materialized projection for this week',
       content: { 'application/json': { schema: WeekPlanProjectionSchema } },
     },
-    404: { description: "The week hasn't started yet — no projection exists" },
+    ...errorResponses({ 404: "The week hasn't started yet (no projection exists), or caller is not a member" }),
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -463,8 +463,7 @@ export function buildWeekPlanRoutes(db: Db) {
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const projection = await getWeekPlan(ctx, weekStartDate)
-    // Free text, unchanged (see "Kända inkonsekvenser" #3).
-    if (!projection) throw new ApiError(404, 'No week plan found for this week')
+    if (!projection) throw new ApiError(404, 'WEEK_PLAN_NOT_FOUND')
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(toWeekPlanProjectionResponse(projection), 200)
   })

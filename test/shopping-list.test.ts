@@ -981,8 +981,8 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect({ events, projections }).toEqual({ events: [], projections: [] })
     })
 
-    it('returns 404 with the free-text body when a member reads a list that has not started', async () => {
-      await expectResponse(await call(userA, 'GET', base(householdAId, weekStartDate)), 404, { error: 'No shopping list found for this week' })
+    it('returns 404 SHOPPING_LIST_NOT_FOUND when a member reads a list that has not started', async () => {
+      await expectResponse(await call(userA, 'GET', base(householdAId, weekStartDate)), 404, { error: 'SHOPPING_LIST_NOT_FOUND' })
     })
 
     it('rejects a malformed weekStartDate or householdId with 400 INVALID_REQUEST before the membership check', async () => {

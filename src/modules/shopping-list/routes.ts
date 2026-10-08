@@ -60,9 +60,11 @@ const getShoppingListRoute = createRoute({
       description: 'The current materialized projection for this week',
       content: { 'application/json': { schema: ShoppingListProjectionSchema } },
     },
-    404: { description: "The list hasn't started yet — no projection exists" },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
+    ...errorResponses({
+      400: 'Invalid request, or week start is not a Monday',
+      404: "The list hasn't started yet (no projection exists), or caller is not a member",
+    }),
   },
 })
 
@@ -180,8 +182,7 @@ export function buildShoppingListRoutes(db: Db) {
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const projection = await getShoppingList(ctx, weekStartDate)
-    // Free text, unchanged.
-    if (!projection) throw new ApiError(404, 'No shopping list found for this week')
+    if (!projection) throw new ApiError(404, 'SHOPPING_LIST_NOT_FOUND')
     return c.json(toShoppingListProjectionResponse(projection), 200)
   })
 

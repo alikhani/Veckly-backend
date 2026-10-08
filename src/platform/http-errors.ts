@@ -74,7 +74,7 @@ export function errorResponses<const T extends Partial<Record<ApiErrorStatus, st
 
 // Free-text bodies kept from before the error contract. Each one is removed
 // by the commit that replaces it with a code.
-type LegacyFreeTextError = 'No shopping list found for this week' | 'Household not found.'
+type LegacyFreeTextError = 'Household not found.'
 
 // Extra fields a few codes carry next to `error` (declared by their own
 // response schemas, e.g. `StaleWeekHistoryPlanResponse`).

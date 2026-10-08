@@ -9,7 +9,17 @@ import type { Db } from '../src/db.js'
 // policies be exercised against a plain local Postgres (or CI service
 // container) instead of requiring a live Supabase project just to prove the
 // boundary holds.
+//
+// The `authenticated` role is created here too (not only in
+// ensureAuthenticatedRoleGranted) because migrations grant to it and create
+// `TO authenticated` policies: on a fresh database — CI — it must exist before
+// the first migration runs.
 export const AUTH_SCHEMA_SHIM = `
+  do $$ begin
+    if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+      create role authenticated nologin;
+    end if;
+  end $$;
   create schema if not exists auth;
   create or replace function auth.uid() returns uuid
     language sql stable

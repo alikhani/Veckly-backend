@@ -11,7 +11,7 @@ src/
   app.ts                 mounts every route builder; maps ApiError → JSON in onError
   modules/<feature>/     one folder per feature, flat inside (reference: modules/week-plan/)
   shared/                pure cross-module domain helpers (week-dates, recipe-matching)
-  platform/              request plumbing shared by modules (http-errors: ApiError, RequestContext, require*)
+  platform/              request plumbing shared by modules (http-errors: ErrorCode, ApiError, RequestContext, require*)
   auth.ts rls.ts db.ts schema.ts …   infrastructure (moves to platform/ over time)
   <feature>.ts           not-yet-migrated features — still one file per feature
 migrations/              SQL, incl. RLS policies (one file per change, never edited after deploy)
@@ -47,6 +47,8 @@ Rules of thumb:
 ## Request pipeline (household routes)
 
 ```ts
+const app = new OpenAPIHono<TEnv>({ defaultHook: invalidRequestHook })   // 400 INVALID_REQUEST
+
 app.openapi(route, async (c) => {
   const { householdId, weekStartDate } = c.req.valid('param')
   requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
@@ -57,21 +59,43 @@ app.openapi(route, async (c) => {
 ```
 
 1. **Authenticate:** `requireAuth` middleware (Supabase access token) sets `user` + `accessToken`.
-2. **Validate:** Zod via `c.req.valid(...)`. Membership is checked after validation on purpose:
-   zod-openapi middleware runs *before* param validation, so membership is a helper and not middleware.
+2. **Validate:** Zod via `c.req.valid(...)`, then the Monday week (and any date that must fall inside it).
+   Always in this order: validation → Monday → membership, so invalid input is 400 for members and
+   non-members alike. Membership is checked after validation on purpose: zod-openapi middleware runs
+   *before* param validation, so membership is a helper and not middleware.
 3. **Authorize:** `requireHouseholdMember` → `RequestContext`. RLS enforces the same boundary in
    the database, and both layers are required.
 4. **Gate:** premium/entitlement checks live in the service and return `{ gate }`. The route maps that to 403.
 5. **Repository:** queries via `withRls(db, accessToken, …)`, so `auth.uid()` is the caller.
 
-Errors: throw `ApiError(status, body)` (from `platform/http-errors.ts`) for expected failures. It is
-mapped in `app.onError`. Anything else becomes a 500. Do not use `c.json(… as never)`.
-Declare every status a route can return under `responses` in `createRoute`, because that is what iOS sees.
+## Error contract
+
+Every expected failure from a module answers `{ error: ErrorCode }` (`ErrorResponse` in OpenAPI).
+`ErrorCode` is one enum in `platform/http-errors.ts`; add a code there before using it.
+
+- Throw `new ApiError(status, 'CODE')` for expected failures; it is mapped in `app.onError`. The code is
+  typed, so an unknown code does not compile. Extra fields go in the third argument
+  (`{ updatedAt }` for the stale-state 409s, declared by their own response schemas).
+- Premium gates throw `new ApiError(403, gate)` with the `PremiumRequiredResponse` body unchanged.
+- Failed Zod validation in a module: 400 `INVALID_REQUEST` with `issues: [{ code, path, message }]`
+  (debugging aid; clients branch on `error`). Pass `defaultHook: invalidRequestHook` to the module's
+  `OpenAPIHono`. Not-yet-migrated files still answer Zod's `{ success: false, error }`.
+- A JSON body that cannot be parsed: 400 `INVALID_JSON`, app-wide (`HTTPException` in `app.onError`).
+- Anything else becomes a 500. Do not use `c.json(… as never)`.
+- Use-case results with their own narrower error enums (`WeekRescueError`, `PreviousWeekProposalError`,
+  `GenerateWeekPlanError`) list a subset of `ErrorCode`, checked with `satisfies readonly ErrorCode[]`.
+
+Declare every status a route can return under `responses` in `createRoute`, because that is what iOS
+sees. Use `...errorResponses({ 400: '…', 404: '…' })` for `ErrorResponse` bodies.
+`test/openapi-error-responses.test.ts` fails when a week-plan or shopping-list handler can answer a
+status that is not declared.
 
 ## Checklist: new route / new module
 
 - [ ] Schema in `schemas.ts` with `.openapi('Name')`; all error statuses declared in `responses`
-- [ ] Monday validation for any `weekStartDate`; membership check → 404 `NOT_MEMBER` (not 200)
+      (`errorResponses(...)`), and the module added to `test/openapi-error-responses.test.ts`
+- [ ] `OpenAPIHono({ defaultHook: invalidRequestHook })`; errors are `ApiError(status, ErrorCode)`
+- [ ] Monday validation for any `weekStartDate` before membership; membership check → 404 `NOT_MEMBER` (not 200)
 - [ ] RLS policy in a migration for any new table, plus a cross-household negative test
 - [ ] Service function takes `RequestContext`; repository owns the SQL
 - [ ] Tests: pure logic as unit tests, the route via `buildApp` (status + body, incl. non-member)
@@ -89,7 +113,8 @@ npm run openapi:write:backend && git diff openapi.json   # empty unless you mean
 
 - Pre-pilot features are still single files (`recipes.ts`, `recipe-import.ts`, …). Migrated so far:
   `week-plan`, `shopping-list`.
-- Error bodies are not yet a typed code enum in OpenAPI, and some week-plan errors are free text or use
-  non-standard statuses. They are listed in `PLAN-arkitektur-pilot-week-2026-10.md` ("Kända inkonsekvenser").
+- Only `week-plan` and `shopping-list` use the error contract. Pre-pilot features keep their own error
+  bodies (free text, Zod's validation format) until they are migrated.
+- 401 from `requireAuth` is still free text (`{ error: 'Missing bearer token' }`) and declared without a body.
 - `buildInternal*Routes` (MealPlanner strangle path) is spread across feature files and is removed when the
   web app calls the backend directly.

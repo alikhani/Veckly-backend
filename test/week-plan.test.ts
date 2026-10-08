@@ -7,7 +7,7 @@ import { createRecipe } from '../src/recipes.js'
 import { addHouseholdSavedRecipe } from '../src/household-saved-recipes.js'
 import { upsertHouseholdMealSignal } from '../src/household-meal-signals.js'
 import { upsertMealFeedback } from '../src/meal-feedback.js'
-import { householdMealOutcomes, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdWeekPlans, householdWeekPulses, households, householdMemberships, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
+import { householdAiWeeklyUsage, householdMealOutcomes, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdWeekPlans, householdWeekPulses, households, householdMemberships, recipes, shoppingListProjections, weekPlanEvents, weekPlanProjections } from '../src/schema.js'
 import {
   doGenerateWeekPlan,
   previewPreviousWeekProposal,
@@ -31,6 +31,23 @@ import {
   type TWeekPlanProjectionState,
 } from '../src/week-plan.js'
 import { fakeAccessToken } from './fake-access-token.js'
+
+// The HTTP-level tests need an authenticated caller. `requireAuth` verifies the
+// bearer token with Supabase; stub that single call so a fake access token
+// resolves to its `sub` claim, exactly as `withRls` decodes it.
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: () => ({
+    auth: {
+      getUser: async (token: string) => {
+        const payload = token.split('.')[1]
+        const sub = payload ? (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sub?: string }).sub : undefined
+        return sub
+          ? { data: { user: { id: sub } }, error: null }
+          : { data: { user: null }, error: new Error('Invalid token') }
+      },
+    },
+  }),
+}))
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -2205,6 +2222,171 @@ describeWithDb('Week-plan event log + projection', () => {
         eq(weekPlanEvents.householdId, householdAId), eq(weekPlanEvents.eventType, 'previous_week_reused'),
       ))
       expect(events).toHaveLength(1)
+    })
+  })
+
+  // Characterization of the week-plan routes' HTTP error paths, end to end
+  // through `buildApp`. These lock today's exact status codes, bodies, and the
+  // per-route order of the Monday check vs. the membership check — including
+  // the known inconsistencies listed in PLAN-arkitektur-pilot-week-2026-10.md —
+  // so moving the handlers cannot change the contract unnoticed.
+  describe('(i) HTTP error paths', () => {
+    const tuesday = '2026-06-09'
+    const rescueBody = {
+      rescueId: '66666666-6666-4666-8666-666666666666',
+      date: tuesday,
+      intent: 'quick',
+      expectedUpdatedAt: null,
+    }
+    const proposalBody = { proposalId: '77777777-7777-4777-8777-777777777777', expectedUpdatedAt: null }
+
+    function call(userId: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
+      return buildApp(db).request(path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${fakeAccessToken(userId)}`,
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...headers,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    }
+
+    async function expectResponse(response: Response, status: number, body: unknown) {
+      expect({ status: response.status, body: await response.json() }).toEqual({ status, body })
+    }
+
+    type TExpected = [number, unknown]
+    const invalidWeek: TExpected = [400, { error: 'INVALID_WEEK_START_DATE' }]
+    const invalidContextDate: TExpected = [400, { error: 'INVALID_WEEK_CONTEXT_DATE' }]
+    const notMember: TExpected = [404, { error: 'NOT_MEMBER' }]
+    const noPlan: TExpected = [422, { error: 'NO_PLAN' }]
+    const noCompletedWeek: TExpected = [422, { error: 'NO_COMPLETED_WEEK' }]
+    const nullWeek: TExpected = [200, { week: null }]
+
+    // [method, path suffix after the week segment, body,
+    //  non-member + non-Monday, non-member + Monday, member + non-Monday]
+    const routes: Array<[string, string, unknown, TExpected, TExpected, TExpected]> = [
+      ['GET', '/context-overrides', undefined, invalidWeek, notMember, invalidWeek],
+      ['PUT', `/context-overrides/${tuesday}`, { effortLevel: 'busy' }, invalidContextDate, notMember, invalidContextDate],
+      ['DELETE', `/context-overrides/${tuesday}`, undefined, invalidContextDate, notMember, invalidContextDate],
+      ['POST', '/generate', {}, invalidWeek, notMember, invalidWeek],
+      ['POST', '/events', { causedBy: { source: 'user', userId: userA }, eventType: 'week_started' }, invalidWeek, notMember, invalidWeek],
+      ['GET', '', undefined, invalidWeek, notMember, invalidWeek],
+      ['GET', '/summary', undefined, invalidWeek, notMember, invalidWeek],
+      ['POST', '/rescue/preview', rescueBody, noPlan, notMember, noPlan],
+      ['POST', '/rescue/apply', rescueBody, noPlan, notMember, noPlan],
+      ['POST', '/previous-week/preview', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
+      ['POST', '/previous-week/apply', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
+      // Membership is checked first here, and a non-member gets 200 { week: null }.
+      ['GET', '/history', undefined, nullWeek, nullWeek, invalidWeek],
+      // Membership is checked first here.
+      ['PATCH', '/history', { timezone: 'Europe/Stockholm', state: baseHistoryState }, notMember, notMember, invalidWeek],
+      // The Monday check runs first here.
+      ['POST', '/finalize', undefined, invalidWeek, notMember, invalidWeek],
+    ]
+
+    for (const [method, suffix, body, nonMemberNonMonday, nonMemberMonday, memberNonMonday] of routes) {
+      it(`${method} week-plans/{week}${suffix} keeps its error statuses, bodies, and check order`, async () => {
+        const path = (week: string) => `/households/${householdAId}/week-plans/${week}${suffix}`
+        await expectResponse(await call(userB, method, path(tuesday), body), ...nonMemberNonMonday)
+        await expectResponse(await call(userB, method, path(weekStartDate), body), ...nonMemberMonday)
+        await expectResponse(await call(userA, method, path(tuesday), body), ...memberNonMonday)
+      })
+    }
+
+    it('checks membership before the history range', async () => {
+      await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), ...notMember)
+      await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })
+      await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?to=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })
+      await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${weekStartDate}`), 200, [])
+    })
+
+    it('answers a rescue date outside the week with 422 NO_PLAN', async () => {
+      const outside = { ...rescueBody, date: '2026-06-15' }
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...noPlan)
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/apply`, outside), ...noPlan)
+      await expectResponse(await call(userB, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...noPlan)
+    })
+
+    it('answers a member rescue on a week without a plan with 422 NO_PLAN', async () => {
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, rescueBody), ...noPlan)
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/apply`, rescueBody), ...noPlan)
+    })
+
+    it('answers a member previous-week proposal without recipes with 422 NO_RECIPES', async () => {
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/previous-week/preview`, proposalBody), 422, { error: 'NO_RECIPES' })
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/previous-week/apply`, proposalBody), 422, { error: 'NO_RECIPES' })
+    })
+
+    it('rejects a context date outside the week for members', async () => {
+      const base = `/households/${householdAId}/week-plans/${weekStartDate}`
+      await expectResponse(await call(userA, 'PUT', `${base}/context-overrides/2026-06-15`, { effortLevel: 'busy' }), ...invalidContextDate)
+      await expectResponse(await call(userA, 'DELETE', `${base}/context-overrides/2026-06-15`), ...invalidContextDate)
+      await expectResponse(await call(userA, 'POST', `${base}/events`, {
+        causedBy: { source: 'user', userId: userA },
+        eventType: 'week_context_override_cleared',
+        date: '2026-06-15',
+      }), ...invalidContextDate)
+    })
+
+    it('keeps the free-text 404 for a missing week plan and the code for a missing history plan', async () => {
+      const base = `/households/${householdAId}/week-plans/${weekStartDate}`
+      await expectResponse(await call(userA, 'GET', base), 404, { error: 'No week plan found for this week' })
+      await expectResponse(await call(userA, 'POST', `${base}/finalize`), 404, { error: 'WEEK_PLAN_NOT_FOUND' })
+      await expectResponse(await call(userA, 'GET', `${base}/history`), 200, { week: null })
+    })
+
+    it('serves member reads with their cache headers', async () => {
+      const base = `/households/${householdAId}/week-plans/${weekStartDate}`
+      const summary = await call(userA, 'GET', `${base}/summary`)
+      expect(summary.status).toBe(200)
+      expect(summary.headers.get('Cache-Control')).toBe('private, max-age=300')
+      await expectResponse(await call(userA, 'GET', `${base}/context-overrides`), 200, { overrides: [] })
+
+      await call(userA, 'POST', `${base}/events`, { causedBy: { source: 'user', userId: userA }, eventType: 'week_started' })
+      const plan = await call(userA, 'GET', base)
+      expect(plan.status).toBe(200)
+      expect(plan.headers.get('Cache-Control')).toBe('private, max-age=300')
+    })
+
+    it('returns stale history details as 409 through the route', async () => {
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/history`
+      await expectResponse(await call(userA, 'PATCH', path, { timezone: 'Europe/Stockholm', state: baseHistoryState, expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }), 409, { error: 'STALE_WEEK_PLAN_STATE', updatedAt: null })
+    })
+
+    it('releases the generation reservation when generation answers NO_RECIPES', async () => {
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/generate`
+      await expectResponse(await call(userA, 'POST', path, {}, { 'X-Veckly-Today': weekStartDate }), 422, { error: 'NO_RECIPES' })
+      const usage = await db.select().from(householdAiWeeklyUsage).where(eq(householdAiWeeklyUsage.householdId, householdAId))
+      expect(usage).toHaveLength(0)
+    })
+
+    it('keeps the generation reservation when generation fills days', async () => {
+      await createRecipe(db, fakeAccessToken(userA), userA, householdAId, {
+        title: 'Route Pasta',
+        description: 'Fast family pasta',
+        servings: 4,
+        ingredients: [{ item: 'spaghetti', amount: '400', unit: 'g', category: 'Pantry' }],
+        steps: [{ text: 'Cook pasta' }],
+        tags: ['weekday'],
+        prepTimeMinutes: 10,
+        cookTimeMinutes: 15,
+        source: 'user_created',
+        isPublic: false,
+      })
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/generate`
+      await expectResponse(await call(userA, 'POST', path, {}, { 'X-Veckly-Today': weekStartDate }), 200, { ok: true })
+      const usage = await db.select().from(householdAiWeeklyUsage).where(eq(householdAiWeeklyUsage.householdId, householdAId))
+      expect(usage).toHaveLength(1)
+    })
+
+    it('releases the generation reservation when every day is already filled', async () => {
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/generate`
+      // Every day of this week is in the past relative to the header.
+      await expectResponse(await call(userA, 'POST', path, {}, { 'X-Veckly-Today': '2026-06-20' }), 200, { ok: true })
+      const usage = await db.select().from(householdAiWeeklyUsage).where(eq(householdAiWeeklyUsage.householdId, householdAId))
+      expect(usage).toHaveLength(0)
     })
   })
 })

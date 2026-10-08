@@ -1,66 +1,34 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { StaleProjectionError } from './event-stream.js'
 import { assertMembership } from './membership.js'
-import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
-import { resolveEntitlementForHousehold } from './entitlements.js'
-import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
-import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { readRecipeIngredients } from './ingredient-categories.js'
-import { pantryCoversIngredient } from './ingredient-identity.js'
-import { upsertMealOutcome } from './meal-outcomes.js'
-import { derivePortionSuggestion } from './portion-memory.js'
+import { PremiumRequiredResponseSchema } from './premium-gates.js'
 import {
   WeekContextOverrideSchema,
-  mergeDayPlanningContext,
   type TWeekContextOverride,
 } from './planning-context.js'
 import type { Db } from './db.js'
 import {
-  computeCurrentStreak,
-  createWeekContext,
-  deriveAssignmentReason,
-  detectFatiguedMeals,
-  evaluateAssignmentConfidence,
-  evaluateWeekEconomy,
-  extractRecentMealIds,
-  rankCandidates,
-  recipeMatchesWish,
-  scoreMeal,
-  updateWeekContext,
-  type TFeedbackState,
-  type THouseholdMealSignalState,
-  type TScoringRecipe,
-} from './week-scoring.js'
-import {
   addDays,
-  defaultTodayForWeek,
   isDateInWeek,
   isMonday,
-  orderedDays,
   requestToday,
 } from './shared/week-dates.js'
-import { readIngredientArray, readStringArray, recipeMatchesAvoided } from './shared/recipe-matching.js'
+import { recipeMatchesAvoided } from './shared/recipe-matching.js'
 import {
   AppendWeekPlanEventRequestSchema,
   CausedBySchema,
   ClearWeekContextOverrideResponseSchema,
   ContextOverrideParamsSchema,
-  dayOfWeek,
   FinalizeWeekHistoryPlanResponseSchema,
   GenerateWeekPlanErrorSchema,
   GenerateWeekPlanRequestSchema,
   GenerateWeekPlanResponseSchema,
   HouseholdParamsSchema,
   ParamsSchema,
-  PlanningDaySelectionSchema,
   PreviousWeekProposalApplyResponseSchema,
-  PreviousWeekProposalDaySchema,
   PreviousWeekProposalErrorSchema,
   PreviousWeekProposalRequestSchema,
   PreviousWeekProposalSchema,
-  PreviousWeekReusedPayloadSchema,
-  PreviousWeekReuseReasonSchema,
   StaleWeekHistoryPlanResponseSchema,
   UpsertWeekHistoryPlanResponseSchema,
   UpsertWeekHistoryPlanSchema,
@@ -75,32 +43,17 @@ import {
   WeekPlanProjectionSchema,
   WeekPlanSummarySchema,
   WeekRescueApplyResponseSchema,
-  WeekRescuedPayloadSchema,
   WeekRescueErrorSchema,
   WeekRescuePreviewSchema,
   WeekRescueRequestSchema,
-  type TPreviousWeekProposal,
   type TPreviousWeekProposalRequest,
   type TWeekRescueRequest,
 } from './modules/week-plan/schemas.js'
-import { contextOverrideItems, emptyProjectionState, foldEventIntoProjection, readPantryStock, readProjectionState } from './modules/week-plan/projection.js'
+import { emptyProjectionState, foldEventIntoProjection } from './modules/week-plan/projection.js'
 import { deriveWeekExplanations } from './modules/week-plan/explanations.js'
 import { deriveWeekRescuePreview } from './modules/week-plan/rescue.js'
-import {
-  appendWeekPlanEvent,
-  finalizeWeekHistoryPlanRow,
-  loadGenerationInputs,
-  loadPreviousWeekInputs,
-  loadWeekRescueInputs,
-  loadWeekSummaryRows,
-  selectPreviousWeekReusedPayloads,
-  selectWeekHistoryPlan,
-  selectWeekHistoryPlans,
-  selectWeekPlanEventPayloads,
-  selectWeekPlanProjection,
-  type TUpsertWeekHistoryPlanResult,
-  upsertWeekHistoryPlanRow,
-} from './modules/week-plan/repository.js'
+import * as service from './modules/week-plan/service.js'
+import * as serviceGenerate from './modules/week-plan/service-generate.js'
 
 // --- Routes ------------------------------------------------------------------
 //
@@ -401,648 +354,59 @@ const finalizeWeekHistoryPlanRoute = createRoute({
   },
 })
 
-const SATIATION_STREAK_THRESHOLD = 3
-
-function streakWeeksOrNull(streak: number): number | null {
-  return streak >= SATIATION_STREAK_THRESHOLD ? streak : null
+// Old positional signatures, kept only so test/week-plan.test.ts keeps
+// compiling unchanged until the shim is removed. Everything else calls the
+// `ctx`-based service functions directly.
+export function getWeekContextOverrides(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return service.getWeekContextOverrides({ db, accessToken, householdId }, weekStartDate)
 }
 
-export async function getWeekContextOverrides(
-  db: Db,
-  accessToken: string,
-  householdId: string,
-  weekStartDate: string,
-) {
-  const projection = await selectWeekPlanProjection({ db, accessToken, householdId }, weekStartDate)
-  return contextOverrideItems(readProjectionState(projection?.state), weekStartDate)
+export function upsertWeekContextOverride(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, date: string, override: TWeekContextOverride) {
+  return service.upsertWeekContextOverride({ db, accessToken, userId, householdId }, weekStartDate, date, override)
 }
 
-export async function upsertWeekContextOverride(
-  db: Db,
-  accessToken: string,
-  userId: string,
-  householdId: string,
-  weekStartDate: string,
-  date: string,
-  override: TWeekContextOverride,
-) {
-  await appendWeekPlanEvent({ db, accessToken, householdId },
-    {
-      weekStartDate,
-      causedBy: { source: 'user', userId },
-      payload: { eventType: 'week_context_override_upserted', date, override },
-    },
-  )
-  return { date, ...override }
+export function clearWeekContextOverride(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, date: string) {
+  return service.clearWeekContextOverride({ db, accessToken, userId, householdId }, weekStartDate, date)
 }
 
-export async function clearWeekContextOverride(
-  db: Db,
-  accessToken: string,
-  userId: string,
-  householdId: string,
-  weekStartDate: string,
-  date: string,
-) {
-  await appendWeekPlanEvent({ db, accessToken, householdId },
-    {
-      weekStartDate,
-      causedBy: { source: 'user', userId },
-      payload: { eventType: 'week_context_override_cleared', date },
-    },
-  )
+export function listWeekHistoryPlans(db: Db, accessToken: string, householdId: string, range: { from?: string; to?: string }) {
+  return service.listWeekHistoryPlans({ db, accessToken, householdId }, range)
 }
 
-export async function listWeekHistoryPlans(
-  db: Db,
-  accessToken: string,
-  householdId: string,
-  range: { from?: string; to?: string },
-) {
-  return selectWeekHistoryPlans({ db, accessToken, householdId }, range)
+export function getWeekHistoryPlan(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return service.getWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
 }
 
-export async function getWeekHistoryPlan(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
-  return selectWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
+export function upsertWeekHistoryPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, input: z.infer<typeof UpsertWeekHistoryPlanSchema>) {
+  return service.upsertWeekHistoryPlan({ db, accessToken, userId, householdId }, weekStartDate, input)
 }
 
-export async function upsertWeekHistoryPlan(
-  db: Db,
-  accessToken: string,
-  userId: string,
-  householdId: string,
-  weekStartDate: string,
-  input: z.infer<typeof UpsertWeekHistoryPlanSchema>,
-): Promise<TUpsertWeekHistoryPlanResult> {
-  return upsertWeekHistoryPlanRow({ db, accessToken, userId, householdId }, weekStartDate, input)
+export function finalizeWeekHistoryPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string) {
+  return service.finalizeWeekHistoryPlan({ db, accessToken, userId, householdId }, weekStartDate)
 }
 
-export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string) {
-  return finalizeWeekHistoryPlanRow({ db, accessToken, userId, householdId }, weekStartDate)
-}
-
-export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  const inputs = await loadWeekRescueInputs({ db, accessToken, householdId }, weekStartDate, request.date)
-  if (!inputs) return { error: 'NO_PLAN' as const }
-  const { projection, projectionState, profile, prepBatches, recipeRows, assignments } = inputs
-  const assignedBatchIds = new Set(assignments.map((assignment) => assignment.batchId))
-  const preferredLeftoverRecipeIds = new Set(prepBatches
-    .filter((batch) => assignedBatchIds.has(batch.id) && batch.recipeId)
-    .map((batch) => batch.recipeId!))
-  return deriveWeekRescuePreview({
-    request,
-    weekStartDate,
-    updatedAt: projection.updatedAt.toISOString(),
-    projection: projectionState,
-    recipes: recipeRows,
-    avoidIngredients: (profile?.avoidIngredients as string[] | undefined) ?? [],
-    preferredLeftoverRecipeIds,
-  })
-}
-
-// Idempotent applies race: two requests with the same id both pass the
-// existing-event lookup, and the loser's append hits a unique violation — or,
-// once the winner has moved the projection, the append's stale precondition.
-// Re-running once lets that lookup find the winner's event and answer
-// `alreadyApplied`; a genuinely different concurrent edit makes the re-run's
-// preview answer STALE_WEEK_PLAN. One retry only — a conflict from any other
-// cause must surface, not loop.
-async function retryOnceOnWriteConflict<T>(apply: () => Promise<T>): Promise<T | { error: 'STALE_WEEK_PLAN' }> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await apply()
-    } catch (error) {
-      const stale = error instanceof StaleProjectionError
-      if (!stale && (error as { code?: string }).code !== '23505') throw error
-      if (attempt === 2) {
-        if (stale) return { error: 'STALE_WEEK_PLAN' }
-        throw error
-      }
-    }
-  }
+export function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
+  return service.previewWeekRescue({ db, accessToken, householdId }, weekStartDate, request)
 }
 
 export function applyWeekRescue(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  return retryOnceOnWriteConflict(() => applyWeekRescueOnce(db, accessToken, userId, householdId, weekStartDate, request))
+  return service.applyWeekRescue({ db, accessToken, userId, householdId }, weekStartDate, request)
 }
 
-async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  const existing = await selectWeekPlanEventPayloads({ db, accessToken, householdId }, weekStartDate)
-  const existingPayload = existing
-    .filter((row) => row.eventType === 'week_rescued')
-    .map((row) => row.payload as Omit<z.infer<typeof WeekRescuedPayloadSchema>, 'eventType'>)
-    .find((payload) => payload.rescueId === request.rescueId)
-  if (existingPayload) {
-    const changes = existingPayload.changes
-    return { ok: true as const, alreadyApplied: true, preview: {
-      rescueId: request.rescueId,
-      intent: existingPayload.rescueReason,
-      reason: existingPayload.rescueReason === 'extra-guest' ? 'more-portions' as const : existingPayload.rescueReason === 'swap-day' ? 'swaps-days' as const : existingPayload.rescueReason === 'quick' ? 'faster' as const : existingPayload.rescueReason === 'no-energy' ? 'less-effort' as const : 'avoids-ingredient' as const,
-      primaryChange: changes[0]!, followUpChanges: changes.slice(1), shoppingDiff: existingPayload.shoppingDiff, expectedUpdatedAt: request.expectedUpdatedAt,
-    } }
-  }
-
-  const preview = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
-  if ('error' in preview) return preview
-  await appendWeekPlanEvent({ db, accessToken, householdId },
-    { weekStartDate, causedBy: { source: 'user', userId }, payload: {
-      eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
-      changes: [preview.primaryChange, ...preview.followUpChanges],
-      shoppingDiff: preview.shoppingDiff,
-    }, expectedUpdatedAt: preview.expectedUpdatedAt },
-  )
-  if (preview.primaryChange.beforeRecipeRef && preview.primaryChange.afterRecipeRef
-    && preview.primaryChange.beforeRecipeRef !== preview.primaryChange.afterRecipeRef) {
-    // The rescue event is the source of truth for the plan mutation. Outcome
-    // attribution is secondary memory; never report a failed rescue after the
-    // plan has committed, since the client would correctly assume no change.
-    try {
-      await upsertMealOutcome(db, accessToken, userId, householdId, preview.primaryChange.date, {
-        weekStartDate,
-        plannedRecipeId: preview.primaryChange.beforeRecipeRef,
-        status: 'changed_plan',
-        actualRecipeId: preview.primaryChange.afterRecipeRef,
-      })
-    } catch (error) {
-      console.error('[week-rescue] failed to record changed_plan outcome', error)
-    }
-  }
-  return { ok: true as const, alreadyApplied: false, preview }
+export function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return service.getWeekPlanSummary({ db, accessToken, householdId }, weekStartDate)
 }
 
-export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
-  // 4 prior weeks is enough to surface a streak (threshold 3) without an
-  // unbounded query — see `computeCurrentStreak` in week-scoring.ts.
-  const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
-  const rows = await loadWeekSummaryRows({ db, accessToken, householdId }, weekStartDate, priorWeekStartDates)
-  if (!rows) return null
-  const {
-    household,
-    projection,
-    priorWeekProjections,
-    outcomeRows,
-    shoppingProjection,
-    pulseMembers,
-    projectionState,
-    recipeIds,
-    recipeRows,
-    portionOutcomeRows,
-    portionMemoryRows,
-    accessibleRecipeTitles,
-    prepBatches,
-    prepAssignments,
-  } = rows
-
-  const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
-
-  const priorPlansByDate = new Map(
-    priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
-  )
-  const resolvedHistory = resolveMealHistory(
-    allWeekStartDates.map((date) => ({
-      weekStartDate: date,
-      mealIds: date === weekStartDate ? recipeIds : priorPlansByDate.get(date) ?? [],
-    })),
-    outcomeRows,
-  )
-  const confirmedWeeksByDate = new Map(
-    resolvedHistory.confirmedRecords.map((record) => [record.weekStartDate, record.mealIds]),
-  )
-  const weeksMostRecentFirst = [
-    confirmedWeeksByDate.get(weekStartDate) ?? [],
-    ...priorWeekStartDates.map((date) => confirmedWeeksByDate.get(date) ?? []),
-  ]
-
-  const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
-  const portionOutcomesByRecipe = new Map<string, typeof portionOutcomeRows>()
-  for (const outcome of portionOutcomeRows) {
-    portionOutcomesByRecipe.set(outcome.plannedRecipeId, [...(portionOutcomesByRecipe.get(outcome.plannedRecipeId) ?? []), outcome])
-  }
-  const ignoredThroughByRecipe = new Map(portionMemoryRows.map((row) => [row.recipeId, row.ignoredThrough]))
-  const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
-  const assignmentsByBatch = new Map<string, string[]>()
-  for (const assignment of prepAssignments) {
-    assignmentsByBatch.set(assignment.batchId, [...(assignmentsByBatch.get(assignment.batchId) ?? []), assignment.date])
-  }
-
-  const days = orderedDays.map((dayOfWeek, index) => {
-    const meal = projectionState.meals[dayOfWeek]
-    const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
-    const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
-
-    return {
-      dayOfWeek,
-      date: addDays(weekStartDate, index),
-      state,
-      isLocked: projectionState.lockedDays.includes(dayOfWeek),
-      reason: meal?.reason ?? null,
-      confidence: meal?.confidence ?? null,
-      streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
-      portionSuggestion: recipe ? derivePortionSuggestion(
-        portionOutcomesByRecipe.get(recipe.id) ?? [],
-        meal?.servings ?? recipe.servings,
-        ignoredThroughByRecipe.get(recipe.id),
-      ) : null,
-      recipe: recipe ? {
-        id: recipe.id,
-        title: recipe.title,
-        description: recipe.description,
-        servings: meal?.servings ?? recipe.servings,
-        prepTimeMinutes: recipe.prepTimeMinutes ?? null,
-        cookTimeMinutes: recipe.cookTimeMinutes ?? null,
-        tags: readStringArray(recipe.tags),
-      } : null,
-    }
-  })
-  const pantryStock = readPantryStock(shoppingProjection?.state)
-
-  return {
-    household,
-    weekStartDate,
-    updatedAt: projection?.updatedAt.toISOString() ?? null,
-    economy: evaluateWeekEconomy(
-      recipeIds.map((id) => recipesById.get(id)).filter((recipe): recipe is NonNullable<typeof recipe> => Boolean(recipe)).map((recipe) => ({
-        id: recipe.id,
-        title: recipe.title,
-        servings: recipe.servings,
-        prepTimeMinutes: recipe.prepTimeMinutes,
-        tags: readStringArray(recipe.tags),
-        ingredients: readIngredientArray(recipe.ingredients),
-        cuisine: null,
-        proteinSource: null,
-        mealWeight: null,
-        householdId: null,
-      })),
-      pantryStock,
-    ),
-    pulse: {
-      responseCount: pulseMembers.filter((member) => member.respondedAt !== null).length,
-      memberCount: pulseMembers.length,
-      wishes: pulseMembers.flatMap((member) => {
-        if (!member.wishedMeal) return []
-        const fulfilled = plannedRecipeTitles.some((title) => recipeMatchesWish(title, member.wishedMeal!))
-        const available = accessibleRecipeTitles.some((recipe) => recipeMatchesWish(recipe.title, member.wishedMeal!))
-        return [{
-          userId: member.userId,
-          givenName: member.givenName,
-          wishedMeal: member.wishedMeal,
-          status: fulfilled ? 'fulfilled' as const : available ? 'not-selected' as const : 'unavailable' as const,
-        }]
-      }),
-    },
-    explanations: deriveWeekExplanations({
-      days,
-      recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
-      prepLinks: prepBatches.map((batch) => ({
-        recipeId: batch.recipeId,
-        recipeTitle: batch.recipeId ? recipesById.get(batch.recipeId)?.title ?? null : null,
-        cookDate: batch.cookDate,
-        coveredDates: assignmentsByBatch.get(batch.id) ?? [],
-      })),
-      pantryStock,
-    }),
-    days,
-  }
+export function previewPreviousWeekProposal(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest) {
+  return service.previewPreviousWeekProposal({ db, accessToken, userId, householdId }, weekStartDate, request)
 }
 
-export async function previewPreviousWeekProposal(
-  db: Db,
-  accessToken: string,
-  userId: string,
-  householdId: string,
-  weekStartDate: string,
-  request: TPreviousWeekProposalRequest,
-): Promise<TPreviousWeekProposal | { error: 'NO_COMPLETED_WEEK' | 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' | 'STALE_WEEK_PLAN' }> {
-  const priorWindowStart = addDays(weekStartDate, -42)
-  const [profileRows, projection, poolRecipes, feedbackRows, signalRows, priorProjections, outcomes, shoppingRows, prepAssignmentRows] = await loadPreviousWeekInputs(
-    { db, accessToken, userId, householdId },
-    weekStartDate,
-    priorWindowStart,
-  )
-
-  if (request.expectedUpdatedAt !== (projection?.updatedAt.toISOString() ?? null)) return { error: 'STALE_WEEK_PLAN' }
-  if (poolRecipes.length === 0) return { error: 'NO_RECIPES' }
-  const completedWeek = [...new Set(outcomes.map((row) => row.weekStartDate))].sort().at(-1)
-  if (!completedWeek) return { error: 'NO_COMPLETED_WEEK' }
-
-  const profile = profileRows[0]
-  const selections = (profile?.selectedDays as Array<z.infer<typeof PlanningDaySelectionSchema>> | undefined)
-    ?? orderedDays.slice(0, 5).map((day) => ({ day }))
-  const selectedDays = new Map(selections.map((selection) => [selection.day, selection]))
-  const avoidIngredients = (profile?.avoidIngredients as string[] | undefined) ?? []
-  const candidates: TScoringRecipe[] = poolRecipes
-    .filter((recipe) => !recipeMatchesAvoided(recipe, avoidIngredients))
-    .map((recipe) => ({
-      id: recipe.id, title: recipe.title, servings: recipe.servings, prepTimeMinutes: recipe.prepTimeMinutes,
-      tags: readStringArray(recipe.tags), ingredients: readIngredientArray(recipe.ingredients), cuisine: recipe.cuisine,
-      proteinSource: recipe.proteinSource, mealWeight: recipe.mealWeight, householdId: recipe.householdId,
-    }))
-  if (candidates.length === 0) return { error: 'ALL_RECIPES_EXCLUDED' }
-
-  const recipesById = new Map(candidates.map((recipe) => [recipe.id, recipe]))
-  const feedback: TFeedbackState = Object.fromEntries(feedbackRows.map((row) => [row.mealId, { vote: row.vote, ...(row.signal ? { signal: row.signal } : {}) }]))
-  const householdSignals: THouseholdMealSignalState = Object.fromEntries(signalRows.map((row) => [row.mealId, row.signal]))
-  const priorDates = Array.from({ length: 6 }, (_, index) => addDays(weekStartDate, -7 * (index + 1)))
-  const projectionsByDate = new Map(priorProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((meal) => meal.recipeRef)]))
-  const history = resolveMealHistory(priorDates.map((date) => ({ weekStartDate: date, mealIds: projectionsByDate.get(date) ?? [] })), outcomes)
-  const recentMealIds = extractRecentMealIds(history.scoringRecords, weekStartDate)
-  const fatiguedIds = new Set(detectConfirmedFatiguedMeals(priorDates, history.confirmedRecords))
-  const changedCounts = new Map<string, number>()
-  for (const outcome of outcomes.filter((row) => row.status === 'changed_plan')) {
-    changedCounts.set(outcome.plannedRecipeId, (changedCounts.get(outcome.plannedRecipeId) ?? 0) + 1)
-  }
-  const sourceOutcomes = outcomes.filter((row) => row.weekStartDate === completedWeek)
-  const sourceByDay = new Map(sourceOutcomes.map((outcome) => [orderedDays[new Date(`${outcome.date}T00:00:00Z`).getUTCDay() === 0 ? 6 : new Date(`${outcome.date}T00:00:00Z`).getUTCDay() - 1], outcome]))
-  const targetState = readProjectionState(projection?.state)
-  const weekCtx = createWeekContext(readPantryStock(shoppingRows[0]?.state))
-  const prepRecipeIdsByDate = new Map<string, Set<string>>()
-  for (const row of prepAssignmentRows) {
-    if (!row.recipeId) continue
-    const ids = prepRecipeIdsByDate.get(row.date) ?? new Set<string>()
-    ids.add(row.recipeId)
-    prepRecipeIdsByDate.set(row.date, ids)
-  }
-  const used = new Set<string>()
-  const days: z.infer<typeof PreviousWeekProposalDaySchema>[] = []
-
-  for (const [day, householdSelection] of selectedDays) {
-    if (targetState.lockedDays.includes(day) || targetState.skippedDays.includes(day)) continue
-    const targetDate = addDays(weekStartDate, orderedDays.indexOf(day))
-    const selection = mergeDayPlanningContext(householdSelection, targetState.contextOverrides?.[targetDate])
-    const source = sourceByDay.get(day)
-    const previousRecipe = source ? recipesById.get(source.plannedRecipeId) : undefined
-    let rejection: z.infer<typeof PreviousWeekReuseReasonSchema> | null = null
-    if (!source) rejection = 'fills-selected-day'
-    else if (source.status !== 'cooked' || !previousRecipe) rejection = 'not-cooked'
-    else if (householdSignals[previousRecipe.id] === 'not_for_us') rejection = 'family-veto'
-    else if (feedback[previousRecipe.id]?.vote === 'down') rejection = 'disliked'
-    else if (fatiguedIds.has(previousRecipe.id)) rejection = 'fatigued'
-    else if ((changedCounts.get(previousRecipe.id) ?? 0) >= 2) rejection = 'changed-plan-often'
-
-    const available = candidates.filter((candidate) => !used.has(candidate.id) && householdSignals[candidate.id] !== 'not_for_us' && feedback[candidate.id]?.vote !== 'down')
-    const preferredPrepRecipeIds = prepRecipeIdsByDate.get(targetDate)
-    const ranked = rankCandidates(available.length ? available : candidates, {
-      householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection,
-      recentMealIds, fatiguedMealIds: [...fatiguedIds], preferredPrepRecipeIds,
-    })
-    // Reuse is the promise here. Recency must not turn every meal from last
-    // week into a replacement; this comparison only asks whether the target
-    // day's explicit context makes another recipe materially better.
-    if (!rejection && previousRecipe && ranked[0] && scoreMeal(ranked[0], { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, preferredPrepRecipeIds }) - scoreMeal(previousRecipe, { householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection, preferredPrepRecipeIds }) >= 8) {
-      rejection = 'week-context'
-    }
-    const chosen = !rejection && previousRecipe ? previousRecipe : ranked[0]
-    if (!chosen) continue
-    used.add(chosen.id)
-    updateWeekContext(weekCtx, chosen)
-    days.push({
-      dayOfWeek: day, date: targetDate, action: !source ? 'added' : rejection ? 'replaced' : 'kept',
-      reason: rejection ?? 'worked-last-week', previousRecipeRef: previousRecipe?.id ?? null,
-      previousRecipeTitle: previousRecipe?.title ?? null, recipeRef: chosen.id, recipeTitle: chosen.title,
-      servings: selection?.servingsOverride ?? chosen.servings,
-    })
-  }
-
-  return {
-    proposalId: request.proposalId, sourceWeekStartDate: completedWeek,
-    expectedUpdatedAt: projection?.updatedAt.toISOString() ?? null,
-    keptCount: days.filter((day) => day.action === 'kept').length,
-    changedCount: days.filter((day) => day.action !== 'kept').length,
-    days,
-  }
+export function applyPreviousWeekProposal(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest) {
+  return service.applyPreviousWeekProposal({ db, accessToken, userId, householdId }, weekStartDate, request)
 }
 
-export function applyPreviousWeekProposal(
-  db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
-) {
-  return retryOnceOnWriteConflict(() => applyPreviousWeekProposalOnce(db, accessToken, userId, householdId, weekStartDate, request))
-}
-
-async function applyPreviousWeekProposalOnce(
-  db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
-) {
-  const existing = await selectPreviousWeekReusedPayloads({ db, accessToken, householdId }, weekStartDate)
-  const existingPayload = existing.map((row) => row.payload as z.infer<typeof PreviousWeekReusedPayloadSchema>).find((payload) => payload.proposalId === request.proposalId)
-  if (existingPayload) {
-    const proposal = { proposalId: existingPayload.proposalId, sourceWeekStartDate: existingPayload.sourceWeekStartDate, expectedUpdatedAt: null, keptCount: existingPayload.days.filter((day) => day.action === 'kept').length, changedCount: existingPayload.days.filter((day) => day.action !== 'kept').length, days: existingPayload.days }
-    return { ok: true as const, alreadyApplied: true, proposal }
-  }
-  const proposal = await previewPreviousWeekProposal(db, accessToken, userId, householdId, weekStartDate, request)
-  if ('error' in proposal) return proposal
-  await appendWeekPlanEvent({ db, accessToken, householdId }, {
-    weekStartDate,
-    causedBy: { source: 'algorithm', algorithmVersion: '2.0', triggeredByUserId: userId },
-    payload: { eventType: 'previous_week_reused', proposalId: proposal.proposalId, sourceWeekStartDate: proposal.sourceWeekStartDate, days: proposal.days },
-    expectedUpdatedAt: proposal.expectedUpdatedAt,
-  })
-  return { ok: true as const, alreadyApplied: false, proposal }
-}
-
-export async function doGenerateWeekPlan(
-  db: Db,
-  accessToken: string,
-  userId: string,
-  householdId: string,
-  weekStartDate: string,
-  regenerate: boolean,
-  today = defaultTodayForWeek(weekStartDate),
-  pantryItemKeys: string[] = [],
-): Promise<{ ok: true; generated: boolean } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
-  const member = await assertMembership(db, accessToken, householdId, userId)
-  if (!member) return { error: 'NOT_MEMBER' as const }
-
-  // Up to 6 prior Monday-start weeks — feeds both recency (last 1-2 weeks)
-  // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
-  const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
-
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseMemberRows] = await loadGenerationInputs(
-    { db, accessToken, userId, householdId },
-    weekStartDate,
-    priorWeekStartDates,
-  )
-
-  const profile = profileRows[0] ?? null
-  const selectedDayNames: z.infer<typeof dayOfWeek>[] = profile
-    ? (profile.selectedDays as Array<{ day: string }>).map((d) => d.day as z.infer<typeof dayOfWeek>)
-    : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
-  const selectedDaysByName = new Map(
-    profile
-      ? (profile.selectedDays as Array<z.infer<typeof PlanningDaySelectionSchema>>).map((selection) => [selection.day, selection])
-      : selectedDayNames.map((day) => [day, { day }]),
-  )
-  const avoidIngredients: string[] = profile ? (profile.avoidIngredients as string[]) : []
-  const respondedPulseRows = pulseMemberRows.filter((row) => row.updatedAt !== null)
-  const memberCount = pulseMemberRows.length
-  const unanimousAwayDates = new Set(orderedDays.map((_, index) => addDays(weekStartDate, index)).filter((date) =>
-    memberCount > 0
-      && respondedPulseRows.length === memberCount
-      && respondedPulseRows.every((row) => Array.isArray(row.awayDates) && row.awayDates.includes(date)),
-  ))
-  const simpleDates = new Set(respondedPulseRows.map((row) => row.simpleDate).filter((date): date is string => Boolean(date)))
-  const remainingWishedMeals = respondedPulseRows.map((row) => row.wishedMeal).filter((wish): wish is string => Boolean(wish))
-
-  const projState = readProjectionState(projection?.state)
-  const daysToFill = orderedDays.filter((day) => {
-    if (!selectedDayNames.includes(day)) return false
-    if (addDays(weekStartDate, orderedDays.indexOf(day)) < today) return false
-    if (unanimousAwayDates.has(addDays(weekStartDate, orderedDays.indexOf(day)))) return false
-    if (projState.lockedDays.includes(day)) return false
-    if (projState.skippedDays.includes(day)) return false
-    return regenerate ? true : !projState.meals[day]
-  })
-
-  if (daysToFill.length === 0) return { ok: true, generated: false }
-  if (poolRecipes.length === 0) return { error: 'NO_RECIPES' as const }
-
-  const candidates: TScoringRecipe[] = (avoidIngredients.length > 0
-    ? poolRecipes.filter((r) => !recipeMatchesAvoided(r, avoidIngredients))
-    : poolRecipes
-  ).map((r) => ({
-    id: r.id,
-    title: r.title,
-    tags: readStringArray(r.tags),
-    ingredients: readIngredientArray(r.ingredients),
-    servings: r.servings,
-    prepTimeMinutes: r.prepTimeMinutes,
-    cuisine: r.cuisine,
-    proteinSource: r.proteinSource,
-    mealWeight: r.mealWeight,
-    householdId: r.householdId,
-  }))
-
-  // Fail closed: if every recipe was excluded by the household's avoid-list,
-  // never silently fall back to the unfiltered pool — that would risk
-  // serving an ingredient the household explicitly flagged (e.g. an allergen).
-  if (candidates.length === 0) return { error: 'ALL_RECIPES_EXCLUDED' as const }
-
-  const feedback: TFeedbackState = Object.fromEntries(
-    feedbackRows.map((row) => [row.mealId, { vote: row.vote, ...(row.signal ? { signal: row.signal } : {}) }]),
-  )
-  const householdSignals: THouseholdMealSignalState = Object.fromEntries(householdSignalRows.map((row) => [row.mealId, row.signal]))
-  // Gap-filled over the full 6-week window, not just the weeks that happen
-  // to have a projection row — `detectFatiguedMeals` walks this list
-  // positionally (each entry = "the next week"), so a week the household
-  // never opened must appear as an empty week, not be silently skipped
-  // (which would make the two weeks on either side of the gap look
-  // adjacent and corrupt the streak/break detection).
-  const priorWeeksByDate = new Map(
-    priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
-  )
-  const resolvedHistory = resolveMealHistory(
-    priorWeekStartDates.map((date) => ({ weekStartDate: date, mealIds: priorWeeksByDate.get(date) ?? [] })),
-    outcomeRows,
-  )
-  const recentMealIds = extractRecentMealIds(resolvedHistory.scoringRecords, weekStartDate)
-  const fatiguedMealIds = detectFatiguedMeals(resolvedHistory.scoringRecords)
-  const confirmedFatiguedMealIds = detectConfirmedFatiguedMeals(priorWeekStartDates, resolvedHistory.confirmedRecords)
-  const everCookedRecipeIds = recipeIdsFromRecords(resolvedHistory.confirmedRecords)
-  const legacyPlannedRecipeIds = recipeIdsFromRecords(resolvedHistory.legacyPlannedRecords)
-
-  // Only meals staying put (not in `daysToFill`) should inform exclusion/
-  // variety scoring — on a regenerate, a day's current meal is about to be
-  // discarded, so seeding from it would wrongly exclude that recipe from
-  // being re-picked (even onto the day it's leaving) and pollute cuisine/
-  // protein/hearty-adjacency scoring with data that won't exist in the
-  // final week.
-  const daysToFillSet = new Set(daysToFill)
-  const keptMeals = Object.entries(projState.meals)
-    .filter(([day]) => !daysToFillSet.has(day as z.infer<typeof dayOfWeek>))
-    .map(([, meal]) => meal)
-
-  const alreadyUsed = new Set(keptMeals.map((m) => m.recipeRef))
-  const pantryStock = readPantryStock(shoppingRows[0]?.state)
-  const pantryFocusKeys = new Set(pantryItemKeys)
-  const focusedPantryStock = Object.fromEntries(
-    Object.entries(pantryStock).filter(([key, quantity]) => pantryFocusKeys.has(key) && quantity > 0),
-  )
-  const hasPantryFocus = Object.keys(focusedPantryStock).length > 0
-  const weekCtx = createWeekContext(hasPantryFocus ? focusedPantryStock : pantryStock, hasPantryFocus ? 4 : 0.75)
-  const prepRecipeIdsByDate = new Map<string, Set<string>>()
-  for (const row of prepAssignmentRows) {
-    if (!row.recipeId) continue
-    const ids = prepRecipeIdsByDate.get(row.date) ?? new Set<string>()
-    ids.add(row.recipeId)
-    prepRecipeIdsByDate.set(row.date, ids)
-  }
-  // Seed week-context with this week's already-placed (locked/existing)
-  // meals so cuisine/protein-variety and hearty-adjacency scoring account
-  // for the whole week, not just the days being filled right now.
-  for (const meal of keptMeals) {
-    const placed = candidates.find((c) => c.id === meal.recipeRef)
-    if (placed) updateWeekContext(weekCtx, placed)
-  }
-
-  const causedBy = { source: 'algorithm' as const, algorithmVersion: '2.0', triggeredByUserId: userId }
-
-  if (!projState.weekStarted) {
-    await appendWeekPlanEvent({ db, accessToken, householdId },
-      { weekStartDate, causedBy, payload: { eventType: 'week_started' } },
-    )
-  }
-
-  for (const date of unanimousAwayDates) {
-    const day = orderedDays[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7]
-    if (!day) continue
-    if (!selectedDayNames.includes(day) || projState.skippedDays.includes(day) || projState.lockedDays.includes(day) || projState.meals[day]) continue
-    await appendWeekPlanEvent({ db, accessToken, householdId },
-      { weekStartDate, causedBy, payload: { eventType: 'day_skipped', dayOfWeek: day } },
-    )
-  }
-
-  for (const day of daysToFill) {
-    const unused = candidates.filter((c) => !alreadyUsed.has(c.id))
-    const scoringPool = unused.length > 0 ? unused : candidates
-    const date = addDays(weekStartDate, orderedDays.indexOf(day))
-    const weekOverride = projState.contextOverrides?.[date]
-    const baseSelection = mergeDayPlanningContext(selectedDaysByName.get(day), weekOverride)
-    const selection = simpleDates.has(date) ? { ...baseSelection, effortLevel: 'busy' as const } : baseSelection
-    const ranked = rankCandidates(scoringPool, {
-      householdId, feedback, householdSignals, allRecipes: candidates, weekCtx, selection,
-      recentMealIds, fatiguedMealIds, preferredPrepRecipeIds: prepRecipeIdsByDate.get(date), wishedMeals: remainingWishedMeals,
-    })
-    const next = ranked[0]
-    if (!next) continue
-
-    // Evaluated against `weekCtx` as it stood *before* this pick — same
-    // order as the web engine (evaluateConfidence, then updateWeekContext).
-    const baseReason = deriveAssignmentReason(next, {
-      householdId,
-      feedback,
-      allRecipes: candidates,
-      selection,
-      fatiguedMealIds: confirmedFatiguedMealIds,
-      everCookedRecipeIds,
-      legacyPlannedRecipeIds,
-      selectionSource: weekOverride ? 'week-override' : 'household-default',
-    })
-    const reason = hasPantryFocus && readIngredientArray(next.ingredients).some((ingredient) => pantryCoversIngredient(ingredient, focusedPantryStock))
-      ? 'pantry-coverage' as const
-      : baseReason
-    const confidence = evaluateAssignmentConfidence(next, weekCtx, selection)
-
-    alreadyUsed.add(next.id)
-    for (let index = remainingWishedMeals.length - 1; index >= 0; index -= 1) {
-      const wishedMeal = remainingWishedMeals[index]
-      if (wishedMeal && recipeMatchesWish(next.title, wishedMeal)) remainingWishedMeals.splice(index, 1)
-    }
-    updateWeekContext(weekCtx, next)
-    await appendWeekPlanEvent({ db, accessToken, householdId },
-      {
-        weekStartDate,
-        causedBy,
-        payload: {
-          eventType: 'meal_assigned',
-          dayOfWeek: day,
-          recipeRef: next.id,
-          reason,
-          confidence,
-          servings: selection?.servingsOverride ?? next.servings,
-        },
-      },
-    )
-  }
-
-  return { ok: true, generated: true }
+export function doGenerateWeekPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, regenerate: boolean, today?: string, pantryItemKeys?: string[]) {
+  return serviceGenerate.doGenerateWeekPlan({ db, accessToken, userId, householdId }, weekStartDate, regenerate, today, pantryItemKeys)
 }
 
 export function buildWeekPlanRoutes(db: Db) {
@@ -1062,7 +426,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
-    const overrides = await getWeekContextOverrides(db, accessToken, householdId, weekStartDate)
+    const overrides = await service.getWeekContextOverrides({ db, accessToken, householdId }, weekStartDate)
     return c.json({ overrides }, 200)
   })
 
@@ -1077,7 +441,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const override = c.req.valid('json')
 
-    const saved = await upsertWeekContextOverride(db, accessToken, user.id, householdId, weekStartDate, date, override)
+    const saved = await service.upsertWeekContextOverride({ db, accessToken, userId: user.id, householdId }, weekStartDate, date, override)
     return c.json(saved, 200)
   })
 
@@ -1091,7 +455,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
-    await clearWeekContextOverride(db, accessToken, user.id, householdId, weekStartDate, date)
+    await service.clearWeekContextOverride({ db, accessToken, userId: user.id, householdId }, weekStartDate, date)
     return c.json({ ok: true }, 200)
   })
 
@@ -1104,41 +468,8 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const today = requestToday(c.req.header('X-Veckly-Today'))
-    // Product date behavior follows the device-local header, but billing usage
-    // must never trust a caller-controlled date.
-    const usagePeriodStart = serverWeeklyUsagePeriodStart()
-    const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-    let reservation: Awaited<ReturnType<typeof reserveWeeklyGeneration>> & { persisted: boolean }
-    try {
-      reservation = { ...await reserveWeeklyGeneration(db, householdId, usagePeriodStart, regenerate), persisted: true }
-    } catch (error) {
-      if (entitlement.gatesEnabled) throw error
-      console.error('[premium-gate] failed to persist weekly AI usage in shadow mode', error)
-      reservation = { recorded: true, current: 0, limit: 1, persisted: false }
-    }
-    if (!reservation.recorded) {
-      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'week_generation_limit', usage: reservation })
-      if (gate) return c.json(gate as never, 403)
-    }
-    let result: Awaited<ReturnType<typeof doGenerateWeekPlan>>
-    try {
-      result = await doGenerateWeekPlan(
-        db,
-        accessToken,
-        user.id,
-        householdId,
-        weekStartDate,
-        regenerate,
-        today,
-        [...new Set(pantryItemKeys)],
-      )
-    } catch (error) {
-      if (reservation.recorded && reservation.persisted) await releaseWeeklyGenerationBestEffort(db, householdId, usagePeriodStart, regenerate)
-      throw error
-    }
-    if (reservation.recorded && reservation.persisted && ('error' in result || !result.generated)) {
-      await releaseWeeklyGenerationBestEffort(db, householdId, usagePeriodStart, regenerate)
-    }
+    const result = await serviceGenerate.generateWeek({ db, accessToken, userId: user.id, householdId }, weekStartDate, { regenerate, today, pantryItemKeys })
+    if ('gate' in result) return c.json(result.gate as never, 403)
     if ('error' in result && result.error === 'NOT_MEMBER') return c.json({ error: 'NOT_MEMBER' }, 404)
     if ('error' in result) return c.json(result, 422)
     return c.json({ ok: true }, 200)
@@ -1160,9 +491,7 @@ export function buildWeekPlanRoutes(db: Db) {
       return c.json({ error: 'INVALID_WEEK_CONTEXT_DATE' } as never, 400)
     }
 
-    const event = await appendWeekPlanEvent({ db, accessToken, householdId },
-      { weekStartDate, causedBy, payload: payload as z.infer<typeof WeekPlanEventPayloadSchema> },
-    )
+    const event = await service.recordWeekPlanEvent({ db, accessToken, householdId }, weekStartDate, causedBy, payload as z.infer<typeof WeekPlanEventPayloadSchema>)
 
     return c.json(
       {
@@ -1187,10 +516,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
-    // Exactly one query, against the projection only — `getStreamProjection`
-    // is what enforces the one rule the entire pattern hinges on (design doc
-    // §2: "never replay the event log on the read path").
-    const projection = await selectWeekPlanProjection({ db, accessToken, householdId }, weekStartDate)
+    const projection = await service.getWeekPlan({ db, accessToken, householdId }, weekStartDate)
 
     if (!projection) return c.json({ error: 'No week plan found for this week' }, 404)
 
@@ -1213,7 +539,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
-    const summary = await getWeekPlanSummary(db, accessToken, householdId, weekStartDate)
+    const summary = await service.getWeekPlanSummary({ db, accessToken, householdId }, weekStartDate)
 
     if (!summary) return c.json({ error: 'Household not found.' } as never, 404)
     c.header('Cache-Control', 'private, max-age=300')
@@ -1228,7 +554,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, request.date)) return c.json({ error: 'NO_PLAN' }, 422)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-    const result = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
+    const result = await service.previewWeekRescue({ db, accessToken, householdId }, weekStartDate, request)
     if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
     return c.json(result, 200)
   })
@@ -1241,7 +567,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate) || !isDateInWeek(weekStartDate, request.date)) return c.json({ error: 'NO_PLAN' }, 422)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-    const result = await applyWeekRescue(db, accessToken, user.id, householdId, weekStartDate, request)
+    const result = await service.applyWeekRescue({ db, accessToken, userId: user.id, householdId }, weekStartDate, request)
     if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
     return c.json(result, 200)
   })
@@ -1253,7 +579,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate)) return c.json({ error: 'NO_COMPLETED_WEEK' } as never, 422)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-    const result = await previewPreviousWeekProposal(db, accessToken, user.id, householdId, weekStartDate, c.req.valid('json'))
+    const result = await service.previewPreviousWeekProposal({ db, accessToken, userId: user.id, householdId }, weekStartDate, c.req.valid('json'))
     if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
     return c.json(result, 200)
   })
@@ -1265,7 +591,7 @@ export function buildWeekPlanRoutes(db: Db) {
     if (!isMonday(weekStartDate)) return c.json({ error: 'NO_COMPLETED_WEEK' } as never, 422)
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' } as never, 404)
-    const result = await applyPreviousWeekProposal(db, accessToken, user.id, householdId, weekStartDate, c.req.valid('json'))
+    const result = await service.applyPreviousWeekProposal({ db, accessToken, userId: user.id, householdId }, weekStartDate, c.req.valid('json'))
     if ('error' in result) return c.json(result, result.error === 'STALE_WEEK_PLAN' ? 409 : 422)
     return c.json(result, 200)
   })
@@ -1280,17 +606,9 @@ export function buildWeekPlanRoutes(db: Db) {
 
     if ((from && !isMonday(from)) || (to && !isMonday(to))) return c.json({ error: 'INVALID_WEEK_RANGE' } as never, 400)
 
-    const plans = await listWeekHistoryPlans(db, accessToken, householdId, { from, to })
-    // Four most recent calendar weeks remain free. Shadow only for now.
-    const now = new Date()
-    const mondayOffset = (now.getUTCDay() + 6) % 7
-    const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - mondayOffset - 21)).toISOString().slice(0, 10)
-    if (plans.some((plan) => plan.weekStartDate < cutoff)) {
-      const entitlement = await resolveEntitlementForHousehold(db, user.id, householdId)
-      const gate = await observePremiumGate(db, entitlement, { householdId, userId: user.id, reason: 'week_history' })
-      if (gate) return c.json(gate as never, 403)
-    }
-    return c.json(plans, 200)
+    const result = await service.listWeekHistory({ db, accessToken, userId: user.id, householdId }, { from, to })
+    if ('gate' in result) return c.json(result.gate as never, 403)
+    return c.json(result.plans, 200)
   })
 
   app.openapi(getWeekHistoryPlanRoute, async (c) => {
@@ -1302,7 +620,7 @@ export function buildWeekPlanRoutes(db: Db) {
 
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
 
-    const week = await getWeekHistoryPlan(db, accessToken, householdId, weekStartDate)
+    const week = await service.getWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
     return c.json({ week }, 200)
   })
 
@@ -1316,7 +634,7 @@ export function buildWeekPlanRoutes(db: Db) {
 
     if (!isMonday(weekStartDate)) return c.json({ error: 'INVALID_WEEK_START_DATE' } as never, 400)
 
-    const result = await upsertWeekHistoryPlan(db, accessToken, user.id, householdId, weekStartDate, body)
+    const result = await service.upsertWeekHistoryPlan({ db, accessToken, userId: user.id, householdId }, weekStartDate, body)
     if (result.outcome === 'stale') return c.json({ error: 'STALE_WEEK_PLAN_STATE', updatedAt: result.updatedAt }, 409)
 
     return c.json({
@@ -1338,7 +656,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
-    const plan = await finalizeWeekHistoryPlan(db, accessToken, user.id, householdId, weekStartDate)
+    const plan = await service.finalizeWeekHistoryPlan({ db, accessToken, userId: user.id, householdId }, weekStartDate)
     if (!plan) return c.json({ error: 'WEEK_PLAN_NOT_FOUND' } as never, 404)
 
     return c.json({ ok: true, weekStartDate, status: 'finalized', updatedAt: plan.updatedAt }, 200)

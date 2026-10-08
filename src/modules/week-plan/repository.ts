@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, lt, lte, or } from 'drizzle-orm'
 import type { z } from 'zod'
 import type { Db } from '../../db.js'
 import { appendStreamEvent, getStreamProjection } from '../../event-stream.js'
-import type { RequestContext } from '../../platform/http-errors.js'
+import type { HouseholdScope, RequestContext } from '../../platform/http-errors.js'
 import { withRls } from '../../rls.js'
 import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPortionMemories, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from '../../schema.js'
 import { addDays, getIsoWeekIdentity, orderedDays } from '../../shared/week-dates.js'
@@ -16,11 +16,6 @@ import type {
   WeekHistoryStateSchema,
   WeekPlanEventPayloadSchema,
 } from './schemas.js'
-
-// Every function here runs under the caller's RLS identity. Reads that never
-// need the caller's own id take the narrower household scope; a full
-// `RequestContext` satisfies it.
-type HouseholdScope = Pick<RequestContext, 'db' | 'accessToken' | 'householdId'>
 
 // The recipes a household plans from: its own, builtins, and recipes it has
 // saved. Deliberately not "any public recipe" — another household's public

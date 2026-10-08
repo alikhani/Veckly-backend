@@ -14,6 +14,10 @@ export class ApiError extends Error {
 
 export type RequestContext = { db: Db; accessToken: string; userId: string; householdId: string }
 
+// For reads and writes that never need the caller's own id. A full
+// `RequestContext` satisfies it.
+export type HouseholdScope = Pick<RequestContext, 'db' | 'accessToken' | 'householdId'>
+
 // Called as the first line after `c.req.valid(...)` in every household route.
 // An explicit helper and not middleware: middleware in @hono/zod-openapi runs
 // BEFORE param validation, so an invalid householdId would reach the database.

@@ -4,14 +4,8 @@ import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
 import { createRecipe } from '../src/recipes.js'
 import { households, householdMemberships, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from '../src/schema.js'
-import {
-  foldEventIntoProjection,
-  emptyProjectionState,
-  getShoppingListState,
-  getShoppingListSummary,
-  replaceShoppingListState,
-  type TShoppingListProjectionState,
-} from '../src/shopping-list.js'
+import { emptyProjectionState, foldEventIntoProjection, type TShoppingListProjectionState } from '../src/modules/shopping-list/projection.js'
+import { getShoppingListState, getShoppingListSummary, replaceShoppingListState } from '../src/modules/shopping-list/service.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 // The HTTP-level tests need an authenticated caller. `requireAuth` verifies the
@@ -86,6 +80,7 @@ describeWithDb('Shopping-list event log + projection', () => {
   }
 
   const userCausedBy = (userId: string) => ({ source: 'user' as const, userId })
+  const ctxFor = (userId: string, householdId: string) => ({ db, accessToken: fakeAccessToken(userId), userId, householdId })
 
   async function appendAsUser(
     userId: string,
@@ -296,8 +291,7 @@ describeWithDb('Shopping-list event log + projection', () => {
 
   describe('(d) shared shopping state compatibility', () => {
     it('replaces checklist and pantry state through the projection-backed write path', async () => {
-      const result = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const result = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         state: { checkedItems: ['rice:g', 'tomatoes:can'], pantryStock: { 'rice:g': 100 }, customItems: [] },
@@ -305,7 +299,7 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(result.outcome).toBe('updated')
 
-      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const state = await getShoppingListState(ctxFor(userA, householdAId), weekStartDate)
       expect(state.state).toEqual({
         checkedItems: ['rice:g', 'tomatoes:can'],
         pantryStock: { 'rice:g': 100 },
@@ -319,19 +313,17 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
 
     it('returns null state when no projection exists or after the state is cleared', async () => {
-      const missing = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const missing = await getShoppingListState(ctxFor(userA, householdAId), weekStartDate)
       expect(missing).toEqual({ state: null, updatedAt: null })
 
-      const created = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const created = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         state: { checkedItems: ['rice:g'], pantryStock: { 'rice:g': 100 }, customItems: [] },
       })
       expect(created.outcome).toBe('updated')
 
-      const cleared = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const cleared = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         expectedUpdatedAt: created.updatedAt,
@@ -339,11 +331,10 @@ describeWithDb('Shopping-list event log + projection', () => {
       })
       expect(cleared).toEqual({ outcome: 'updated', updatedAt: null })
 
-      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const state = await getShoppingListState(ctxFor(userA, householdAId), weekStartDate)
       expect(state).toEqual({ state: null, updatedAt: null })
 
-      const replacedAfterClear = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const replacedAfterClear = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         expectedUpdatedAt: null,
@@ -365,16 +356,14 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
 
     it('returns stale conflict details when expectedUpdatedAt does not match the projection', async () => {
-      const created = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const created = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         state: { checkedItems: ['rice:g'], pantryStock: {}, customItems: [] },
       })
       expect(created.outcome).toBe('updated')
 
-      const stale = await replaceShoppingListState(db, fakeAccessToken(userA), {
-        householdId: householdAId,
+      const stale = await replaceShoppingListState(ctxFor(userA, householdAId), {
         weekStartDate,
         causedBy: userCausedBy(userA),
         expectedUpdatedAt: '2026-04-06T04:00:00.000Z',
@@ -383,7 +372,7 @@ describeWithDb('Shopping-list event log + projection', () => {
 
       expect(stale).toEqual({ outcome: 'stale', updatedAt: created.updatedAt })
 
-      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const state = await getShoppingListState(ctxFor(userA, householdAId), weekStartDate)
       expect(state.state).toEqual({ checkedItems: ['rice:g'], pantryStock: {}, customItems: [] })
     })
 
@@ -431,7 +420,7 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
 
     it('returns an empty shopping summary when no week plan exists', async () => {
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary).not.toBeNull()
       expect(summary!.updatedAt).toBeNull()
@@ -451,7 +440,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'pantry:spaghetti:g': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -485,7 +474,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'other:carrot:pc': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -516,7 +505,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'produce:carrots:pc': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -553,7 +542,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { listStarted: true, checkedItems: { 'protein:chicken-breast:g': true }, pantryStock: {}, customItems: [] },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { language: 'sv', today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { language: 'sv', today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -594,7 +583,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: '2026-06-10' })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: '2026-06-10' })
 
       expect(summary?.groups).toEqual([
         {
@@ -630,7 +619,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: '2026-06-10' })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: '2026-06-10' })
 
       expect(summary?.groups).toEqual([
         {
@@ -644,7 +633,7 @@ describeWithDb('Shopping-list event log + projection', () => {
     })
 
     it('does not expose another household shopping summary across RLS', async () => {
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdBId, weekStartDate)
+      const summary = await getShoppingListSummary(ctxFor(userA, householdBId), weekStartDate)
 
       expect(summary).toBeNull()
     })
@@ -663,7 +652,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -695,7 +684,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       expect(summary?.groups).toEqual([
         {
@@ -723,8 +712,8 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate)
-      const state = await getShoppingListState(db, fakeAccessToken(userA), householdAId, weekStartDate)
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate)
+      const state = await getShoppingListState(ctxFor(userA, householdAId), weekStartDate)
 
       expect(summary?.groups).toEqual([
         {
@@ -802,7 +791,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       // pasta: 100 * (4 / 2) = 200 ; broth: 300 * (4 / 6) = 200 ; lettuce: 50 * (4 / 4) = 50
       expect(summary?.groups).toEqual([
@@ -835,7 +824,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id, servings: 8 } } },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       // 100 * (8 / 4) = 200 — the override (8), not the household size (4), drives the scale.
       expect(summary?.groups).toEqual([
@@ -858,7 +847,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       // 50 * (4 / 2) = 100
       expect(summary?.groups).toEqual([
@@ -881,7 +870,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         state: { weekStarted: true, meals: { monday: { recipeRef: recipe.id } } },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       // plannedMealServings falls back all the way to recipeBaseServings (6) → scale factor 1.
       expect(summary?.groups).toEqual([
@@ -912,7 +901,7 @@ describeWithDb('Shopping-list event log + projection', () => {
         },
       })
 
-      const summary = await getShoppingListSummary(db, fakeAccessToken(userA), householdAId, weekStartDate, { today: weekStartDate })
+      const summary = await getShoppingListSummary(ctxFor(userA, householdAId), weekStartDate, { today: weekStartDate })
 
       // Before the Fas 2 fix, `recipeIds` deduplicated to a single row via the
       // SQL `IN` clause and `ingredientRows` flatMapped over recipe rows (not

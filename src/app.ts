@@ -10,7 +10,7 @@ import { buildHouseholdsRoutes, buildInternalHouseholdsRoutes } from './househol
 import { buildHouseholdProfileRoutes, buildInternalHouseholdProfileRoutes } from './household-profile.js'
 import { buildInvitesRoutes, buildInternalInvitesRoutes } from './invites.js'
 import { buildWeekPlanRoutes } from './modules/week-plan/index.js'
-import { buildShoppingListRoutes } from './shopping-list.js'
+import { buildShoppingListRoutes } from './modules/shopping-list/index.js'
 import { buildShoppingPreferencesRoutes } from './shopping-preferences.js'
 import { buildPortionMemoryRoutes } from './portion-memory.js'
 import { buildInternalRecipesRoutes, buildRecipesRoutes } from './recipes.js'

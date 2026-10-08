@@ -970,32 +970,15 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect({ events, projections }).toEqual({ events: [], projections: [] })
     })
 
-    it('returns 404 NOT_MEMBER for a non-member on a non-Monday week (no Monday check on any route)', async () => {
-      for (const [method, path, body] of routes(householdBId, tuesday)) {
-        await expectResponse(await call(userA, method, path, body), 404, { error: 'NOT_MEMBER' })
+    it('answers a non-Monday weekStartDate with 400 INVALID_WEEK_START_DATE before the membership check, without writing anything', async () => {
+      for (const householdId of [householdAId, householdBId]) {
+        for (const [method, path, body] of routes(householdId, tuesday)) {
+          await expectResponse(await call(userA, method, path, body), 400, { error: 'INVALID_WEEK_START_DATE' })
+        }
       }
-    })
-
-    it('accepts a non-Monday weekStartDate for a member on every route', async () => {
-      await expectResponse(await call(userA, 'GET', base(householdAId, tuesday)), 404, { error: 'No shopping list found for this week' })
-      await expectResponse(await call(userA, 'GET', `${base(householdAId, tuesday)}/state`), 200, { state: null, updatedAt: null })
-
-      const summary = await call(userA, 'GET', `${base(householdAId, tuesday)}/summary`)
-      expect(summary.status).toBe(200)
-      expect(await summary.json()).toEqual({
-        household: { id: householdAId, name: 'Household A' },
-        weekStartDate: tuesday,
-        updatedAt: null,
-        groups: [],
-      })
-
-      const appended = await call(userA, 'POST', `${base(householdAId, tuesday)}/events`, validEvent)
-      expect(appended.status).toBe(201)
-      expect(await appended.json()).toMatchObject({ householdId: householdAId, weekStartDate: tuesday, sequenceNumber: 1, eventType: 'list_started', payload: {} })
-
-      const patched = await call(userA, 'PATCH', `${base(householdAId, tuesday)}/state`, { state: validState })
-      expect(patched.status).toBe(200)
-      expect(await patched.json()).toMatchObject({ ok: true })
+      const events = await db.select().from(shoppingListEvents)
+      const projections = await db.select().from(shoppingListProjections)
+      expect({ events, projections }).toEqual({ events: [], projections: [] })
     })
 
     it('returns 404 with the free-text body when a member reads a list that has not started', async () => {

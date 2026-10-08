@@ -7785,6 +7785,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
           }
@@ -7827,6 +7837,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShoppingListProjection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -7880,6 +7900,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
           },
@@ -7925,6 +7955,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShoppingListStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -7983,7 +8023,14 @@
             }
           },
           "400": {
-            "description": "Invalid request body"
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"

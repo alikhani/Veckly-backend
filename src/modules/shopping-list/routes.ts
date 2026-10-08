@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from '../../auth.js'
 import type { Db } from '../../db.js'
 import type { PersistedStreamEvent, PersistedStreamProjection } from '../../event-stream.js'
 import { languageFromAcceptLanguage } from '../../locale.js'
-import { ApiError, invalidRequestHook, requireHouseholdMember } from '../../platform/http-errors.js'
+import { ApiError, errorResponses, invalidRequestHook, requireHouseholdMember, requireMonday } from '../../platform/http-errors.js'
 import {
   AppendShoppingListEventRequestSchema,
   CausedBySchema,
@@ -44,6 +44,7 @@ const appendShoppingListEventRoute = createRoute({
       content: { 'application/json': { schema: ShoppingListEventSchema } },
     },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
   },
 })
 
@@ -61,6 +62,7 @@ const getShoppingListRoute = createRoute({
     },
     404: { description: "The list hasn't started yet — no projection exists" },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
   },
 })
 
@@ -78,6 +80,7 @@ const getShoppingListSummaryRoute = createRoute({
     },
     404: { description: 'Household not found or caller is not a member' },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
   },
 })
 
@@ -94,6 +97,7 @@ const getShoppingListStateRoute = createRoute({
       content: { 'application/json': { schema: ShoppingListStateResponseSchema } },
     },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
   },
 })
 
@@ -112,12 +116,12 @@ const updateShoppingListStateRoute = createRoute({
       description: 'State was replaced or cleared',
       content: { 'application/json': { schema: UpdateShoppingListStateResponseSchema } },
     },
-    400: { description: 'Invalid request body' },
     409: {
       description: 'The supplied expectedUpdatedAt value is stale',
       content: { 'application/json': { schema: StaleShoppingListStateResponseSchema } },
     },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
   },
 })
 
@@ -150,8 +154,8 @@ function toShoppingListProjectionResponse(projection: PersistedStreamProjection)
 }
 
 // Every household route checks the caller's membership before any use case
-// runs (authenticate -> authorize -> repository). None of these routes checks
-// that weekStartDate is a Monday; that is today's contract and is kept as is.
+// runs (authenticate -> authorize -> repository), in one order: request
+// validation, then the Monday week, then membership.
 export function buildShoppingListRoutes(db: Db) {
   const app = new OpenAPIHono<TEnv>({ defaultHook: invalidRequestHook })
 
@@ -161,6 +165,7 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(appendShoppingListEventRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     // The body's `causedBy` is never trusted: a client could otherwise attribute
     // an event to another user or to the algorithm/system. The field stays in the
@@ -172,6 +177,7 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const projection = await getShoppingList(ctx, weekStartDate)
     // Free text, unchanged.
@@ -181,6 +187,7 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListSummaryRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const summary = await getShoppingListSummary(ctx, weekStartDate, {
       language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
@@ -193,12 +200,14 @@ export function buildShoppingListRoutes(db: Db) {
 
   app.openapi(getShoppingListStateRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     return c.json(await getShoppingListState(ctx, weekStartDate), 200)
   })
 
   app.openapi(updateShoppingListStateRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const body = c.req.valid('json')
     const result = await replaceShoppingListState(ctx, {

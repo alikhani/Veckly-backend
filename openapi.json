@@ -3118,6 +3118,68 @@
           "week"
         ]
       },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "NOT_MEMBER",
+          "HOUSEHOLD_NOT_FOUND",
+          "WEEK_PLAN_NOT_FOUND",
+          "SHOPPING_LIST_NOT_FOUND",
+          "INVALID_JSON",
+          "INVALID_REQUEST",
+          "INVALID_WEEK_START_DATE",
+          "INVALID_WEEK_CONTEXT_DATE",
+          "INVALID_WEEK_RANGE",
+          "NO_PLAN",
+          "LOCKED_DAY",
+          "NO_RESCUE_FOUND",
+          "NO_COMPLETED_WEEK",
+          "NO_RECIPES",
+          "ALL_RECIPES_EXCLUDED",
+          "STALE_WEEK_PLAN",
+          "STALE_WEEK_PLAN_STATE",
+          "STALE_SHOPPING_STATE"
+        ]
+      },
+      "ValidationIssue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "message"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            }
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "UpsertWeekHistoryPlanResponse": {
         "type": "object",
         "properties": {
@@ -7488,6 +7550,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },

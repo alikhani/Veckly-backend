@@ -2257,7 +2257,6 @@ describeWithDb('Week-plan event log + projection', () => {
     const notMember: TExpected = [404, { error: 'NOT_MEMBER' }]
     const noPlan: TExpected = [422, { error: 'NO_PLAN' }]
     const noCompletedWeek: TExpected = [422, { error: 'NO_COMPLETED_WEEK' }]
-    const nullWeek: TExpected = [200, { week: null }]
 
     // [method, path suffix after the week segment, body,
     //  non-member + non-Monday, non-member + Monday, member + non-Monday]
@@ -2273,8 +2272,8 @@ describeWithDb('Week-plan event log + projection', () => {
       ['POST', '/rescue/apply', rescueBody, noPlan, notMember, noPlan],
       ['POST', '/previous-week/preview', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
       ['POST', '/previous-week/apply', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
-      // Membership is checked first here, and a non-member gets 200 { week: null }.
-      ['GET', '/history', undefined, nullWeek, nullWeek, invalidWeek],
+      // Membership is checked first here.
+      ['GET', '/history', undefined, notMember, notMember, invalidWeek],
       // Membership is checked first here.
       ['PATCH', '/history', { timezone: 'Europe/Stockholm', state: baseHistoryState }, notMember, notMember, invalidWeek],
       // The Monday check runs first here.

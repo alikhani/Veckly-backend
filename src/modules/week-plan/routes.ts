@@ -3,9 +3,8 @@ import type { Context } from 'hono'
 import { requireAuth, type AuthedUser } from '../../auth.js'
 import type { Db } from '../../db.js'
 import type { PersistedStreamEvent, PersistedStreamProjection } from '../../event-stream.js'
-import { assertMembership } from '../../membership.js'
 import { WeekContextOverrideSchema } from '../../planning-context.js'
-import { ApiError, invalidRequestHook, requireDateInWeek, requireHouseholdMember, requireMonday, type ErrorCode } from '../../platform/http-errors.js'
+import { ApiError, errorResponses, invalidRequestHook, requireDateInWeek, requireHouseholdMember, requireMonday, type ErrorCode } from '../../platform/http-errors.js'
 import { PremiumRequiredResponseSchema } from '../../premium-gates.js'
 import { requestToday } from '../../shared/week-dates.js'
 import {
@@ -288,6 +287,7 @@ const getWeekHistoryPlanRoute = createRoute({
     },
     400: { description: 'Invalid week start date' },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -536,16 +536,12 @@ export function buildWeekPlanRoutes(db: Db) {
     return c.json(result.plans, 200)
   })
 
-  // A non-member gets 200 { week: null }, not 404, so this route cannot use
-  // `requireHouseholdMember` (see "Kända inkonsekvenser" #1). Membership is
-  // checked before the Monday check.
+  // Membership is checked before the Monday check.
   app.openapi(getWeekHistoryPlanRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
-    const { accessToken, userId } = authOf(c)
-    const member = await assertMembership(db, accessToken, householdId, userId)
-    if (!member) return c.json({ week: null }, 200)
+    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
-    const week = await getWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
+    const week = await getWeekHistoryPlan(ctx, weekStartDate)
     return c.json({ week }, 200)
   })
 

@@ -2,19 +2,11 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { and, desc, eq, inArray, or } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
 import { appendStreamEvent, getStreamProjection } from './event-stream.js'
-import { languageFromAcceptLanguage, type AppLanguage } from './locale.js'
+import { languageFromAcceptLanguage } from './locale.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { householdShoppingPreferences, households, householdProfiles, recipes, shoppingListEvents, shoppingListProjections, weekPlanProjections } from './schema.js'
 import type { Db } from './db.js'
-import { normalizeIngredientCategory, readRecipeIngredients } from './ingredient-categories.js'
-import {
-  canonicalIngredientItemKey,
-  ingredientItemKey,
-  ingredientStateItemKeys,
-  normalizeIngredientKeyPart,
-  singularizeIngredientName,
-} from './ingredient-identity.js'
 import { DEFAULT_SHOPPING_CATEGORY_ORDER } from './shopping-preferences.js'
 import {
   AppendShoppingListEventRequestSchema,
@@ -30,53 +22,16 @@ import {
   UpdateShoppingListStateRequestSchema,
   UpdateShoppingListStateResponseSchema,
 } from './modules/shopping-list/schemas.js'
-
-// --- Projection fold --------------------------------------------------------
-//
-// Minimal shape needed to prove `item_checked` folds correctly — same
-// "explicitly provisional" status as week-plan's projection state. `itemKey`
-// is the only identity an item has right now, so `checkedItems` is keyed on
-// it directly.
-type TShoppingListProjectionState = {
-  listStarted: boolean
-  checkedItems: Record<string, boolean>
-  pantryStock: Record<string, number>
-  customItems: Array<{ itemKey: string; label: string; category: string }>
-}
-
-const emptyProjectionState = (): TShoppingListProjectionState => ({ listStarted: false, checkedItems: {}, pantryStock: {}, customItems: [] })
-
-function checkedItemsArrayToMap(checkedItems: string[]) {
-  return Object.fromEntries([...new Set(checkedItems)].map((itemKey) => [itemKey, true]))
-}
-
-function checkedItemsMapToArray(checkedItems: Record<string, boolean>) {
-  return Object.entries(checkedItems)
-    .filter(([, checked]) => checked)
-    .map(([itemKey]) => itemKey)
-    .sort((left, right) => left.localeCompare(right))
-}
-
-function foldEventIntoProjection(
-  state: TShoppingListProjectionState,
-  payload: z.infer<typeof ShoppingListEventPayloadSchema>,
-): TShoppingListProjectionState {
-  switch (payload.eventType) {
-    case 'list_started':
-      return { ...state, listStarted: true }
-    case 'item_checked':
-      return { ...state, checkedItems: { ...state.checkedItems, [payload.itemKey]: payload.checked } }
-    case 'shopping_state_replaced':
-      return {
-        listStarted: true,
-        checkedItems: checkedItemsArrayToMap(payload.state.checkedItems),
-        pantryStock: payload.state.pantryStock,
-        customItems: payload.state.customItems ?? [],
-      }
-    case 'shopping_list_cleared':
-      return emptyProjectionState()
-  }
-}
+import {
+  deduplicateCustomItems,
+  emptyProjectionState,
+  foldEventIntoProjection,
+  readShoppingProjectionState,
+  toShoppingStatePayload,
+  type TShoppingListProjectionState,
+} from './modules/shopping-list/projection.js'
+import type { TShoppingListLanguage } from './modules/shopping-list/localization.js'
+import { buildShoppingListGroups, plannedMealOccurrences, type TWeekPlanProjectionState } from './modules/shopping-list/summary.js'
 
 // --- Routes ------------------------------------------------------------------
 //
@@ -179,204 +134,6 @@ const updateShoppingListStateRoute = createRoute({
     401: { description: 'Missing or invalid session' },
   },
 })
-
-const weekDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
-
-type TRecipeIngredient = {
-  item: string
-  amount?: string
-  unit?: string
-  category?: string
-}
-
-type TWeekPlanProjectionState = {
-  meals?: Partial<Record<typeof weekDays[number], { recipeRef?: string; servings?: number }>>
-}
-
-type TShoppingListLanguage = AppLanguage
-
-const SWEDISH_INGREDIENT_LABELS: Record<string, string> = {
-  avocado: 'avokado',
-  'bacon or pancetta': 'bacon eller pancetta',
-  'basil pesto': 'basilikapesto',
-  'basmati rice': 'basmatiris',
-  'beef mince': 'nötfärs',
-  'beef stew meat': 'grytbitar av nöt',
-  'beef stock': 'köttbuljong',
-  'beef strips': 'strimlat nötkött',
-  'bell peppers': 'paprika',
-  'black beans': 'svarta bönor',
-  broccoli: 'broccoli',
-  butter: 'smör',
-  cabbage: 'kål',
-  carrot: 'morot',
-  carrots: 'morötter',
-  'cherry tomatoes': 'körsbärstomater',
-  'chicken breast': 'kycklingfilé',
-  'chicken stock': 'kycklingbuljong',
-  chickpeas: 'kikärtor',
-  'coconut milk': 'kokosmjölk',
-  'cooked rice': 'kokt ris',
-  'cooking cream': 'matlagningsgrädde',
-  corn: 'majs',
-  'crushed tomatoes': 'krossade tomater',
-  cucumber: 'gurka',
-  'curry paste': 'currypasta',
-  egg: 'ägg',
-  eggs: 'ägg',
-  feta: 'fetaost',
-  flour: 'mjöl',
-  'flour tortillas': 'tortillabröd',
-  'frozen vegetables': 'frysta grönsaker',
-  garlic: 'vitlök',
-  'grated cheese': 'riven ost',
-  'green beans': 'gröna bönor',
-  'green curry paste': 'grön currypasta',
-  ham: 'skinka',
-  honey: 'honung',
-  leek: 'purjolök',
-  leeks: 'purjolök',
-  lemon: 'citron',
-  lime: 'lime',
-  mayonnaise: 'majonnäs',
-  milk: 'mjölk',
-  mushrooms: 'svamp',
-  'olive oil': 'olivolja',
-  onion: 'lök',
-  parmesan: 'parmesan',
-  pasta: 'pasta',
-  peas: 'ärtor',
-  potatoes: 'potatis',
-  'red lentils': 'röda linser',
-  rice: 'ris',
-  'rice noodles': 'risnudlar',
-  'rice vinegar': 'risvinäger',
-  'risotto rice': 'risottoris',
-  salsa: 'salsa',
-  'sesame oil': 'sesamolja',
-  'sesame seeds': 'sesamfrön',
-  shrimp: 'räkor',
-  'soy sauce': 'soja',
-  spaghetti: 'spaghetti',
-  spinach: 'spenat',
-  'sweet potato': 'sötpotatis',
-  tomato: 'tomat',
-  tomatoes: 'tomater',
-  tofu: 'tofu',
-  'vegetable oil': 'vegetabilisk olja',
-  'vegetable stock': 'grönsaksbuljong',
-  zucchini: 'zucchini',
-}
-
-const SWEDISH_UNIT_LABELS: Record<string, string> = {
-  can: 'burk',
-  cloves: 'klyftor',
-  pc: 'st',
-  tbsp: 'msk',
-  tsp: 'tsk',
-}
-
-function localizeShoppingIngredientLabel(label: string, language: TShoppingListLanguage) {
-  if (language !== 'sv') return label
-  return SWEDISH_INGREDIENT_LABELS[label.trim().toLowerCase()] ?? label
-}
-
-function localizeShoppingUnit(unit: string | null, language: TShoppingListLanguage) {
-  if (!unit || language !== 'sv') return unit
-  return SWEDISH_UNIT_LABELS[unit.trim().toLowerCase()] ?? unit
-}
-
-const normalizeKeyPart = normalizeIngredientKeyPart
-
-function customItemIdentity(item: { label: string; category: string }) {
-  return `${normalizeKeyPart(item.category)}:${(item.label ?? '').trim().toLowerCase().replace(/\s+/g, ' ')}`
-}
-
-function deduplicateCustomItems(items: Array<{ itemKey: string; label: string; category: string }>) {
-  const seen = new Set<string>()
-  return items.filter((item) => {
-    const key = customItemIdentity(item)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-const buildItemKey = ingredientItemKey
-const singularizeShoppingItem = singularizeIngredientName
-const buildCanonicalItemKey = canonicalIngredientItemKey
-
-const buildStateItemKeys = ingredientStateItemKeys
-
-function preferredShoppingLabel(current: string, candidate: string) {
-  const currentTrimmed = current.trim()
-  const candidateTrimmed = candidate.trim()
-  const currentIsPlural = singularizeShoppingItem(currentTrimmed) !== currentTrimmed.toLowerCase()
-  const candidateIsPlural = singularizeShoppingItem(candidateTrimmed) !== candidateTrimmed.toLowerCase()
-  if (currentIsPlural !== candidateIsPlural) return currentIsPlural ? currentTrimmed : candidateTrimmed
-  return currentTrimmed.localeCompare(candidateTrimmed) <= 0 ? currentTrimmed : candidateTrimmed
-}
-
-function formatAggregatedAmount(n: number): string {
-  return Number.isInteger(n) ? String(n) : parseFloat(n.toFixed(2)).toString()
-}
-
-function readShoppingProjectionState(state: unknown): TShoppingListProjectionState {
-  const candidate = state as (
-    Partial<TShoppingListProjectionState> & { checkedItems?: unknown; pantryStock?: unknown; customItems?: unknown }
-  ) | null | undefined
-  const checkedItems = Array.isArray(candidate?.checkedItems)
-    ? checkedItemsArrayToMap(candidate.checkedItems.filter((item): item is string => typeof item === 'string'))
-    : candidate?.checkedItems && typeof candidate.checkedItems === 'object'
-      ? candidate.checkedItems as Record<string, boolean>
-      : {}
-  const pantryStock = candidate?.pantryStock && typeof candidate.pantryStock === 'object'
-    ? Object.fromEntries(
-      Object.entries(candidate.pantryStock as Record<string, unknown>)
-        .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])),
-    )
-    : {}
-  const customItems = Array.isArray(candidate?.customItems)
-    ? candidate.customItems
-      .filter((item): item is { itemKey: string; label: string; category: string } => {
-        if (!item || typeof item !== 'object') return false
-        const candidateItem = item as Record<string, unknown>
-        return typeof candidateItem.itemKey === 'string'
-          && candidateItem.itemKey.trim().length > 0
-          && typeof candidateItem.label === 'string'
-          && candidateItem.label.trim().length > 0
-          && typeof candidateItem.category === 'string'
-          && candidateItem.category.trim().length > 0
-      })
-      .map((item) => ({
-        itemKey: item.itemKey.trim(),
-        label: item.label.trim(),
-        category: item.category.trim(),
-      }))
-    : []
-
-  return {
-    listStarted: candidate?.listStarted === true,
-    checkedItems,
-    pantryStock,
-    customItems: deduplicateCustomItems(customItems),
-  }
-}
-
-function toShoppingStatePayload(state: TShoppingListProjectionState): z.infer<typeof ShoppingStatePayloadSchema> | null {
-  const customItems = deduplicateCustomItems(state.customItems)
-  if (
-    !state.listStarted
-    && Object.keys(state.checkedItems).length === 0
-    && Object.keys(state.pantryStock).length === 0
-    && customItems.length === 0
-  ) return null
-  return {
-    checkedItems: checkedItemsMapToArray(state.checkedItems),
-    pantryStock: state.pantryStock,
-    customItems,
-  }
-}
 
 async function getShoppingListState(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
   const projection = await getStreamProjection(db, accessToken, shoppingListProjections, { householdId, weekStartDate })
@@ -504,25 +261,13 @@ export async function getShoppingListSummary(
     const categoryOrder = Array.isArray(preferencesRow?.categoryOrder)
       ? preferencesRow.categoryOrder.filter((value): value is string => typeof value === 'string')
       : DEFAULT_SHOPPING_CATEGORY_ORDER
-    const categorySortIndex = new Map(categoryOrder.map((category, index) => [normalizeKeyPart(category), index]))
     // No profile row at all → no household size to scale to; each meal falls
     // back to the recipe's own base servings (i.e. unscaled) per decision 17.
     const householdSize = profileRow ? profileRow.adults + profileRow.children : undefined
 
     const shoppingState = readShoppingProjectionState(shoppingProjection?.state)
     const weekState = (weekProjection?.state ?? {}) as TWeekPlanProjectionState
-    // One entry per (day, recipeRef) *occurrence* — not deduplicated by
-    // recipe id. The same recipe can be planned on more than one day in the
-    // same week (e.g. Monday and Thursday), each occurrence potentially
-    // scaled to a different `plannedMealServings` (a per-day servings
-    // override applies to one day, not the recipe). Deduplicating here would
-    // silently drop a real ingredient contribution from the list.
-    const mealOccurrences = weekDays
-      .map((day) => ({
-        recipeRef: weekState.meals?.[day]?.recipeRef,
-        servingsOverride: weekState.meals?.[day]?.servings,
-      }))
-      .filter((meal): meal is typeof meal & { recipeRef: string } => Boolean(meal.recipeRef))
+    const mealOccurrences = plannedMealOccurrences(weekState)
 
     // Fetch each distinct recipe exactly once — the per-day scaling below
     // reads from this map per occurrence, so there's no need to query the
@@ -536,132 +281,7 @@ export async function getShoppingListSummary(
       : []
     const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
 
-    const ingredientRows = mealOccurrences.flatMap((meal) => {
-      const recipe = recipesById.get(meal.recipeRef)
-      if (!recipe) return []
-      const recipeBaseServings = recipe.servings
-      const plannedMealServings = meal.servingsOverride ?? householdSize ?? recipeBaseServings
-      const scaleFactor = plannedMealServings / recipeBaseServings
-      return readRecipeIngredients<TRecipeIngredient>(recipe.ingredients)
-        .filter((ingredient) => ingredient.item.trim())
-        .map((ingredient) => ({
-          ingredient,
-          scaleFactor,
-          rawItemKey: buildItemKey(ingredient),
-          canonicalItemKey: buildCanonicalItemKey(ingredient),
-          stateItemKeys: buildStateItemKeys(ingredient),
-          shouldLocalize: recipe.source === 'builtin',
-        }))
-    })
-    const canonicalKeyVariants = new Map<string, Set<string>>()
-    for (const row of ingredientRows) {
-      const variants = canonicalKeyVariants.get(row.canonicalItemKey) ?? new Set<string>()
-      variants.add(row.rawItemKey)
-      canonicalKeyVariants.set(row.canonicalItemKey, variants)
-    }
-
-    type TItemAccumulator = {
-      category: string
-      label: string
-      originalItemKeys: Set<string>
-      shouldLocalize: boolean
-      totalAmount: number | null
-      canSum: boolean
-      unit: string | null
-    }
-    const accumulator = new Map<string, TItemAccumulator>()
-
-    for (const { ingredient, scaleFactor, rawItemKey, canonicalItemKey, stateItemKeys, shouldLocalize } of ingredientRows) {
-      const itemKey = (canonicalKeyVariants.get(canonicalItemKey)?.size ?? 0) > 1 ? canonicalItemKey : rawItemKey
-      const rawAmount = ingredient.amount?.trim() || null
-      const parsed = rawAmount ? parseFloat(rawAmount) : null
-      const validNum = parsed !== null && !isNaN(parsed) && isFinite(parsed)
-      const scaledAmount = validNum ? parsed! * scaleFactor : null
-
-      const existing = accumulator.get(itemKey)
-      if (existing) {
-        for (const key of stateItemKeys) existing.originalItemKeys.add(key)
-        existing.shouldLocalize ||= shouldLocalize
-        existing.label = preferredShoppingLabel(existing.label, ingredient.item)
-        if (existing.canSum && validNum) {
-          existing.totalAmount = (existing.totalAmount ?? 0) + scaledAmount!
-        } else {
-          existing.canSum = false
-          existing.totalAmount = null
-        }
-      } else {
-        accumulator.set(itemKey, {
-          category: normalizeIngredientCategory(ingredient.item, ingredient.category),
-          label: ingredient.item.trim(),
-          originalItemKeys: stateItemKeys,
-          shouldLocalize,
-          totalAmount: validNum ? scaledAmount! : null,
-          canSum: validNum,
-          unit: ingredient.unit?.trim() || null,
-        })
-      }
-    }
-
-    const itemsByKey = new Map<string, {
-      category: string
-      label: string
-      amount: string | null
-      unit: string | null
-      checked: boolean
-      isCustom: boolean
-    }>()
-    for (const [itemKey, item] of accumulator) {
-      itemsByKey.set(itemKey, {
-        category: item.category,
-        label: item.shouldLocalize ? localizeShoppingIngredientLabel(item.label, language) : item.label,
-        amount: item.totalAmount !== null ? formatAggregatedAmount(item.totalAmount) : null,
-        unit: item.shouldLocalize ? localizeShoppingUnit(item.unit, language) : item.unit,
-        checked: shoppingState.checkedItems[itemKey] === true || [...item.originalItemKeys].some((originalKey) => shoppingState.checkedItems[originalKey] === true),
-        isCustom: false,
-      })
-    }
-
-    for (const item of shoppingState.customItems) {
-      itemsByKey.set(item.itemKey, {
-        category: item.category,
-        label: item.label,
-        amount: null,
-        unit: null,
-        checked: shoppingState.checkedItems[item.itemKey] === true,
-        isCustom: true,
-      })
-    }
-
-    const groupsByCategory = new Map<string, {
-      category: string
-      items: Array<{
-        itemKey: string
-        label: string
-        amount: string | null
-        unit: string | null
-        checked: boolean
-        isCustom: boolean
-      }>
-    }>()
-    for (const [itemKey, item] of itemsByKey) {
-      // Category casing historically differs between recipe ingredients
-      // ("other") and custom items ("Other"). Group by the canonical API
-      // value so one aisle never renders as two visually identical sections.
-      const categoryKey = normalizeKeyPart(item.category) || 'other'
-      const group = groupsByCategory.get(categoryKey) ?? { category: item.category || 'other', items: [] }
-      group.items.push({ itemKey, label: item.label, amount: item.amount, unit: item.unit, checked: item.checked, isCustom: item.isCustom })
-      groupsByCategory.set(categoryKey, group)
-    }
-
-    const groups = Array.from(groupsByCategory.entries())
-      .sort(([left], [right]) =>
-        (categorySortIndex.get(left) ?? Number.MAX_SAFE_INTEGER) - (categorySortIndex.get(right) ?? Number.MAX_SAFE_INTEGER)
-          || left.localeCompare(right)
-      )
-      .map(([, group]) => ({
-        category: group.category,
-        items: group.items.sort((left, right) => left.label.localeCompare(right.label)),
-      }))
+    const groups = buildShoppingListGroups({ mealOccurrences, recipesById, householdSize, categoryOrder, shoppingState, language })
 
     return {
       household,

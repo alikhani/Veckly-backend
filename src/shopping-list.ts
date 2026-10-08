@@ -3,7 +3,6 @@ import { requireAuth, type AuthedUser } from './auth.js'
 import { languageFromAcceptLanguage } from './locale.js'
 import { assertMembership } from './membership.js'
 import type { Db } from './db.js'
-import { DEFAULT_SHOPPING_CATEGORY_ORDER } from './shopping-preferences.js'
 import {
   AppendShoppingListEventRequestSchema,
   CausedBySchema,
@@ -21,19 +20,16 @@ import {
 import {
   emptyProjectionState,
   foldEventIntoProjection,
-  readShoppingProjectionState,
-  toShoppingStatePayload,
   type TShoppingListProjectionState,
 } from './modules/shopping-list/projection.js'
 import {
-  appendShoppingListEvent,
-  loadShoppingListSummaryRows,
-  replaceShoppingListStateRows,
-  selectShoppingListProjection,
-  type TUpdateShoppingListStateResult,
-} from './modules/shopping-list/repository.js'
+  getShoppingList,
+  getShoppingListState as getShoppingListStateUseCase,
+  getShoppingListSummary as getShoppingListSummaryUseCase,
+  recordShoppingListEvent,
+  replaceShoppingListState as replaceShoppingListStateUseCase,
+} from './modules/shopping-list/service.js'
 import type { TShoppingListLanguage } from './modules/shopping-list/localization.js'
-import { buildShoppingListGroups } from './modules/shopping-list/summary.js'
 
 // --- Routes ------------------------------------------------------------------
 
@@ -130,19 +126,12 @@ const updateShoppingListStateRoute = createRoute({
   },
 })
 
-async function getShoppingListState(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
-  const projection = await selectShoppingListProjection({ db, accessToken, householdId }, weekStartDate)
-  if (!projection) return { state: null, updatedAt: null }
-
-  const state = readShoppingProjectionState(projection.state)
-  const payload = toShoppingStatePayload(state)
-  return {
-    state: payload,
-    updatedAt: payload ? projection.updatedAt.toISOString() : null,
-  }
+// Old-signature wrappers kept for test/shopping-list.test.ts until the shim is removed.
+function getShoppingListState(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
+  return getShoppingListStateUseCase({ db, accessToken, householdId }, weekStartDate)
 }
 
-async function replaceShoppingListState(
+function replaceShoppingListState(
   db: Db,
   accessToken: string,
   args: {
@@ -152,44 +141,19 @@ async function replaceShoppingListState(
     expectedUpdatedAt?: string | null
     state: z.infer<typeof ShoppingStatePayloadSchema> | null
   },
-): Promise<TUpdateShoppingListStateResult> {
+) {
   const { householdId, ...rest } = args
-  return replaceShoppingListStateRows({ db, accessToken, householdId }, rest)
+  return replaceShoppingListStateUseCase({ db, accessToken, householdId }, rest)
 }
 
-export async function getShoppingListSummary(
+export function getShoppingListSummary(
   db: Db,
   accessToken: string,
   householdId: string,
   weekStartDate: string,
-  // Kept temporarily for source compatibility with callers/tests that used
-  // to control the rolling-day filter. Shopping summaries are now stable for
-  // the whole selected week, so `today` is deliberately ignored.
   options: { language?: TShoppingListLanguage; today?: string } = {},
 ) {
-  const language = options.language ?? 'en'
-  const rows = await loadShoppingListSummaryRows({ db, accessToken, householdId }, weekStartDate)
-  if (!rows) return null
-  const { household, shoppingProjection, profileRow, preferencesRow, mealOccurrences, recipeRows } = rows
-
-  const categoryOrder = Array.isArray(preferencesRow?.categoryOrder)
-    ? preferencesRow.categoryOrder.filter((value): value is string => typeof value === 'string')
-    : DEFAULT_SHOPPING_CATEGORY_ORDER
-  // No profile row at all → no household size to scale to; each meal falls
-  // back to the recipe's own base servings (i.e. unscaled) per decision 17.
-  const householdSize = profileRow ? profileRow.adults + profileRow.children : undefined
-
-  const shoppingState = readShoppingProjectionState(shoppingProjection?.state)
-  const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
-
-  const groups = buildShoppingListGroups({ mealOccurrences, recipesById, householdSize, categoryOrder, shoppingState, language })
-
-  return {
-    household,
-    weekStartDate,
-    updatedAt: shoppingProjection?.updatedAt.toISOString() ?? null,
-    groups,
-  }
+  return getShoppingListSummaryUseCase({ db, accessToken, householdId }, weekStartDate, options)
 }
 
 export function buildShoppingListRoutes(db: Db) {
@@ -208,10 +172,7 @@ export function buildShoppingListRoutes(db: Db) {
     const body = c.req.valid('json')
     const { causedBy, ...payload } = body
 
-    const event = await appendShoppingListEvent(
-      { db, accessToken, householdId },
-      { weekStartDate, causedBy, payload: payload as z.infer<typeof ShoppingListEventPayloadSchema> },
-    )
+    const event = await recordShoppingListEvent({ db, accessToken, householdId }, weekStartDate, causedBy, payload as z.infer<typeof ShoppingListEventPayloadSchema>)
 
     return c.json(
       {
@@ -235,7 +196,7 @@ export function buildShoppingListRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
 
-    const projection = await selectShoppingListProjection({ db, accessToken, householdId }, weekStartDate)
+    const projection = await getShoppingList({ db, accessToken, householdId }, weekStartDate)
 
     if (!projection) return c.json({ error: 'No shopping list found for this week' }, 404)
 
@@ -256,7 +217,7 @@ export function buildShoppingListRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
-    const summary = await getShoppingListSummary(db, accessToken, householdId, weekStartDate, {
+    const summary = await getShoppingListSummaryUseCase({ db, accessToken, householdId }, weekStartDate, {
       language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
     })
 
@@ -271,7 +232,7 @@ export function buildShoppingListRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
-    const state = await getShoppingListState(db, accessToken, householdId, weekStartDate)
+    const state = await getShoppingListStateUseCase({ db, accessToken, householdId }, weekStartDate)
     return c.json(state, 200)
   })
 
@@ -282,8 +243,7 @@ export function buildShoppingListRoutes(db: Db) {
     const member = await assertMembership(db, accessToken, householdId, user.id)
     if (!member) return c.json({ error: 'NOT_MEMBER' }, 404)
     const body = c.req.valid('json')
-    const result = await replaceShoppingListState(db, accessToken, {
-      householdId,
+    const result = await replaceShoppingListStateUseCase({ db, accessToken, householdId }, {
       weekStartDate,
       causedBy: { source: 'user', userId: user.id },
       expectedUpdatedAt: body.expectedUpdatedAt,

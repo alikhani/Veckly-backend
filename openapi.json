@@ -7182,6 +7182,16 @@
               }
             }
           },
+          "400": {
+            "description": "Week start is not a Monday, or the date is outside that week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
           },
@@ -7256,6 +7266,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WeekRescueApplyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Week start is not a Monday, or the date is outside that week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

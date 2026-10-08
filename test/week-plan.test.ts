@@ -2268,8 +2268,8 @@ describeWithDb('Week-plan event log + projection', () => {
       ['POST', '/events', { causedBy: { source: 'user', userId: userA }, eventType: 'week_started' }, invalidWeek, notMember, invalidWeek],
       ['GET', '', undefined, invalidWeek, notMember, invalidWeek],
       ['GET', '/summary', undefined, invalidWeek, notMember, invalidWeek],
-      ['POST', '/rescue/preview', rescueBody, noPlan, notMember, noPlan],
-      ['POST', '/rescue/apply', rescueBody, noPlan, notMember, noPlan],
+      ['POST', '/rescue/preview', rescueBody, invalidWeek, notMember, invalidWeek],
+      ['POST', '/rescue/apply', rescueBody, invalidWeek, notMember, invalidWeek],
       ['POST', '/previous-week/preview', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
       ['POST', '/previous-week/apply', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
       // Membership is checked first here.
@@ -2331,11 +2331,11 @@ describeWithDb('Week-plan event log + projection', () => {
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${weekStartDate}`), 200, [])
     })
 
-    it('answers a rescue date outside the week with 422 NO_PLAN', async () => {
+    it('answers a rescue date outside the week with 400 INVALID_WEEK_CONTEXT_DATE', async () => {
       const outside = { ...rescueBody, date: '2026-06-15' }
-      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...noPlan)
-      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/apply`, outside), ...noPlan)
-      await expectResponse(await call(userB, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...noPlan)
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...invalidContextDate)
+      await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/apply`, outside), ...invalidContextDate)
+      await expectResponse(await call(userB, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, outside), ...invalidContextDate)
     })
 
     it('answers a member rescue on a week without a plan with 422 NO_PLAN', async () => {

@@ -134,6 +134,7 @@ const previewWeekRescueRoute = createRoute({
   responses: {
     200: { description: 'A non-mutating rescue preview', content: { 'application/json': { schema: WeekRescuePreviewSchema } } },
     409: { description: 'The plan changed since the request was created', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    ...errorResponses({ 400: 'Week start is not a Monday, or the date is outside that week' }),
     422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
     401: { description: 'Missing or invalid session' },
     404: { description: 'Household not found or caller is not a member' },
@@ -153,6 +154,7 @@ const applyWeekRescueRoute = createRoute({
   responses: {
     200: { description: 'The rescue was applied or had already been applied', content: { 'application/json': { schema: WeekRescueApplyResponseSchema } } },
     409: { description: 'The plan changed since preview', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
+    ...errorResponses({ 400: 'Week start is not a Monday, or the date is outside that week' }),
     422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
     401: { description: 'Missing or invalid session' },
     404: { description: 'Household not found or caller is not a member' },
@@ -478,13 +480,11 @@ export function buildWeekPlanRoutes(db: Db) {
     return c.json(summary, 200)
   })
 
-  // Rescue answers a non-Monday week or a date outside it with 422 NO_PLAN,
-  // before membership (see "Kända inkonsekvenser" #4).
   app.openapi(previewWeekRescueRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
     const request = c.req.valid('json')
-    requireMonday(weekStartDate, { status: 422, code: 'NO_PLAN' })
-    requireDateInWeek(weekStartDate, request.date, { status: 422, code: 'NO_PLAN' })
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
+    requireDateInWeek(weekStartDate, request.date, { status: 400, code: 'INVALID_WEEK_CONTEXT_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await previewWeekRescue(ctx, weekStartDate, request)
     if ('error' in result) staleOrUnprocessable(result)
@@ -494,8 +494,8 @@ export function buildWeekPlanRoutes(db: Db) {
   app.openapi(applyWeekRescueRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
     const request = c.req.valid('json')
-    requireMonday(weekStartDate, { status: 422, code: 'NO_PLAN' })
-    requireDateInWeek(weekStartDate, request.date, { status: 422, code: 'NO_PLAN' })
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
+    requireDateInWeek(weekStartDate, request.date, { status: 400, code: 'INVALID_WEEK_CONTEXT_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await applyWeekRescue(ctx, weekStartDate, request)
     if ('error' in result) staleOrUnprocessable(result)

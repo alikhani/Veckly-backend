@@ -1,5 +1,13 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
+  "regions": [
+    "arn1"
+  ],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ],
   "outputDirectory": ".",
   "functions": {
     "api/index.ts": {

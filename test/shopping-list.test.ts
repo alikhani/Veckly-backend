@@ -1060,5 +1060,19 @@ describeWithDb('Shopping-list event log + projection', () => {
       const notMember = await call(userA, 'GET', `${base(householdBId, weekStartDate)}/summary`)
       expect({ status: notMember.status, cacheControl: notMember.headers.get('Cache-Control') }).toEqual({ status: 404, cacheControl: 'no-store' })
     })
+
+    it('records the authenticated caller as causedBy, ignoring the one in the request body', async () => {
+      for (const spoofed of [
+        { source: 'user', userId: userB },
+        { source: 'algorithm', algorithmVersion: 'v9', triggeredByUserId: userB },
+        { source: 'system', reason: 'forged' },
+      ]) {
+        const response = await call(userA, 'POST', `${base(householdAId, weekStartDate)}/events`, { causedBy: spoofed, eventType: 'list_started' })
+        expect(response.status).toBe(201)
+        expect(await response.json()).toMatchObject({ causedBy: { source: 'user', userId: userA } })
+      }
+      const rows = await db.select({ causedBy: shoppingListEvents.causedBy }).from(shoppingListEvents)
+      expect(rows.map((row) => row.causedBy)).toEqual(Array(3).fill({ source: 'user', userId: userA }))
+    })
   })
 })

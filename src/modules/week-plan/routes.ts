@@ -448,11 +448,13 @@ export function buildWeekPlanRoutes(db: Db) {
     const { householdId, weekStartDate } = c.req.valid('param')
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
-    const { causedBy, ...payload } = c.req.valid('json')
+    // The body's `causedBy` is never trusted (see shopping-list's event route):
+    // events are always attributed to the authenticated caller.
+    const { causedBy: _ignored, ...payload } = c.req.valid('json')
     if (payload.eventType === 'week_context_override_upserted' || payload.eventType === 'week_context_override_cleared') {
       requireDateInWeek(weekStartDate, payload.date, { status: 400, code: 'INVALID_WEEK_CONTEXT_DATE' })
     }
-    const event = await recordWeekPlanEvent(ctx, weekStartDate, causedBy, payload as z.infer<typeof WeekPlanEventPayloadSchema>)
+    const event = await recordWeekPlanEvent(ctx, weekStartDate, { source: 'user', userId: ctx.userId }, payload as z.infer<typeof WeekPlanEventPayloadSchema>)
     return c.json(toWeekPlanEventResponse(event), 201)
   })
 

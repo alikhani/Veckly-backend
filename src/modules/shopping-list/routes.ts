@@ -162,8 +162,11 @@ export function buildShoppingListRoutes(db: Db) {
   app.openapi(appendShoppingListEventRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
-    const { causedBy, ...payload } = c.req.valid('json')
-    const event = await recordShoppingListEvent(ctx, weekStartDate, causedBy, payload as z.infer<typeof ShoppingListEventPayloadSchema>)
+    // The body's `causedBy` is never trusted: a client could otherwise attribute
+    // an event to another user or to the algorithm/system. The field stays in the
+    // request schema so existing clients keep validating.
+    const { causedBy: _ignored, ...payload } = c.req.valid('json')
+    const event = await recordShoppingListEvent(ctx, weekStartDate, { source: 'user', userId: ctx.userId }, payload as z.infer<typeof ShoppingListEventPayloadSchema>)
     return c.json(toShoppingListEventResponse(event), 201)
   })
 

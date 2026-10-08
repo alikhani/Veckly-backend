@@ -2383,5 +2383,20 @@ describeWithDb('Week-plan event log + projection', () => {
       const usage = await db.select().from(householdAiWeeklyUsage).where(eq(householdAiWeeklyUsage.householdId, householdAId))
       expect(usage).toHaveLength(0)
     })
+
+    it('records the authenticated caller as causedBy, ignoring the one in the request body', async () => {
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/events`
+      for (const spoofed of [
+        { source: 'user', userId: userB },
+        { source: 'algorithm', algorithmVersion: 'v9', triggeredByUserId: userB },
+        { source: 'system', reason: 'forged' },
+      ]) {
+        const response = await call(userA, 'POST', path, { causedBy: spoofed, eventType: 'week_started' })
+        expect(response.status).toBe(201)
+        expect(await response.json()).toMatchObject({ causedBy: { source: 'user', userId: userA } })
+      }
+      const rows = await db.select({ causedBy: weekPlanEvents.causedBy }).from(weekPlanEvents)
+      expect(rows.map((row) => row.causedBy)).toEqual(Array(3).fill({ source: 'user', userId: userA }))
+    })
   })
 })

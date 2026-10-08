@@ -84,6 +84,7 @@ const appendWeekPlanEventRoute = createRoute({
       content: { 'application/json': { schema: WeekPlanEventSchema } },
     },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, week start is not a Monday, or the date is outside that week', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -99,7 +100,7 @@ const getWeekPlanRoute = createRoute({
       description: 'The current materialized projection for this week',
       content: { 'application/json': { schema: WeekPlanProjectionSchema } },
     },
-    ...errorResponses({ 404: "The week hasn't started yet (no projection exists), or caller is not a member" }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: "The week hasn't started yet (no projection exists), or caller is not a member" }),
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -116,7 +117,7 @@ const getWeekPlanSummaryRoute = createRoute({
       description: 'The current week plan summary. Missing projections return an empty week.',
       content: { 'application/json': { schema: WeekPlanSummarySchema } },
     },
-    ...errorResponses({ 404: 'Household not found or caller is not a member' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Household not found or caller is not a member' }),
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -134,10 +135,9 @@ const previewWeekRescueRoute = createRoute({
   responses: {
     200: { description: 'A non-mutating rescue preview', content: { 'application/json': { schema: WeekRescuePreviewSchema } } },
     409: { description: 'The plan changed since the request was created', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
-    ...errorResponses({ 400: 'Week start is not a Monday, or the date is outside that week' }),
+    ...errorResponses({ 400: 'Invalid request, week start is not a Monday, or the date is outside that week', 404: 'Caller is not a member of the household' }),
     422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -154,10 +154,9 @@ const applyWeekRescueRoute = createRoute({
   responses: {
     200: { description: 'The rescue was applied or had already been applied', content: { 'application/json': { schema: WeekRescueApplyResponseSchema } } },
     409: { description: 'The plan changed since preview', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
-    ...errorResponses({ 400: 'Week start is not a Monday, or the date is outside that week' }),
+    ...errorResponses({ 400: 'Invalid request, week start is not a Monday, or the date is outside that week', 404: 'Caller is not a member of the household' }),
     422: { description: 'No safe rescue is available', content: { 'application/json': { schema: WeekRescueErrorSchema } } },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -174,10 +173,9 @@ const previewPreviousWeekProposalRoute = createRoute({
   responses: {
     200: { description: 'A non-mutating improved-week proposal', content: { 'application/json': { schema: PreviousWeekProposalSchema } } },
     409: { description: 'The target week changed since the request was created', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
-    ...errorResponses({ 400: 'Week start is not a Monday' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
     422: { description: 'No completed week or safe recipe pool is available', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -194,10 +192,9 @@ const applyPreviousWeekProposalRoute = createRoute({
   responses: {
     200: { description: 'The proposal was applied or had already been applied', content: { 'application/json': { schema: PreviousWeekProposalApplyResponseSchema } } },
     409: { description: 'The target week changed since preview', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
-    ...errorResponses({ 400: 'Week start is not a Monday' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
     422: { description: 'No completed week or safe recipe pool is available', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
   },
 })
 
@@ -213,9 +210,8 @@ const getWeekContextOverridesRoute = createRoute({
       description: 'The explicit overrides saved for this week',
       content: { 'application/json': { schema: WeekContextOverridesResponseSchema } },
     },
-    400: { description: 'Invalid week start date' },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -234,9 +230,8 @@ const upsertWeekContextOverrideRoute = createRoute({
       description: 'The saved override',
       content: { 'application/json': { schema: WeekContextOverrideItemSchema } },
     },
-    400: { description: 'Invalid week or date' },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
+    ...errorResponses({ 400: 'Invalid request, week start is not a Monday, or the date is outside that week', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -252,9 +247,8 @@ const clearWeekContextOverrideRoute = createRoute({
       description: 'The override was cleared',
       content: { 'application/json': { schema: ClearWeekContextOverrideResponseSchema } },
     },
-    400: { description: 'Invalid week or date' },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
+    ...errorResponses({ 400: 'Invalid request, week start is not a Monday, or the date is outside that week', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -271,9 +265,8 @@ const listWeekHistoryPlansRoute = createRoute({
       content: { 'application/json': { schema: z.array(WeekHistoryListItemSchema) } },
     },
     403: { description: 'Premium is required for older history', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
-    404: { description: 'Household not found or caller is not a member' },
-    400: { description: 'Invalid range' },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or a range bound is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -289,9 +282,8 @@ const getWeekHistoryPlanRoute = createRoute({
       description: 'The persisted week plan, or null when absent',
       content: { 'application/json': { schema: WeekHistoryDetailSchema } },
     },
-    400: { description: 'Invalid week start date' },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 404: 'Caller is not a member of the household' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -310,12 +302,12 @@ const upsertWeekHistoryPlanRoute = createRoute({
       description: 'Week history plan persisted',
       content: { 'application/json': { schema: UpsertWeekHistoryPlanResponseSchema } },
     },
-    400: { description: 'Invalid request' },
     409: {
       description: 'The supplied expectedUpdatedAt value is stale',
       content: { 'application/json': { schema: StaleWeekHistoryPlanResponseSchema } },
     },
     401: { description: 'Missing or invalid session' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -340,7 +332,7 @@ const generateWeekPlanRoute = createRoute({
     },
     403: { description: 'Premium generation quota reached', content: { 'application/json': { schema: PremiumRequiredResponseSchema } } },
     401: { description: 'Missing or invalid session' },
-    404: { description: 'Household not found or caller is not a member' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -356,8 +348,7 @@ const finalizeWeekHistoryPlanRoute = createRoute({
       description: 'Week plan finalized',
       content: { 'application/json': { schema: FinalizeWeekHistoryPlanResponseSchema } },
     },
-    400: { description: 'Invalid week start date' },
-    404: { description: 'Week plan not found' },
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Week plan not found, or caller is not a member' }),
     401: { description: 'Missing or invalid session' },
   },
 })

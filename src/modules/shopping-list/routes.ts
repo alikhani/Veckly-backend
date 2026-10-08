@@ -44,7 +44,7 @@ const appendShoppingListEventRoute = createRoute({
       content: { 'application/json': { schema: ShoppingListEventSchema } },
     },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -101,7 +101,7 @@ const getShoppingListStateRoute = createRoute({
       content: { 'application/json': { schema: ShoppingListStateResponseSchema } },
     },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 
@@ -125,7 +125,7 @@ const updateShoppingListStateRoute = createRoute({
       content: { 'application/json': { schema: StaleShoppingListStateResponseSchema } },
     },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
+    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday', 404: 'Caller is not a member of the household' }),
   },
 })
 

@@ -6714,13 +6714,27 @@
             }
           },
           "400": {
-            "description": "Invalid week start date"
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -6818,13 +6832,27 @@
             }
           },
           "400": {
-            "description": "Invalid week or date"
+            "description": "Invalid request, week start is not a Monday, or the date is outside that week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -6877,13 +6905,27 @@
             }
           },
           "400": {
-            "description": "Invalid week or date"
+            "description": "Invalid request, week start is not a Monday, or the date is outside that week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -6937,6 +6979,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
           },
@@ -6951,7 +7003,14 @@
             }
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "No recipes available to plan with",
@@ -7015,8 +7074,28 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, week start is not a Monday, or the date is outside that week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -7057,6 +7136,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WeekPlanProjection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -7113,6 +7202,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WeekPlanSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -7183,7 +7282,7 @@
             }
           },
           "400": {
-            "description": "Week start is not a Monday, or the date is outside that week",
+            "description": "Invalid request, week start is not a Monday, or the date is outside that week",
             "content": {
               "application/json": {
                 "schema": {
@@ -7196,7 +7295,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The plan changed since the request was created",
@@ -7271,7 +7377,7 @@
             }
           },
           "400": {
-            "description": "Week start is not a Monday, or the date is outside that week",
+            "description": "Invalid request, week start is not a Monday, or the date is outside that week",
             "content": {
               "application/json": {
                 "schema": {
@@ -7284,7 +7390,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The plan changed since preview",
@@ -7359,7 +7472,7 @@
             }
           },
           "400": {
-            "description": "Week start is not a Monday",
+            "description": "Invalid request, or week start is not a Monday",
             "content": {
               "application/json": {
                 "schema": {
@@ -7372,7 +7485,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The target week changed since the request was created",
@@ -7447,7 +7567,7 @@
             }
           },
           "400": {
-            "description": "Week start is not a Monday",
+            "description": "Invalid request, or week start is not a Monday",
             "content": {
               "application/json": {
                 "schema": {
@@ -7460,7 +7580,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The target week changed since preview",
@@ -7538,7 +7665,14 @@
             }
           },
           "400": {
-            "description": "Invalid range"
+            "description": "Invalid request, or a range bound is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
@@ -7554,7 +7688,14 @@
             }
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -7600,7 +7741,14 @@
             }
           },
           "400": {
-            "description": "Invalid week start date"
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
@@ -7666,10 +7814,27 @@
             }
           },
           "400": {
-            "description": "Invalid request"
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The supplied expectedUpdatedAt value is stale",
@@ -7725,13 +7890,27 @@
             }
           },
           "400": {
-            "description": "Invalid week start date"
+            "description": "Invalid request, or week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Week plan not found"
+            "description": "Week plan not found, or caller is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -7797,6 +7976,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -7985,6 +8174,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -8048,6 +8247,16 @@
           },
           "401": {
             "description": "Missing or invalid session"
+          },
+          "404": {
+            "description": "Caller is not a member of the household",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "The supplied expectedUpdatedAt value is stale",

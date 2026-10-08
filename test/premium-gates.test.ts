@@ -30,6 +30,11 @@ describe('premium gates', () => {
     expect(premiumRequired('ai_recommendations')).toEqual({ error: 'PREMIUM_REQUIRED', reason: 'ai_recommendations' })
   })
 
+  it('sends only the PremiumRequiredResponse fields, whatever else the usage carries', () => {
+    const usage = { limit: 1, current: 1, recorded: false, persisted: true }
+    expect(premiumRequired('week_generation_limit', usage)).toEqual({ error: 'PREMIUM_REQUIRED', reason: 'week_generation_limit', limit: 1, current: 1 })
+  })
+
   it('only reaches a limit at the boundary', () => {
     expect(isPremiumLimitReached({ limit: 10, current: 9 })).toBe(false)
     expect(isPremiumLimitReached({ limit: 10, current: 10 })).toBe(true)

@@ -33,8 +33,11 @@ export const PremiumRequiredResponseSchema = z.object({
   current: z.number().int().optional(),
 }).openapi('PremiumRequiredResponse')
 
+// Picks `limit`/`current` explicitly: callers may pass a usage record that
+// carries more (e.g. the weekly reservation), and the body must stay exactly
+// `PremiumRequiredResponse`.
 export function premiumRequired(reason: PremiumGateReason, usage?: { limit: number; current: number }): PremiumRequiredBody {
-  return { error: 'PREMIUM_REQUIRED', reason, ...usage }
+  return { error: 'PREMIUM_REQUIRED', reason, ...(usage && { limit: usage.limit, current: usage.current }) }
 }
 
 export function isPremiumLimitReached(usage: { limit: number; current: number }) {

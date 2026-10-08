@@ -97,7 +97,7 @@ describeWithDb('Week-plan routes with premium gates enabled', () => {
     const second = await call('POST', path, {}, { 'X-Veckly-Today': '2026-06-08' })
     expect({ status: second.status, body: await second.json() }).toEqual({
       status: 403,
-      body: { error: 'PREMIUM_REQUIRED', reason: 'week_generation_limit', recorded: false, current: 1, limit: 1, persisted: true },
+      body: { error: 'PREMIUM_REQUIRED', reason: 'week_generation_limit', current: 1, limit: 1 },
     })
 
     const usage = await db.select().from(householdAiWeeklyUsage).where(eq(householdAiWeeklyUsage.householdId, householdId))

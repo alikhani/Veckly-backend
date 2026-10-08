@@ -116,7 +116,7 @@ const getWeekPlanSummaryRoute = createRoute({
       description: 'The current week plan summary. Missing projections return an empty week.',
       content: { 'application/json': { schema: WeekPlanSummarySchema } },
     },
-    404: { description: 'Household not found or caller is not a member' },
+    ...errorResponses({ 404: 'Household not found or caller is not a member' }),
     401: { description: 'Missing or invalid session' },
   },
 })
@@ -474,8 +474,7 @@ export function buildWeekPlanRoutes(db: Db) {
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const summary = await getWeekPlanSummary(ctx, weekStartDate)
-    // Free text, unchanged (see "Kända inkonsekvenser" #2).
-    if (!summary) throw new ApiError(404, 'Household not found.')
+    if (!summary) throw new ApiError(404, 'HOUSEHOLD_NOT_FOUND')
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(summary, 200)
   })

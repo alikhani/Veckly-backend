@@ -27,7 +27,7 @@ import { buildEntitlementRoutes } from './entitlement-routes.js'
 import { buildAppStoreBillingRoutes } from './app-store-billing-routes.js'
 import { buildWeekPulseRoutes } from './week-pulse.js'
 import type { Db } from './db.js'
-import { ApiError, type ErrorCode } from './platform/http-errors.js'
+import { ApiError, ErrorResponseSchema, type ErrorCode } from './platform/http-errors.js'
 
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
@@ -42,6 +42,10 @@ export function buildApp(db: Db) {
     await next()
     if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store')
   })
+
+  // Registered before any route so the shared error schemas keep one stable
+  // position in openapi.json however many routes reference them.
+  app.openAPIRegistry.register('ErrorResponse', ErrorResponseSchema)
 
   // Internal server-to-server routes (MealPlanner strangle path)
   app.route('/', buildInternalHouseholdsRoutes(db))

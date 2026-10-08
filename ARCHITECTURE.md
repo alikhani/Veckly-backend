@@ -35,6 +35,11 @@ when you are already doing real work in it, never as a drive-by.
 Rules of thumb:
 - A handler longer than ~15 lines is doing service work.
 - Other modules import from `modules/<x>/index.ts` or `shared/`, never from a module's internal files.
+- A repository may **read** another module's tables (from `schema.ts`) when the data must come from
+  the same `withRls` transaction. For example, shopping-list's summary reads `week_plan_projections`, and
+  week-plan reads `shopping_list_projections`. Declare a narrow local type for the columns you read and
+  leave a comment naming the owning module. **Writes** to another module's tables always go through
+  that module's `index.ts`.
 - Transaction boundaries live in the repository. If two writes must land together, they are one
   repository function with one `withRls`.
 - Split a service file per use case (`service-generate.ts`) once it passes ~600 lines.

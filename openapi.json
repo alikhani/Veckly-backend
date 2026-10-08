@@ -7358,6 +7358,16 @@
               }
             }
           },
+          "400": {
+            "description": "Week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid session"
           },
@@ -7432,6 +7442,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PreviousWeekProposalApplyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Week start is not a Monday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

@@ -174,6 +174,7 @@ const previewPreviousWeekProposalRoute = createRoute({
   responses: {
     200: { description: 'A non-mutating improved-week proposal', content: { 'application/json': { schema: PreviousWeekProposalSchema } } },
     409: { description: 'The target week changed since the request was created', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
+    ...errorResponses({ 400: 'Week start is not a Monday' }),
     422: { description: 'No completed week or safe recipe pool is available', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
     401: { description: 'Missing or invalid session' },
     404: { description: 'Household not found or caller is not a member' },
@@ -193,6 +194,7 @@ const applyPreviousWeekProposalRoute = createRoute({
   responses: {
     200: { description: 'The proposal was applied or had already been applied', content: { 'application/json': { schema: PreviousWeekProposalApplyResponseSchema } } },
     409: { description: 'The target week changed since preview', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
+    ...errorResponses({ 400: 'Week start is not a Monday' }),
     422: { description: 'No completed week or safe recipe pool is available', content: { 'application/json': { schema: PreviousWeekProposalErrorSchema } } },
     401: { description: 'Missing or invalid session' },
     404: { description: 'Household not found or caller is not a member' },
@@ -502,11 +504,9 @@ export function buildWeekPlanRoutes(db: Db) {
     return c.json(result, 200)
   })
 
-  // A non-Monday week is 422 NO_COMPLETED_WEEK, before membership (see
-  // "Kända inkonsekvenser" #5).
   app.openapi(previewPreviousWeekProposalRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
-    requireMonday(weekStartDate, { status: 422, code: 'NO_COMPLETED_WEEK' })
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await previewPreviousWeekProposal(ctx, weekStartDate, c.req.valid('json'))
     if ('error' in result) staleOrUnprocessable(result)
@@ -515,7 +515,7 @@ export function buildWeekPlanRoutes(db: Db) {
 
   app.openapi(applyPreviousWeekProposalRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
-    requireMonday(weekStartDate, { status: 422, code: 'NO_COMPLETED_WEEK' })
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await applyPreviousWeekProposal(ctx, weekStartDate, c.req.valid('json'))
     if ('error' in result) staleOrUnprocessable(result)

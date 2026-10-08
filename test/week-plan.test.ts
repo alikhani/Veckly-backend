@@ -2256,7 +2256,6 @@ describeWithDb('Week-plan event log + projection', () => {
     const invalidContextDate: TExpected = [400, { error: 'INVALID_WEEK_CONTEXT_DATE' }]
     const notMember: TExpected = [404, { error: 'NOT_MEMBER' }]
     const noPlan: TExpected = [422, { error: 'NO_PLAN' }]
-    const noCompletedWeek: TExpected = [422, { error: 'NO_COMPLETED_WEEK' }]
 
     // [method, path suffix after the week segment, body,
     //  non-member + non-Monday, non-member + Monday, member + non-Monday]
@@ -2270,8 +2269,8 @@ describeWithDb('Week-plan event log + projection', () => {
       ['GET', '/summary', undefined, invalidWeek, notMember, invalidWeek],
       ['POST', '/rescue/preview', rescueBody, invalidWeek, notMember, invalidWeek],
       ['POST', '/rescue/apply', rescueBody, invalidWeek, notMember, invalidWeek],
-      ['POST', '/previous-week/preview', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
-      ['POST', '/previous-week/apply', proposalBody, noCompletedWeek, notMember, noCompletedWeek],
+      ['POST', '/previous-week/preview', proposalBody, invalidWeek, notMember, invalidWeek],
+      ['POST', '/previous-week/apply', proposalBody, invalidWeek, notMember, invalidWeek],
       // Membership is checked first here.
       ['GET', '/history', undefined, notMember, notMember, invalidWeek],
       // Membership is checked first here.

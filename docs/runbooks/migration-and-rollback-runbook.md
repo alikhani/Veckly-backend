@@ -41,6 +41,14 @@ Used when working through the Supabase MCP tool directly against the project (th
 
 ### Required checklist before applying to production
 
+**Before every production deploy** (`vercel deploy --prod` — deploys never run migrations), run the drift check against production:
+
+```bash
+npm run db:check   # uses DATABASE_URL from .env; read-only
+```
+
+It lists every object a committed migration creates (tables, columns, enum values, indexes, policies, constraints) that is missing from the target database. Do not deploy on drift — apply the listed migrations first. Added 2026-10-08 after 0028 and 0041–0046 were found missing from production behind already-deployed code.
+
 1. Confirm the migration has been tested against a local Postgres instance first (`npm run test:local`, which spins up against `localhost:54333`).
 2. Read the generated SQL — confirm it does not drop or rename a column/table still read by code currently deployed to production (a migration ships *before* the code that depends on it removing the old shape, never after).
 3. Run `npm run db:migrate` (Option A) against production, or apply via MCP (Option B) in order.

@@ -13,7 +13,8 @@
     "openapi:write": "node --import tsx/esm scripts/write-openapi.ts ../Veckly-ios/OpenAPI/veckly-openapi.json",
     "openapi:write:backend": "node --import tsx/esm scripts/write-openapi.ts openapi.json",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:check": "node --env-file=.env --import tsx/esm scripts/check-migrations.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

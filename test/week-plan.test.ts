@@ -2290,6 +2290,17 @@ describeWithDb('Week-plan event log + projection', () => {
       })
     }
 
+    it('answers a malformed JSON body with 400 INVALID_JSON before the membership check', async () => {
+      for (const userId of [userA, userB]) {
+        const response = await buildApp(db).request(`/households/${householdAId}/week-plans/${weekStartDate}/generate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${fakeAccessToken(userId)}`, 'Content-Type': 'application/json' },
+          body: '{"regenerate": ',
+        })
+        await expectResponse(response, 400, { error: 'INVALID_JSON' })
+      }
+    })
+
     it('checks membership before the history range', async () => {
       await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), ...notMember)
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })

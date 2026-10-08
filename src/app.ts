@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { cors } from 'hono/cors'
+import { HTTPException } from 'hono/http-exception'
 import { secureHeaders } from 'hono/secure-headers'
 import { buildActiveWeekRoutes } from './active-week.js'
 import { buildFamilyMemoryRoutes } from './family-memory.js'
@@ -26,7 +27,7 @@ import { buildEntitlementRoutes } from './entitlement-routes.js'
 import { buildAppStoreBillingRoutes } from './app-store-billing-routes.js'
 import { buildWeekPulseRoutes } from './week-pulse.js'
 import type { Db } from './db.js'
-import { ApiError } from './platform/http-errors.js'
+import { ApiError, type ErrorCode } from './platform/http-errors.js'
 
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
@@ -96,6 +97,10 @@ export function buildApp(db: Db) {
 
   app.onError((err, c) => {
     if (err instanceof ApiError) return c.json(err.body, err.status)
+    // Hono's request validator throws a 400 HTTPException when a JSON body
+    // cannot be parsed. It is the only HTTPException source in the app (no
+    // route validates form bodies); anything else still falls through to 500.
+    if (err instanceof HTTPException && err.status === 400) return c.json({ error: 'INVALID_JSON' satisfies ErrorCode }, 400)
     console.error('Unhandled error', err)
     return c.json({ error: 'Internal server error' }, 500)
   })

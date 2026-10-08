@@ -75,6 +75,12 @@ describe('ApiError mapping', () => {
     sub.get('/__test/stale', () => {
       throw new ApiError(409, 'STALE_WEEK_PLAN_STATE', { updatedAt: null })
     })
+    sub.openapi(createRoute({
+      method: 'post',
+      path: '/__test/json',
+      request: { body: { content: { 'application/json': { schema: z.object({ name: z.string() }) } } } },
+      responses: { 200: { description: 'ok' } },
+    }), (c) => c.json(c.req.valid('json'), 200))
     sub.get('/__test/crash', () => {
       throw new Error('boom')
     })
@@ -97,6 +103,18 @@ describe('ApiError mapping', () => {
     const stale = await app.request('/__test/stale')
     expect(stale.status).toBe(409)
     expect(await stale.json()).toEqual({ error: 'STALE_WEEK_PLAN_STATE', updatedAt: null })
+  })
+
+  it('answers a malformed JSON body with 400 INVALID_JSON', async () => {
+    const app = buildAppWithDummyRoutes()
+
+    const response = await app.request('/__test/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"name": ',
+    })
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 400, body: { error: 'INVALID_JSON' } })
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
   })
 
   it('still answers any other error with a generic 500', async () => {

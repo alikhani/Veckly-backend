@@ -10,7 +10,7 @@ import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gat
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
 import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPortionMemories, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
-import { canonicalIngredientItemKey, pantryCoversIngredient } from './ingredient-identity.js'
+import { pantryCoversIngredient } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
 import { listWeekPulseRows } from './week-pulse.js'
 import { derivePortionSuggestion } from './portion-memory.js'
@@ -48,8 +48,6 @@ import {
 import { readIngredientArray, readStringArray, recipeMatchesAvoided } from './shared/recipe-matching.js'
 import {
   AppendWeekPlanEventRequestSchema,
-  AssignmentConfidenceSchema,
-  AssignmentReasonSchema,
   CausedBySchema,
   ClearWeekContextOverrideResponseSchema,
   ContextOverrideParamsSchema,
@@ -61,7 +59,6 @@ import {
   HouseholdParamsSchema,
   ParamsSchema,
   PlanningDaySelectionSchema,
-  PlanningRequestSchema,
   PreviousWeekProposalApplyResponseSchema,
   PreviousWeekProposalDaySchema,
   PreviousWeekProposalErrorSchema,
@@ -91,157 +88,11 @@ import {
   WeekRescueRequestSchema,
   type TPreviousWeekProposal,
   type TPreviousWeekProposalRequest,
-  type TWeekExplanation,
-  type TWeekRescuePreview,
   type TWeekRescueRequest,
 } from './modules/week-plan/schemas.js'
-
-// --- Projection fold --------------------------------------------------------
-//
-// The minimal shape needed to prove `meal_assigned` folds correctly. Explicitly
-// provisional — the design doc itself flags the projection shape as an open
-// implementation-time question; freezing it now, before the other ~13 event
-// types are scoped, would be premature.
-type TWeekPlanProjectionState = {
-  weekStarted: boolean
-  request: z.infer<typeof PlanningRequestSchema> | null
-  meals: Partial<Record<z.infer<typeof dayOfWeek>, {
-    recipeRef: string
-    servings?: number
-    reason?: z.infer<typeof AssignmentReasonSchema>
-    confidence?: z.infer<typeof AssignmentConfidenceSchema>
-  }>>
-  lockedDays: z.infer<typeof dayOfWeek>[]
-  skippedDays: z.infer<typeof dayOfWeek>[]
-  // Optional for projections written before AVL-007. New folds always write
-  // the field, while readers treat its absence as an empty override layer.
-  contextOverrides?: Record<string, TWeekContextOverride>
-}
-
-const emptyProjectionState = (): TWeekPlanProjectionState => ({
-  weekStarted: false,
-  request: null,
-  meals: {},
-  lockedDays: [],
-  skippedDays: [],
-  contextOverrides: {},
-})
-
-function toggleSortedDay(days: z.infer<typeof dayOfWeek>[], day: z.infer<typeof dayOfWeek>, enabled: boolean) {
-  const next = enabled ? [...new Set([...days, day])] : days.filter((entry) => entry !== day)
-  return orderedDays.filter((entry) => next.includes(entry))
-}
-
-function foldEventIntoProjection(
-  state: TWeekPlanProjectionState,
-  payload: z.infer<typeof WeekPlanEventPayloadSchema>,
-): TWeekPlanProjectionState {
-  switch (payload.eventType) {
-    case 'week_started':
-      return { ...state, weekStarted: true }
-    case 'planning_request_updated':
-      return { ...state, request: payload.request }
-    case 'meal_assigned':
-      // `reason`/`confidence` are set from this event's payload, not merged
-      // with the previous assignment's — a manual re-pick (no algorithmic
-      // reason) must clear a stale reason left over from a prior generated
-      // pick, not inherit it.
-      return {
-        ...state,
-        meals: {
-          ...state.meals,
-          [payload.dayOfWeek]: {
-            servings: payload.servings ?? state.meals[payload.dayOfWeek]?.servings,
-            recipeRef: payload.recipeRef,
-            reason: payload.reason,
-            confidence: payload.confidence,
-          },
-        },
-        skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false),
-      }
-    case 'meal_unassigned': {
-      const meals = { ...state.meals }
-      delete meals[payload.dayOfWeek]
-      return { ...state, meals, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false) }
-    }
-    case 'meal_locked':
-      return { ...state, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, true) }
-    case 'meal_unlocked':
-      return { ...state, lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false) }
-    case 'meal_moved': {
-      const meal = state.meals[payload.fromDayOfWeek]
-      if (!meal) return state
-      const meals = { ...state.meals, [payload.toDayOfWeek]: meal }
-      delete meals[payload.fromDayOfWeek]
-      return {
-        ...state,
-        meals,
-        lockedDays: toggleSortedDay(toggleSortedDay(state.lockedDays, payload.fromDayOfWeek, false), payload.toDayOfWeek, state.lockedDays.includes(payload.fromDayOfWeek)),
-        skippedDays: toggleSortedDay(toggleSortedDay(state.skippedDays, payload.toDayOfWeek, false), payload.fromDayOfWeek, false),
-      }
-    }
-    case 'day_skipped':
-      // Skip is a state layered on top of an existing assignment, not a
-      // deletion — a skipped day keeps its `meals` entry (recipe, reason,
-      // confidence) so `getWeekPlanSummary` can still return the recipe
-      // alongside `state: 'skipped'`, and un-skipping restores it exactly.
-      // (Matches the iOS client's local optimistic model — see
-      // `WeekDayRowViewModel.withSkipped` — which already assumed this.)
-      return {
-        ...state,
-        lockedDays: toggleSortedDay(state.lockedDays, payload.dayOfWeek, false),
-        skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, true),
-      }
-    case 'day_unskipped':
-      return { ...state, skippedDays: toggleSortedDay(state.skippedDays, payload.dayOfWeek, false) }
-    case 'servings_changed': {
-      const existing = state.meals[payload.dayOfWeek]
-      if (!existing) return state
-      return { ...state, meals: { ...state.meals, [payload.dayOfWeek]: { ...existing, servings: payload.servings } } }
-    }
-    case 'week_context_override_upserted':
-      return {
-        ...state,
-        contextOverrides: {
-          ...(state.contextOverrides ?? {}),
-          [payload.date]: payload.override,
-        },
-      }
-    case 'week_context_override_cleared': {
-      const contextOverrides = { ...(state.contextOverrides ?? {}) }
-      delete contextOverrides[payload.date]
-      return { ...state, contextOverrides }
-    }
-    case 'week_rescued': {
-      const meals = { ...state.meals }
-      const skippedDays = [...state.skippedDays]
-      for (const change of payload.changes) {
-        if (change.afterRecipeRef) {
-          meals[change.dayOfWeek] = {
-            recipeRef: change.afterRecipeRef,
-            servings: change.afterServings ?? undefined,
-          }
-        } else {
-          delete meals[change.dayOfWeek]
-        }
-        const skippedIndex = skippedDays.indexOf(change.dayOfWeek)
-        if (skippedIndex >= 0) skippedDays.splice(skippedIndex, 1)
-      }
-      return { ...state, meals, skippedDays }
-    }
-    case 'previous_week_reused': {
-      const meals: TWeekPlanProjectionState['meals'] = { ...state.meals }
-      let skippedDays = [...state.skippedDays]
-      for (const day of payload.days) {
-        meals[day.dayOfWeek] = { recipeRef: day.recipeRef, servings: day.servings }
-        skippedDays = toggleSortedDay(skippedDays, day.dayOfWeek, false)
-      }
-      return { ...state, weekStarted: true, meals, skippedDays }
-    }
-    case 'week_plan_cleared':
-      return emptyProjectionState()
-  }
-}
+import { contextOverrideItems, emptyProjectionState, foldEventIntoProjection, readPantryStock, readProjectionState } from './modules/week-plan/projection.js'
+import { deriveWeekExplanations } from './modules/week-plan/explanations.js'
+import { deriveWeekRescuePreview } from './modules/week-plan/rescue.js'
 
 // --- Routes ------------------------------------------------------------------
 //
@@ -548,27 +399,6 @@ function streakWeeksOrNull(streak: number): number | null {
   return streak >= SATIATION_STREAK_THRESHOLD ? streak : null
 }
 
-function readProjectionState(state: unknown): TWeekPlanProjectionState {
-  const candidate = state as Partial<TWeekPlanProjectionState> | null | undefined
-  return {
-    weekStarted: candidate?.weekStarted === true,
-    request: candidate?.request ?? null,
-    meals: candidate?.meals && typeof candidate.meals === 'object' ? candidate.meals : {},
-    lockedDays: Array.isArray(candidate?.lockedDays) ? candidate.lockedDays : [],
-    skippedDays: Array.isArray(candidate?.skippedDays) ? candidate.skippedDays : [],
-    contextOverrides: candidate?.contextOverrides && typeof candidate.contextOverrides === 'object'
-      ? candidate.contextOverrides
-      : {},
-  }
-}
-
-function contextOverrideItems(state: TWeekPlanProjectionState, weekStartDate: string) {
-  return Object.entries(state.contextOverrides ?? {})
-    .filter(([date]) => isDateInWeek(weekStartDate, date))
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, override]) => ({ date, ...override }))
-}
-
 export async function getWeekContextOverrides(
   db: Db,
   accessToken: string,
@@ -628,13 +458,6 @@ export async function clearWeekContextOverride(
       payload: { eventType: 'week_context_override_cleared', date },
     },
   )
-}
-
-function readPantryStock(state: unknown): Record<string, number> {
-  const candidate = state as { pantryStock?: unknown } | null | undefined
-  if (!candidate?.pantryStock || typeof candidate.pantryStock !== 'object') return {}
-  return Object.fromEntries(Object.entries(candidate.pantryStock as Record<string, unknown>)
-    .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] > 0))
 }
 
 // The recipes a household plans from: its own, builtins, and recipes it has
@@ -795,224 +618,6 @@ export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userI
 
     return row ? toWeekHistoryPlanResponse(row) : null
   })
-}
-
-const EXCLUDED_SHARED_INGREDIENTS = new Set([
-  'salt', 'salt and pepper', 'pepper', 'black pepper', 'water', 'oil', 'olive oil',
-  'salt och peppar', 'svartpeppar', 'vatten', 'olja', 'olivolja',
-])
-
-function normalizedIngredientName(value: string) {
-  return value.trim().toLocaleLowerCase('sv-SE').replace(/\s+/g, ' ')
-}
-
-export function deriveWeekExplanations(input: {
-  days: Array<{ date: string; reason: string | null; recipe: { id: string; title: string } | null }>
-  recipeIngredients: Map<string, Array<{ item: string; unit?: string | null; category?: string | null }>>
-  prepLinks: Array<{ recipeId: string | null; recipeTitle: string | null; cookDate: string; coveredDates: string[] }>
-  pantryStock?: Record<string, number>
-}): TWeekExplanation[] {
-  const explanations: TWeekExplanation[] = []
-
-  // An explicit pantry focus is a user instruction, so acknowledge its
-  // effect before lower-priority planning observations can fill the two
-  // explanation slots.
-  if (input.days.some((day) => day.reason === 'pantry-coverage')) {
-    const coveredIngredients = [...new Set(input.days.flatMap((day) => day.recipe
-      ? (input.recipeIngredients.get(day.recipe.id) ?? [])
-        .filter((ingredient) => pantryCoversIngredient(ingredient, input.pantryStock ?? {}))
-        .map((ingredient) => ingredient.item.trim())
-      : []))]
-      .filter(Boolean)
-      .sort((left, right) => left.localeCompare(right))
-      .slice(0, 5)
-    if (coveredIngredients.length > 0) explanations.push({ kind: 'pantry-coverage', ingredients: coveredIngredients })
-  }
-
-  const contextDay = input.days.find((day) => day.reason === 'week-override' && day.recipe)
-  if (contextDay?.recipe) {
-    explanations.push({ kind: 'week-context', date: contextDay.date, recipeTitle: contextDay.recipe.title })
-  }
-
-  const prepLink = input.prepLinks
-    .filter((link) => link.recipeTitle && link.coveredDates.some((date) => date > link.cookDate))
-    .sort((left, right) => left.cookDate.localeCompare(right.cookDate))[0]
-  if (prepLink?.recipeTitle) {
-    explanations.push({
-      kind: 'leftover-chain',
-      recipeTitle: prepLink.recipeTitle,
-      cookDate: prepLink.cookDate,
-      coveredDates: [...new Set(prepLink.coveredDates.filter((date) => date > prepLink.cookDate))].sort(),
-    })
-  }
-
-  const ingredientUsage = new Map<string, { label: string; recipeIds: Set<string> }>()
-  for (const day of input.days) {
-    if (!day.recipe) continue
-    for (const ingredient of input.recipeIngredients.get(day.recipe.id) ?? []) {
-      const normalizedName = normalizedIngredientName(ingredient.item)
-      if (!normalizedName || EXCLUDED_SHARED_INGREDIENTS.has(normalizedName)) continue
-      const normalized = canonicalIngredientItemKey(ingredient)
-      const usage = ingredientUsage.get(normalized) ?? { label: ingredient.item.trim(), recipeIds: new Set<string>() }
-      usage.recipeIds.add(day.recipe.id)
-      ingredientUsage.set(normalized, usage)
-    }
-  }
-  const sharedIngredient = [...ingredientUsage.entries()]
-    .filter(([, usage]) => usage.recipeIds.size >= 2)
-    .sort(([leftKey, left], [rightKey, right]) => right.recipeIds.size - left.recipeIds.size || leftKey.localeCompare(rightKey))[0]?.[1]
-  if (sharedIngredient) {
-    explanations.push({ kind: 'shared-ingredient', ingredient: sharedIngredient.label, dinnerCount: sharedIngredient.recipeIds.size })
-  }
-
-  return explanations.slice(0, 2)
-}
-
-type TWeekRescueFailure = 'NO_PLAN' | 'LOCKED_DAY' | 'NO_RESCUE_FOUND' | 'STALE_WEEK_PLAN'
-
-type TRescueRecipe = {
-  id: string
-  title: string
-  servings: number
-  prepTimeMinutes: number | null
-  cookTimeMinutes: number | null
-  ingredients: unknown
-  tags: unknown
-}
-
-function ingredientNames(recipe: TRescueRecipe | undefined) {
-  return readRecipeIngredients(recipe?.ingredients).map((ingredient) => ingredient.item.trim()).filter(Boolean)
-}
-
-function normalizedIngredientSet(recipe: TRescueRecipe | undefined) {
-  return new Set(ingredientNames(recipe).map(normalizedIngredientName))
-}
-
-function rescueChange(
-  date: string,
-  weekday: z.infer<typeof dayOfWeek>,
-  before: TRescueRecipe | undefined,
-  after: TRescueRecipe | undefined,
-  beforeServings: number | null,
-  afterServings: number | null,
-) {
-  return {
-    date,
-    dayOfWeek: weekday,
-    beforeRecipeRef: before?.id ?? null,
-    beforeRecipeTitle: before?.title ?? null,
-    afterRecipeRef: after?.id ?? null,
-    afterRecipeTitle: after?.title ?? null,
-    beforeServings,
-    afterServings,
-  }
-}
-
-export function deriveWeekRescuePreview(input: {
-  request: TWeekRescueRequest
-  weekStartDate: string
-  updatedAt: string | null
-  projection: TWeekPlanProjectionState
-  recipes: TRescueRecipe[]
-  avoidIngredients?: string[]
-  preferredLeftoverRecipeIds?: Set<string>
-}): TWeekRescuePreview | { error: TWeekRescueFailure } {
-  if (input.request.expectedUpdatedAt !== input.updatedAt) return { error: 'STALE_WEEK_PLAN' }
-  const dayIndex = Math.round((Date.parse(`${input.request.date}T00:00:00Z`) - Date.parse(`${input.weekStartDate}T00:00:00Z`)) / 86400000)
-  const targetDay = orderedDays[dayIndex]
-  if (!targetDay) return { error: 'NO_PLAN' }
-  if (input.projection.lockedDays.includes(targetDay)) return { error: 'LOCKED_DAY' }
-  const targetMeal = input.projection.meals[targetDay]
-  if (!targetMeal) return { error: 'NO_PLAN' }
-  const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]))
-  const before = recipesById.get(targetMeal.recipeRef)
-  if (!before) return { error: 'NO_PLAN' }
-
-  if (input.request.intent === 'extra-guest') {
-    return {
-      rescueId: input.request.rescueId,
-      intent: input.request.intent,
-      reason: 'more-portions',
-      primaryChange: rescueChange(input.request.date, targetDay, before, before, targetMeal.servings ?? before.servings, (targetMeal.servings ?? before.servings) + 1),
-      followUpChanges: [],
-      shoppingDiff: { added: [], removed: [] },
-      expectedUpdatedAt: input.updatedAt,
-    }
-  }
-
-  if (input.request.intent === 'swap-day') {
-    const swapIndex = orderedDays.findIndex((day, index) => index > dayIndex
-      && !input.projection.lockedDays.includes(day)
-      && !input.projection.skippedDays.includes(day)
-      && Boolean(input.projection.meals[day]))
-    if (swapIndex < 0) return { error: 'NO_RESCUE_FOUND' }
-    const swapDay = orderedDays[swapIndex]!
-    const swapMeal = input.projection.meals[swapDay]!
-    const swapRecipe = recipesById.get(swapMeal.recipeRef)
-    if (!swapRecipe) return { error: 'NO_RESCUE_FOUND' }
-    return {
-      rescueId: input.request.rescueId,
-      intent: input.request.intent,
-      reason: 'swaps-days',
-      primaryChange: rescueChange(input.request.date, targetDay, before, swapRecipe, targetMeal.servings ?? before.servings, swapMeal.servings ?? swapRecipe.servings),
-      followUpChanges: [rescueChange(addDays(input.weekStartDate, swapIndex), swapDay, swapRecipe, before, swapMeal.servings ?? swapRecipe.servings, targetMeal.servings ?? before.servings)],
-      shoppingDiff: { added: [], removed: [] },
-      expectedUpdatedAt: input.updatedAt,
-    }
-  }
-
-  const missing = normalizedIngredientName(input.request.missingIngredient ?? '')
-  const weekIngredientNames = new Set<string>()
-  for (const meal of Object.values(input.projection.meals)) {
-    for (const name of normalizedIngredientSet(recipesById.get(meal.recipeRef))) weekIngredientNames.add(name)
-  }
-  const plannedRecipeIds = new Set(Object.values(input.projection.meals).map((meal) => meal.recipeRef))
-  const candidates = input.recipes
-    .filter((recipe) => !plannedRecipeIds.has(recipe.id))
-    .filter((recipe) => !recipeMatchesAvoided(recipe, input.avoidIngredients ?? []))
-    .filter((recipe) => input.request.intent !== 'missing-ingredient'
-      || ![...normalizedIngredientSet(recipe)].some((name) => name.includes(missing) || missing.includes(name)))
-    .map((recipe) => {
-      const totalMinutes = (recipe.prepTimeMinutes ?? 0) + (recipe.cookTimeMinutes ?? 0)
-      const overlap = [...normalizedIngredientSet(recipe)].filter((name) => weekIngredientNames.has(name)).length
-      const ingredientCount = ingredientNames(recipe).length
-      let score = overlap * 4 - ingredientCount
-      if (input.preferredLeftoverRecipeIds?.has(recipe.id)) score += 100
-      if (totalMinutes > 0 && totalMinutes <= 20) score += 30
-      else if (totalMinutes > 0 && totalMinutes <= 30) score += 15
-      if (input.request.intent === 'quick' && (totalMinutes <= 0 || totalMinutes > 20)) score -= 100
-      if (input.request.intent === 'no-energy' && (totalMinutes <= 0 || totalMinutes > 30 || ingredientCount > 8)) score -= 100
-      return { recipe, score }
-    })
-    .filter(({ score }) => score > -90)
-    .sort((left, right) => right.score - left.score || left.recipe.title.localeCompare(right.recipe.title))
-  const replacement = candidates[0]?.recipe
-  if (!replacement) return { error: 'NO_RESCUE_FOUND' }
-
-  const beforePlan = new Map(Object.entries(input.projection.meals).map(([day, meal]) => [day, meal.recipeRef]))
-  const afterPlan = new Map(beforePlan)
-  afterPlan.set(targetDay, replacement.id)
-  const union = (plan: Map<string, string>) => {
-    const labels = new Map<string, string>()
-    for (const recipeId of plan.values()) {
-      for (const label of ingredientNames(recipesById.get(recipeId))) labels.set(normalizedIngredientName(label), label)
-    }
-    return labels
-  }
-  const beforeIngredients = union(beforePlan)
-  const afterIngredients = union(afterPlan)
-  const added = [...afterIngredients].filter(([key]) => !beforeIngredients.has(key)).map(([, label]) => label).sort()
-  const removed = [...beforeIngredients].filter(([key]) => !afterIngredients.has(key)).map(([, label]) => label).sort()
-
-  return {
-    rescueId: input.request.rescueId,
-    intent: input.request.intent,
-    reason: input.request.intent === 'quick' ? 'faster' : input.request.intent === 'no-energy' ? 'less-effort' : 'avoids-ingredient',
-    primaryChange: rescueChange(input.request.date, targetDay, before, replacement, targetMeal.servings ?? before.servings, targetMeal.servings ?? replacement.servings),
-    followUpChanges: [],
-    shoppingDiff: { added, removed },
-    expectedUpdatedAt: input.updatedAt,
-  }
 }
 
 export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
@@ -2135,7 +1740,8 @@ export function buildWeekPlanRoutes(db: Db) {
 // appendWeekPlanEvent) to prove the read path reflects the projection, never a
 // replay of the log.
 export { foldEventIntoProjection, emptyProjectionState }
-export type { TWeekPlanProjectionState }
+export type { TWeekPlanProjectionState } from './modules/week-plan/projection.js'
 
 // Re-exported so existing importers keep working until the module split lands.
 export { addDays, isMonday, recipeMatchesAvoided, requestToday }
+export { deriveWeekExplanations, deriveWeekRescuePreview }

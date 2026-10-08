@@ -39,6 +39,16 @@ import {
   type THouseholdMealSignalState,
   type TScoringRecipe,
 } from './week-scoring.js'
+import {
+  addDays,
+  defaultTodayForWeek,
+  getIsoWeekIdentity,
+  isDateInWeek,
+  isMonday,
+  orderedDays,
+  requestToday,
+} from './shared/week-dates.js'
+import { readIngredientArray, readStringArray, recipeMatchesAvoided } from './shared/recipe-matching.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -939,49 +949,6 @@ const finalizeWeekHistoryPlanRoute = createRoute({
   },
 })
 
-const orderedDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const
-
-export function addDays(yyyyMmDd: string, offset: number) {
-  const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
-  date.setUTCDate(date.getUTCDate() + offset)
-  return date.toISOString().slice(0, 10)
-}
-
-export function isMonday(yyyyMmDd: string) {
-  return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay() === 1
-}
-
-function isDateInWeek(weekStartDate: string, date: string) {
-  return date >= weekStartDate && date <= addDays(weekStartDate, 6)
-}
-
-function isValidISODateString(value: string | undefined): value is string {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
-  const date = new Date(`${value}T00:00:00.000Z`)
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
-}
-
-export function requestToday(value: string | undefined) {
-  return isValidISODateString(value) ? value : new Date().toISOString().slice(0, 10)
-}
-
-function defaultTodayForWeek(weekStartDate: string) {
-  const currentDate = requestToday(undefined)
-  return currentDate >= weekStartDate && currentDate <= addDays(weekStartDate, 6)
-    ? currentDate
-    : weekStartDate
-}
-
-function getIsoWeekIdentity(yyyyMmDd: string) {
-  const date = new Date(`${yyyyMmDd}T00:00:00.000Z`)
-  const day = date.getUTCDay() || 7
-  date.setUTCDate(date.getUTCDate() + 4 - day)
-  const weekYear = date.getUTCFullYear()
-  const yearStart = new Date(Date.UTC(weekYear, 0, 1))
-  const weekNumber = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
-  return { weekNumber, weekYear }
-}
-
 const SATIATION_STREAK_THRESHOLD = 3
 
 function streakWeeksOrNull(streak: number): number | null {
@@ -1070,27 +1037,6 @@ export async function clearWeekContextOverride(
   )
 }
 
-function readJsonArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value
-  if (typeof value !== 'string') return []
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function readStringArray(value: unknown): string[] {
-  return readJsonArray(value).filter((item): item is string => typeof item === 'string')
-}
-
-function readIngredientArray(value: unknown): Array<{ item: string; unit?: string | null; category?: string | null }> {
-  return readJsonArray(value).filter((item): item is { item: string; unit?: string | null; category?: string | null } =>
-    Boolean(item && typeof item === 'object' && 'item' in item && typeof item.item === 'string'),
-  )
-}
-
 function readPantryStock(state: unknown): Record<string, number> {
   const candidate = state as { pantryStock?: unknown } | null | undefined
   if (!candidate?.pantryStock || typeof candidate.pantryStock !== 'object') return {}
@@ -1110,43 +1056,6 @@ function householdRecipePool(tx: Db, householdId: string) {
       tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
     ),
   )
-}
-
-// Avoid-matching, in order of signal quality:
-//   - Itemized ingredients + tags are matched *always*. Ingredients are the
-//     strongest signal; tags are short curated labels (e.g. a "peanut" tag on
-//     "Peanut Noodles") and carry genuine allergen intent, so dropping them
-//     would turn a real exclusion into a false negative — worse than the bug
-//     we're fixing.
-//   - The free-prose *title* is matched *only* when the recipe has fewer than
-//     two itemized ingredients. The title is the false-positive-prone signal:
-//     `avoid="ost"` matched "Rostad kyckling" because "ost" is a substring of
-//     "Rostad". A properly itemized recipe should be judged on its ingredients
-//     and tags, not on substrings of its name. But a title-only or
-//     partially-itemized recipe (e.g. a URL import that only captured one
-//     ingredient) still needs the title as a safety net — onboarding's
-//     go-to-dish creates a title-only recipe when AI fill-in doesn't
-//     complete, and a title-only "Fiskgratäng" must stay filtered for a
-//     "fisk" avoid. Two itemized ingredients is the threshold for trusting
-//     the ingredient list over the title.
-// Substring matching is still crude on compound-word languages (see
-// PLAN-ingrediens-taxonomi.md) — this only removes the *title* false positives
-// for the common case where the recipe is properly itemized.
-export function recipeMatchesAvoided(
-  recipe: { title: string; tags: unknown; ingredients: unknown },
-  avoidIngredients: string[],
-): boolean {
-  const avoided = avoidIngredients.map((a) => a.trim().toLowerCase()).filter((a) => a !== '')
-  if (avoided.length === 0) return false
-  const ingredientItems = readIngredientArray(recipe.ingredients)
-    .map((i) => i.item.trim().toLowerCase())
-    .filter((item) => item !== '')
-  const haystacks = [...readStringArray(recipe.tags).map((t) => t.trim().toLowerCase())]
-  haystacks.push(...ingredientItems)
-  if (ingredientItems.length < 2) {
-    haystacks.push(recipe.title.toLowerCase())
-  }
-  return avoided.some((lower) => haystacks.some((h) => h.includes(lower)))
 }
 
 function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {
@@ -2641,3 +2550,6 @@ export function buildWeekPlanRoutes(db: Db) {
 // replay of the log.
 export { foldEventIntoProjection, emptyProjectionState }
 export type { TWeekPlanProjectionState }
+
+// Re-exported so existing importers keep working until the module split lands.
+export { addDays, isMonday, recipeMatchesAvoided, requestToday }

@@ -5,7 +5,7 @@ import { assertMembership } from './membership.js'
 import { cookedRecipeIdFromOutcome, resolveMealHistory } from './meal-history.js'
 import { withRls } from './rls.js'
 import { householdMealOutcomes, mealFeedback, recipes, weekPlanProjections } from './schema.js'
-import { addDays, isMonday } from './week-plan.js'
+import { addDays, isMonday } from './shared/week-dates.js'
 import type { Db } from './db.js'
 
 const HouseholdParamsSchema = z.object({ householdId: z.string().uuid() })

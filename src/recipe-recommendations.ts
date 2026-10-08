@@ -16,7 +16,8 @@ import {
 } from './schema.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
-import { addDays, recipeMatchesAvoided } from './week-plan.js'
+import { addDays } from './shared/week-dates.js'
+import { recipeMatchesAvoided } from './shared/recipe-matching.js'
 import { cookedRecipeIdFromOutcome } from './meal-history.js'
 import type { Db } from './db.js'
 

@@ -72,10 +72,6 @@ export function errorResponses<const T extends Partial<Record<ApiErrorStatus, st
   return responses
 }
 
-// Free-text bodies kept from before the error contract. Each one is removed
-// by the commit that replaces it with a code.
-type LegacyFreeTextError = 'Household not found.'
-
 // Extra fields a few codes carry next to `error` (declared by their own
 // response schemas, e.g. `StaleWeekHistoryPlanResponse`).
 type ErrorDetails = { updatedAt?: string | null; issues?: TValidationIssue[] }
@@ -88,8 +84,8 @@ export class ApiError extends Error {
   readonly body: Record<string, unknown>
 
   constructor(status: 403, gate: PremiumRequiredBody)
-  constructor(status: ApiErrorStatus, code: ErrorCode | LegacyFreeTextError, details?: ErrorDetails)
-  constructor(readonly status: ApiErrorStatus, codeOrGate: ErrorCode | LegacyFreeTextError | PremiumRequiredBody, details?: ErrorDetails) {
+  constructor(status: ApiErrorStatus, code: ErrorCode, details?: ErrorDetails)
+  constructor(readonly status: ApiErrorStatus, codeOrGate: ErrorCode | PremiumRequiredBody, details?: ErrorDetails) {
     const body = typeof codeOrGate === 'string' ? { error: codeOrGate, ...details } : codeOrGate
     super(body.error)
     this.body = body

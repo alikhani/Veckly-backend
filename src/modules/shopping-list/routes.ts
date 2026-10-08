@@ -80,9 +80,11 @@ const getShoppingListSummaryRoute = createRoute({
       description: 'The current shopping list summary. Missing projections return an empty list.',
       content: { 'application/json': { schema: ShoppingListSummarySchema } },
     },
-    404: { description: 'Household not found or caller is not a member' },
     401: { description: 'Missing or invalid session' },
-    ...errorResponses({ 400: 'Invalid request, or week start is not a Monday' }),
+    ...errorResponses({
+      400: 'Invalid request, or week start is not a Monday',
+      404: 'Household not found or caller is not a member',
+    }),
   },
 })
 
@@ -193,8 +195,7 @@ export function buildShoppingListRoutes(db: Db) {
     const summary = await getShoppingListSummary(ctx, weekStartDate, {
       language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
     })
-    // Free text, unchanged.
-    if (!summary) throw new ApiError(404, 'Household not found.')
+    if (!summary) throw new ApiError(404, 'HOUSEHOLD_NOT_FOUND')
     c.header('Cache-Control', 'no-store')
     return c.json(summary, 200)
   })

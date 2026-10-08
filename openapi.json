@@ -7921,7 +7921,14 @@
             "description": "Missing or invalid session"
           },
           "404": {
-            "description": "Household not found or caller is not a member"
+            "description": "Household not found or caller is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

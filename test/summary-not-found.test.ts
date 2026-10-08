@@ -22,6 +22,10 @@ vi.mock('../src/modules/week-plan/service.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/modules/week-plan/service.js')>(),
   getWeekPlanSummary: async () => null,
 }))
+vi.mock('../src/modules/shopping-list/service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/modules/shopping-list/service.js')>(),
+  getShoppingListSummary: async () => null,
+}))
 
 const householdId = '11111111-1111-4111-8111-111111111111'
 const userId = '22222222-2222-4222-8222-222222222222'
@@ -33,6 +37,11 @@ function get(path: string) {
 describe('summary reads when the household is not found', () => {
   it('answers the week-plan summary with 404 HOUSEHOLD_NOT_FOUND', async () => {
     const response = await get(`/households/${householdId}/week-plans/2026-06-08/summary`)
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 404, body: { error: 'HOUSEHOLD_NOT_FOUND' } })
+  })
+
+  it('answers the shopping-list summary with 404 HOUSEHOLD_NOT_FOUND', async () => {
+    const response = await get(`/households/${householdId}/shopping-lists/2026-06-08/summary`)
     expect({ status: response.status, body: await response.json() }).toEqual({ status: 404, body: { error: 'HOUSEHOLD_NOT_FOUND' } })
   })
 })

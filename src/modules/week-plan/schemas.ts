@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import type { ErrorCode } from '../../platform/http-errors.js'
 import { PortionSuggestionSchema } from '../../portion-memory.js'
 import {
   DayPlanningContextSchema,
@@ -348,7 +349,7 @@ export const WeekRescueApplyResponseSchema = z.object({
 }).openapi('WeekRescueApplyResponse')
 
 export const WeekRescueErrorSchema = z.object({
-  error: z.enum(['NO_PLAN', 'LOCKED_DAY', 'NO_RESCUE_FOUND', 'STALE_WEEK_PLAN']),
+  error: z.enum(['NO_PLAN', 'LOCKED_DAY', 'NO_RESCUE_FOUND', 'STALE_WEEK_PLAN'] as const satisfies readonly ErrorCode[]),
 }).openapi('WeekRescueError')
 
 export const PreviousWeekProposalRequestSchema = z.object({
@@ -372,7 +373,7 @@ export const PreviousWeekProposalApplyResponseSchema = z.object({
 }).openapi('PreviousWeekProposalApplyResponse')
 
 export const PreviousWeekProposalErrorSchema = z.object({
-  error: z.enum(['NO_COMPLETED_WEEK', 'NO_RECIPES', 'ALL_RECIPES_EXCLUDED', 'STALE_WEEK_PLAN']),
+  error: z.enum(['NO_COMPLETED_WEEK', 'NO_RECIPES', 'ALL_RECIPES_EXCLUDED', 'STALE_WEEK_PLAN'] as const satisfies readonly ErrorCode[]),
 }).openapi('PreviousWeekProposalError')
 
 export const WeekContextOverrideItemSchema = DayPlanningContextSchema.extend({
@@ -443,7 +444,7 @@ export const FinalizeWeekHistoryPlanResponseSchema = z.object({
 }).openapi('FinalizeWeekHistoryPlanResponse')
 
 export const StaleWeekHistoryPlanResponseSchema = z.object({
-  error: z.literal('STALE_WEEK_PLAN_STATE'),
+  error: z.literal('STALE_WEEK_PLAN_STATE' satisfies ErrorCode),
   updatedAt: z.string().nullable(),
 }).openapi('StaleWeekHistoryPlanResponse')
 
@@ -457,7 +458,7 @@ export const GenerateWeekPlanResponseSchema = z.object({
 }).openapi('GenerateWeekPlanResponse')
 
 export const GenerateWeekPlanErrorSchema = z.object({
-  error: z.enum(['NO_RECIPES', 'ALL_RECIPES_EXCLUDED']),
+  error: z.enum(['NO_RECIPES', 'ALL_RECIPES_EXCLUDED'] as const satisfies readonly ErrorCode[]),
 }).openapi('GenerateWeekPlanError')
 
 export type TWeekExplanation = z.infer<typeof WeekPlanExplanationSchema>

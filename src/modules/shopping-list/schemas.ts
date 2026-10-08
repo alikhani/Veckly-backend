@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import type { ErrorCode } from '../../platform/http-errors.js'
 
 // --- Wire shapes -----------------------------------------------------------
 //
@@ -122,7 +123,7 @@ export const UpdateShoppingListStateResponseSchema = z.object({
 }).openapi('UpdateShoppingListStateResponse')
 
 export const StaleShoppingListStateResponseSchema = z.object({
-  error: z.literal('STALE_SHOPPING_STATE'),
+  error: z.literal('STALE_SHOPPING_STATE' satisfies ErrorCode),
   updatedAt: z.string().nullable(),
 }).openapi('StaleShoppingListStateResponse')
 

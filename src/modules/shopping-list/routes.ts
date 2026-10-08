@@ -175,7 +175,7 @@ export function buildShoppingListRoutes(db: Db) {
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const projection = await getShoppingList(ctx, weekStartDate)
     // Free text, unchanged.
-    if (!projection) throw new ApiError(404, { error: 'No shopping list found for this week' })
+    if (!projection) throw new ApiError(404, 'No shopping list found for this week')
     return c.json(toShoppingListProjectionResponse(projection), 200)
   })
 
@@ -186,7 +186,7 @@ export function buildShoppingListRoutes(db: Db) {
       language: languageFromAcceptLanguage(c.req.header('Accept-Language')),
     })
     // Free text, unchanged.
-    if (!summary) throw new ApiError(404, { error: 'Household not found.' })
+    if (!summary) throw new ApiError(404, 'Household not found.')
     c.header('Cache-Control', 'no-store')
     return c.json(summary, 200)
   })
@@ -207,7 +207,7 @@ export function buildShoppingListRoutes(db: Db) {
       expectedUpdatedAt: body.expectedUpdatedAt,
       state: body.state,
     })
-    if (result.outcome === 'stale') throw new ApiError(409, { error: 'STALE_SHOPPING_STATE', updatedAt: result.updatedAt })
+    if (result.outcome === 'stale') throw new ApiError(409, 'STALE_SHOPPING_STATE', { updatedAt: result.updatedAt })
     return c.json({ ok: true, updatedAt: result.updatedAt }, 200)
   })
 

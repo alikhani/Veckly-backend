@@ -5,7 +5,7 @@ import type { Db } from '../../db.js'
 import type { PersistedStreamEvent, PersistedStreamProjection } from '../../event-stream.js'
 import { assertMembership } from '../../membership.js'
 import { WeekContextOverrideSchema } from '../../planning-context.js'
-import { ApiError, requireDateInWeek, requireHouseholdMember, requireMonday } from '../../platform/http-errors.js'
+import { ApiError, requireDateInWeek, requireHouseholdMember, requireMonday, type ErrorCode } from '../../platform/http-errors.js'
 import { PremiumRequiredResponseSchema } from '../../premium-gates.js'
 import { requestToday } from '../../shared/week-dates.js'
 import {
@@ -366,8 +366,8 @@ function authOf(c: Context<TEnv>) {
 
 // Use-case failures carry their error code; STALE_WEEK_PLAN is the one
 // conflict, every other code means no safe change is available.
-function staleOrUnprocessable(result: { error: string }): never {
-  throw new ApiError(result.error === 'STALE_WEEK_PLAN' ? 409 : 422, result)
+function staleOrUnprocessable(result: { error: ErrorCode }): never {
+  throw new ApiError(result.error === 'STALE_WEEK_PLAN' ? 409 : 422, result.error)
 }
 
 function toWeekPlanEventResponse(event: PersistedStreamEvent) {
@@ -439,8 +439,8 @@ export function buildWeekPlanRoutes(db: Db) {
     const today = requestToday(c.req.header('X-Veckly-Today'))
     const result = await generateWeek(ctx, weekStartDate, { regenerate, today, pantryItemKeys })
     if ('gate' in result) throw new ApiError(403, result.gate)
-    if ('error' in result && result.error === 'NOT_MEMBER') throw new ApiError(404, { error: 'NOT_MEMBER' })
-    if ('error' in result) throw new ApiError(422, result)
+    if ('error' in result && result.error === 'NOT_MEMBER') throw new ApiError(404, 'NOT_MEMBER')
+    if ('error' in result) throw new ApiError(422, result.error)
     return c.json({ ok: true }, 200)
   })
 
@@ -464,7 +464,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const projection = await getWeekPlan(ctx, weekStartDate)
     // Free text, unchanged (see "Kända inkonsekvenser" #3).
-    if (!projection) throw new ApiError(404, { error: 'No week plan found for this week' })
+    if (!projection) throw new ApiError(404, 'No week plan found for this week')
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(toWeekPlanProjectionResponse(projection), 200)
   })
@@ -475,7 +475,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const summary = await getWeekPlanSummary(ctx, weekStartDate)
     // Free text, unchanged (see "Kända inkonsekvenser" #2).
-    if (!summary) throw new ApiError(404, { error: 'Household not found.' })
+    if (!summary) throw new ApiError(404, 'Household not found.')
     c.header('Cache-Control', 'private, max-age=300')
     return c.json(summary, 200)
   })
@@ -556,7 +556,7 @@ export function buildWeekPlanRoutes(db: Db) {
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const result = await upsertWeekHistoryPlan(ctx, weekStartDate, body)
-    if (result.outcome === 'stale') throw new ApiError(409, { error: 'STALE_WEEK_PLAN_STATE', updatedAt: result.updatedAt })
+    if (result.outcome === 'stale') throw new ApiError(409, 'STALE_WEEK_PLAN_STATE', { updatedAt: result.updatedAt })
     const { plan } = result
     return c.json({ ok: true, weekStartDate: plan.weekStartDate, weekNumber: plan.weekNumber, weekYear: plan.weekYear, updatedAt: plan.updatedAt }, 200)
   })
@@ -567,7 +567,7 @@ export function buildWeekPlanRoutes(db: Db) {
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const plan = await finalizeWeekHistoryPlan(ctx, weekStartDate)
-    if (!plan) throw new ApiError(404, { error: 'WEEK_PLAN_NOT_FOUND' })
+    if (!plan) throw new ApiError(404, 'WEEK_PLAN_NOT_FOUND')
     return c.json({ ok: true, weekStartDate, status: 'finalized', updatedAt: plan.updatedAt }, 200)
   })
 

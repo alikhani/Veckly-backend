@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import type { Db } from '../src/db.js'
-import { ApiError, requireMonday } from '../src/platform/http-errors.js'
+import { ApiError, ErrorResponseSchema, errorResponses, requireMonday } from '../src/platform/http-errors.js'
 
 describe('app-level HTTP contracts', () => {
   const app = buildApp({} as Db)
@@ -70,10 +70,10 @@ describe('ApiError mapping', () => {
     }), (c) => {
       const { week } = c.req.valid('param')
       requireMonday(week, { status: 422, code: 'NO_COMPLETED_WEEK' })
-      throw new ApiError(404, { error: 'NOT_MEMBER' })
+      throw new ApiError(404, 'NOT_MEMBER')
     })
     sub.get('/__test/stale', () => {
-      throw new ApiError(409, { error: 'STALE_WEEK_PLAN_STATE', updatedAt: null })
+      throw new ApiError(409, 'STALE_WEEK_PLAN_STATE', { updatedAt: null })
     })
     sub.get('/__test/crash', () => {
       throw new Error('boom')
@@ -105,5 +105,26 @@ describe('ApiError mapping', () => {
     const response = await app.request('/__test/crash')
     expect(response.status).toBe(500)
     expect(await response.json()).toEqual({ error: 'Internal server error' })
+  })
+})
+
+describe('error contract', () => {
+  it('builds { error } bodies from a code, with optional details', () => {
+    expect(new ApiError(404, 'NOT_MEMBER').body).toEqual({ error: 'NOT_MEMBER' })
+    expect(new ApiError(409, 'STALE_SHOPPING_STATE', { updatedAt: null }).body).toEqual({ error: 'STALE_SHOPPING_STATE', updatedAt: null })
+    // @ts-expect-error an unknown code does not compile
+    expect(new ApiError(404, 'SOMETHING_ELSE').body).toEqual({ error: 'SOMETHING_ELSE' })
+  })
+
+  it('passes a premium gate body through unchanged', () => {
+    const gate = { error: 'PREMIUM_REQUIRED', reason: 'week_history' } as const
+    expect(new ApiError(403, gate)).toMatchObject({ status: 403, body: gate })
+  })
+
+  it('builds ErrorResponse entries for createRoute', () => {
+    expect(errorResponses({ 400: 'Invalid week', 404: 'Not a member' })).toEqual({
+      400: { description: 'Invalid week', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      404: { description: 'Not a member', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    })
   })
 })

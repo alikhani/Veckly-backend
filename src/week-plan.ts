@@ -1,18 +1,17 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, desc, eq, gte, inArray, lt, lte, or } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { appendStreamEvent, getStreamProjection, StaleProjectionError } from './event-stream.js'
+import { appendStreamEvent, StaleProjectionError } from './event-stream.js'
 import { assertMembership } from './membership.js'
 import { withRls } from './rls.js'
 import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPortionMemories, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from './schema.js'
+import { householdWeekPlans, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
 import { pantryCoversIngredient } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
-import { listWeekPulseRows } from './week-pulse.js'
 import { derivePortionSuggestion } from './portion-memory.js'
 import {
   WeekContextOverrideSchema,
@@ -75,7 +74,6 @@ import {
   WeekHistoryListItemSchema,
   WeekHistoryPlanSchema,
   WeekHistoryQuerySchema,
-  WeekHistoryStateSchema,
   WeekPlanEventPayloadSchema,
   WeekPlanEventSchema,
   WeekPlanEventTypeSchema,
@@ -93,6 +91,18 @@ import {
 import { contextOverrideItems, emptyProjectionState, foldEventIntoProjection, readPantryStock, readProjectionState } from './modules/week-plan/projection.js'
 import { deriveWeekExplanations } from './modules/week-plan/explanations.js'
 import { deriveWeekRescuePreview } from './modules/week-plan/rescue.js'
+import {
+  loadGenerationInputs,
+  loadPreviousWeekInputs,
+  loadWeekRescueInputs,
+  loadWeekSummaryRows,
+  selectPreviousWeekReusedPayloads,
+  selectWeekHistoryPlan,
+  selectWeekHistoryPlans,
+  selectWeekPlanEventPayloads,
+  selectWeekPlanProjection,
+  toWeekHistoryPlanResponse,
+} from './modules/week-plan/repository.js'
 
 // --- Routes ------------------------------------------------------------------
 //
@@ -405,12 +415,7 @@ export async function getWeekContextOverrides(
   householdId: string,
   weekStartDate: string,
 ) {
-  const projection = await getStreamProjection(
-    db,
-    accessToken,
-    weekPlanProjections,
-    { householdId, weekStartDate },
-  )
+  const projection = await selectWeekPlanProjection({ db, accessToken, householdId }, weekStartDate)
   return contextOverrideItems(readProjectionState(projection?.state), weekStartDate)
 }
 
@@ -460,84 +465,17 @@ export async function clearWeekContextOverride(
   )
 }
 
-// The recipes a household plans from: its own, builtins, and recipes it has
-// saved. Deliberately not "any public recipe" — another household's public
-// recipe only enters the pool once this household saves it.
-function householdRecipePool(tx: Db, householdId: string) {
-  return or(
-    eq(recipes.householdId, householdId),
-    eq(recipes.source, 'builtin'),
-    inArray(
-      recipes.id,
-      tx.select({ id: householdSavedRecipes.recipeId }).from(householdSavedRecipes).where(eq(householdSavedRecipes.householdId, householdId)),
-    ),
-  )
-}
-
-function toWeekHistoryPlanResponse(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryPlanSchema> {
-  return {
-    householdId: row.householdId,
-    weekStartDate: row.weekStartDate,
-    weekNumber: row.weekNumber,
-    weekYear: row.weekYear,
-    timezone: row.timezone,
-    state: row.state as z.infer<typeof WeekHistoryStateSchema>,
-    status: row.status,
-    source: row.source,
-    updatedBy: row.updatedBy,
-    updatedAt: row.updatedAt.toISOString(),
-  }
-}
-
-function toWeekHistoryListItem(row: typeof householdWeekPlans.$inferSelect): z.infer<typeof WeekHistoryListItemSchema> {
-  const plan = toWeekHistoryPlanResponse(row)
-  return {
-    weekStartDate: plan.weekStartDate,
-    weekNumber: plan.weekNumber,
-    weekYear: plan.weekYear,
-    timezone: plan.timezone,
-    status: plan.status,
-    source: plan.source,
-    updatedAt: plan.updatedAt,
-    updatedBy: plan.updatedBy,
-    plannedDays: plan.state.request.selectedDays.map((day) => day.day),
-    request: plan.state.request,
-    replacements: plan.state.replacements,
-    skippedDays: plan.state.skippedDays,
-  }
-}
-
 export async function listWeekHistoryPlans(
   db: Db,
   accessToken: string,
   householdId: string,
   range: { from?: string; to?: string },
 ) {
-  return withRls(db, accessToken, async (tx) => {
-    const conditions = [eq(householdWeekPlans.householdId, householdId)]
-    if (range.from) conditions.push(gte(householdWeekPlans.weekStartDate, range.from))
-    if (range.to) conditions.push(lte(householdWeekPlans.weekStartDate, range.to))
-
-    const rows = await tx
-      .select()
-      .from(householdWeekPlans)
-      .where(and(...conditions))
-      .orderBy(desc(householdWeekPlans.weekStartDate))
-
-    return rows.map(toWeekHistoryListItem)
-  })
+  return selectWeekHistoryPlans({ db, accessToken, householdId }, range)
 }
 
 export async function getWeekHistoryPlan(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
-  return withRls(db, accessToken, async (tx) => {
-    const [row] = await tx
-      .select()
-      .from(householdWeekPlans)
-      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
-      .limit(1)
-
-    return row ? toWeekHistoryPlanResponse(row) : null
-  })
+  return selectWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
 }
 
 type TUpsertWeekHistoryPlanResult =
@@ -621,59 +559,21 @@ export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userI
 }
 
 export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  return withRls(db, accessToken, async (tx) => {
-    const [[projection], [profile], prepBatches] = await Promise.all([
-      tx.select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
-        .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
-        .limit(1),
-      tx.select({ avoidIngredients: householdProfiles.avoidIngredients })
-        .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1),
-      tx.select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId })
-        .from(householdPrepBatches)
-        .where(and(eq(householdPrepBatches.householdId, householdId), lte(householdPrepBatches.cookDate, request.date))),
-    ])
-    if (!projection) return { error: 'NO_PLAN' as const }
-    const projectionState = readProjectionState(projection.state)
-    // Candidates come from the same pool generation plans from. Already-planned
-    // recipes are loaded too (for the before-side and shopping diff) even when
-    // outside the pool; the derive step never offers a planned recipe.
-    const plannedRecipeIds = [...new Set(Object.values(projectionState.meals).map((meal) => meal.recipeRef))]
-    const recipeRows = await tx.select({
-      id: recipes.id,
-      title: recipes.title,
-      servings: recipes.servings,
-      prepTimeMinutes: recipes.prepTimeMinutes,
-      cookTimeMinutes: recipes.cookTimeMinutes,
-      ingredients: recipes.ingredients,
-      tags: recipes.tags,
-    }).from(recipes).where(and(
-      eq(recipes.isArchived, false),
-      plannedRecipeIds.length > 0
-        ? or(householdRecipePool(tx, householdId), inArray(recipes.id, plannedRecipeIds))
-        : householdRecipePool(tx, householdId),
-    ))
-    const assignments = prepBatches.length
-      ? await tx.select({ batchId: householdPrepBatchAssignments.batchId })
-        .from(householdPrepBatchAssignments)
-        .where(and(
-          inArray(householdPrepBatchAssignments.batchId, prepBatches.map((batch) => batch.id)),
-          eq(householdPrepBatchAssignments.date, request.date),
-        ))
-      : []
-    const assignedBatchIds = new Set(assignments.map((assignment) => assignment.batchId))
-    const preferredLeftoverRecipeIds = new Set(prepBatches
-      .filter((batch) => assignedBatchIds.has(batch.id) && batch.recipeId)
-      .map((batch) => batch.recipeId!))
-    return deriveWeekRescuePreview({
-      request,
-      weekStartDate,
-      updatedAt: projection.updatedAt.toISOString(),
-      projection: projectionState,
-      recipes: recipeRows,
-      avoidIngredients: (profile?.avoidIngredients as string[] | undefined) ?? [],
-      preferredLeftoverRecipeIds,
-    })
+  const inputs = await loadWeekRescueInputs({ db, accessToken, householdId }, weekStartDate, request.date)
+  if (!inputs) return { error: 'NO_PLAN' as const }
+  const { projection, projectionState, profile, prepBatches, recipeRows, assignments } = inputs
+  const assignedBatchIds = new Set(assignments.map((assignment) => assignment.batchId))
+  const preferredLeftoverRecipeIds = new Set(prepBatches
+    .filter((batch) => assignedBatchIds.has(batch.id) && batch.recipeId)
+    .map((batch) => batch.recipeId!))
+  return deriveWeekRescuePreview({
+    request,
+    weekStartDate,
+    updatedAt: projection.updatedAt.toISOString(),
+    projection: projectionState,
+    recipes: recipeRows,
+    avoidIngredients: (profile?.avoidIngredients as string[] | undefined) ?? [],
+    preferredLeftoverRecipeIds,
   })
 }
 
@@ -704,10 +604,7 @@ export function applyWeekRescue(db: Db, accessToken: string, userId: string, hou
 }
 
 async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
-  const existing = await withRls(db, accessToken, async (tx) => tx
-    .select({ eventType: weekPlanEvents.eventType, payload: weekPlanEvents.payload })
-    .from(weekPlanEvents)
-    .where(and(eq(weekPlanEvents.householdId, householdId), eq(weekPlanEvents.weekStartDate, weekStartDate))))
+  const existing = await selectWeekPlanEventPayloads({ db, accessToken, householdId }, weekStartDate)
   const existingPayload = existing
     .filter((row) => row.eventType === 'week_rescued')
     .map((row) => row.payload as Omit<z.infer<typeof WeekRescuedPayloadSchema>, 'eventType'>)
@@ -755,232 +652,138 @@ async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, 
 }
 
 export async function getWeekPlanSummary(db: Db, accessToken: string, householdId: string, weekStartDate: string) {
-  return withRls(db, accessToken, async (tx) => {
-    const [household] = await tx
-      .select({ id: households.id, name: households.name })
-      .from(households)
-      .where(eq(households.id, householdId))
-      .limit(1)
+  // 4 prior weeks is enough to surface a streak (threshold 3) without an
+  // unbounded query — see `computeCurrentStreak` in week-scoring.ts.
+  const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
+  const rows = await loadWeekSummaryRows({ db, accessToken, householdId }, weekStartDate, priorWeekStartDates)
+  if (!rows) return null
+  const {
+    household,
+    projection,
+    priorWeekProjections,
+    outcomeRows,
+    shoppingProjection,
+    pulseMembers,
+    projectionState,
+    recipeIds,
+    recipeRows,
+    portionOutcomeRows,
+    portionMemoryRows,
+    accessibleRecipeTitles,
+    prepBatches,
+    prepAssignments,
+  } = rows
 
-    if (!household) return null
+  const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
 
-    // 4 prior weeks is enough to surface a streak (threshold 3) without an
-    // unbounded query — see `computeCurrentStreak` in week-scoring.ts.
-    const priorWeekStartDates = Array.from({ length: 4 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
+  const priorPlansByDate = new Map(
+    priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
+  )
+  const resolvedHistory = resolveMealHistory(
+    allWeekStartDates.map((date) => ({
+      weekStartDate: date,
+      mealIds: date === weekStartDate ? recipeIds : priorPlansByDate.get(date) ?? [],
+    })),
+    outcomeRows,
+  )
+  const confirmedWeeksByDate = new Map(
+    resolvedHistory.confirmedRecords.map((record) => [record.weekStartDate, record.mealIds]),
+  )
+  const weeksMostRecentFirst = [
+    confirmedWeeksByDate.get(weekStartDate) ?? [],
+    ...priorWeekStartDates.map((date) => confirmedWeeksByDate.get(date) ?? []),
+  ]
 
-    const allWeekStartDates = [weekStartDate, ...priorWeekStartDates]
-    const [[projection], priorWeekProjections, outcomeRows, [shoppingProjection], pulseMembers] = await Promise.all([
-      tx
-        .select({ state: weekPlanProjections.state, updatedAt: weekPlanProjections.updatedAt })
-        .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), eq(weekPlanProjections.weekStartDate, weekStartDate)))
-        .limit(1),
-      tx
-        .select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
-        .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates))),
-      tx
-        .select({
-          weekStartDate: householdMealOutcomes.weekStartDate,
-          plannedRecipeId: householdMealOutcomes.plannedRecipeId,
-          status: householdMealOutcomes.status,
-          actualRecipeId: householdMealOutcomes.actualRecipeId,
-        })
-        .from(householdMealOutcomes)
-        .where(and(
-          eq(householdMealOutcomes.householdId, householdId),
-          inArray(householdMealOutcomes.weekStartDate, allWeekStartDates),
-        )),
-      tx
-        .select({ state: shoppingListProjections.state })
-        .from(shoppingListProjections)
-        .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
-        .orderBy(desc(shoppingListProjections.weekStartDate))
-        .limit(1),
-      tx.select({
-        userId: householdMemberships.userId,
-        givenName: userProfiles.givenName,
-        wishedMeal: householdWeekPulses.wishedMeal,
-        respondedAt: householdWeekPulses.updatedAt,
-      })
-        .from(householdMemberships)
-        .leftJoin(userProfiles, eq(userProfiles.userId, householdMemberships.userId))
-        .leftJoin(householdWeekPulses, and(
-          eq(householdWeekPulses.householdId, householdMemberships.householdId),
-          eq(householdWeekPulses.weekStartDate, weekStartDate),
-          eq(householdWeekPulses.userId, householdMemberships.userId),
-        ))
-        .where(and(eq(householdMemberships.householdId, householdId), eq(householdMemberships.status, 'active'))),
-    ])
+  const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
+  const portionOutcomesByRecipe = new Map<string, typeof portionOutcomeRows>()
+  for (const outcome of portionOutcomeRows) {
+    portionOutcomesByRecipe.set(outcome.plannedRecipeId, [...(portionOutcomesByRecipe.get(outcome.plannedRecipeId) ?? []), outcome])
+  }
+  const ignoredThroughByRecipe = new Map(portionMemoryRows.map((row) => [row.recipeId, row.ignoredThrough]))
+  const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
+  const assignmentsByBatch = new Map<string, string[]>()
+  for (const assignment of prepAssignments) {
+    assignmentsByBatch.set(assignment.batchId, [...(assignmentsByBatch.get(assignment.batchId) ?? []), assignment.date])
+  }
 
-    const projectionState = readProjectionState(projection?.state)
-    const recipeIds = orderedDays
-      .map((day) => projectionState.meals[day]?.recipeRef)
-      .filter((id): id is string => Boolean(id))
-
-    const priorPlansByDate = new Map(
-      priorWeekProjections.map((row) => [row.weekStartDate, Object.values(readProjectionState(row.state).meals).map((m) => m.recipeRef)]),
-    )
-    const resolvedHistory = resolveMealHistory(
-      allWeekStartDates.map((date) => ({
-        weekStartDate: date,
-        mealIds: date === weekStartDate ? recipeIds : priorPlansByDate.get(date) ?? [],
-      })),
-      outcomeRows,
-    )
-    const confirmedWeeksByDate = new Map(
-      resolvedHistory.confirmedRecords.map((record) => [record.weekStartDate, record.mealIds]),
-    )
-    const weeksMostRecentFirst = [
-      confirmedWeeksByDate.get(weekStartDate) ?? [],
-      ...priorWeekStartDates.map((date) => confirmedWeeksByDate.get(date) ?? []),
-    ]
-
-    const recipeRows = recipeIds.length
-      ? await tx
-        .select({
-          id: recipes.id,
-          title: recipes.title,
-          description: recipes.description,
-          servings: recipes.servings,
-          prepTimeMinutes: recipes.prepTimeMinutes,
-          cookTimeMinutes: recipes.cookTimeMinutes,
-          tags: recipes.tags,
-          ingredients: recipes.ingredients,
-        })
-        .from(recipes)
-        .where(and(or(eq(recipes.householdId, householdId), eq(recipes.isPublic, true)), inArray(recipes.id, recipeIds)))
-      : []
-
-    const recipesById = new Map(recipeRows.map((recipe) => [recipe.id, recipe]))
-    const [portionOutcomeRows, portionMemoryRows] = recipeIds.length ? await Promise.all([
-      tx.select({
-        plannedRecipeId: householdMealOutcomes.plannedRecipeId,
-        status: householdMealOutcomes.status,
-        portionOutcome: householdMealOutcomes.portionOutcome,
-        intentionalLeftovers: householdMealOutcomes.intentionalLeftovers,
-        updatedAt: householdMealOutcomes.updatedAt,
-      }).from(householdMealOutcomes).where(and(
-        eq(householdMealOutcomes.householdId, householdId),
-        inArray(householdMealOutcomes.plannedRecipeId, recipeIds),
-      )),
-      tx.select({
-        recipeId: householdPortionMemories.recipeId,
-        ignoredThrough: householdPortionMemories.ignoredThrough,
-      }).from(householdPortionMemories).where(and(
-        eq(householdPortionMemories.householdId, householdId),
-        inArray(householdPortionMemories.recipeId, recipeIds),
-      )),
-    ]) : [[], []]
-    const portionOutcomesByRecipe = new Map<string, typeof portionOutcomeRows>()
-    for (const outcome of portionOutcomeRows) {
-      portionOutcomesByRecipe.set(outcome.plannedRecipeId, [...(portionOutcomesByRecipe.get(outcome.plannedRecipeId) ?? []), outcome])
-    }
-    const ignoredThroughByRecipe = new Map(portionMemoryRows.map((row) => [row.recipeId, row.ignoredThrough]))
-    const plannedRecipeTitles = recipeRows.map((recipe) => recipe.title)
-    const accessibleRecipeTitles = await tx.select({ title: recipes.title }).from(recipes).where(and(
-      eq(recipes.isArchived, false),
-      householdRecipePool(tx, householdId),
-    ))
-
-    const prepBatches = await tx
-      .select({ id: householdPrepBatches.id, recipeId: householdPrepBatches.recipeId, cookDate: householdPrepBatches.cookDate })
-      .from(householdPrepBatches)
-      .where(and(
-        eq(householdPrepBatches.householdId, householdId),
-        gte(householdPrepBatches.cookDate, weekStartDate),
-        lte(householdPrepBatches.cookDate, addDays(weekStartDate, 6)),
-      ))
-    const prepAssignments = prepBatches.length
-      ? await tx
-        .select({ batchId: householdPrepBatchAssignments.batchId, date: householdPrepBatchAssignments.date })
-        .from(householdPrepBatchAssignments)
-        .where(inArray(householdPrepBatchAssignments.batchId, prepBatches.map((batch) => batch.id)))
-      : []
-    const assignmentsByBatch = new Map<string, string[]>()
-    for (const assignment of prepAssignments) {
-      assignmentsByBatch.set(assignment.batchId, [...(assignmentsByBatch.get(assignment.batchId) ?? []), assignment.date])
-    }
-
-    const days = orderedDays.map((dayOfWeek, index) => {
-      const meal = projectionState.meals[dayOfWeek]
-      const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
-      const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
-
-      return {
-        dayOfWeek,
-        date: addDays(weekStartDate, index),
-        state,
-        isLocked: projectionState.lockedDays.includes(dayOfWeek),
-        reason: meal?.reason ?? null,
-        confidence: meal?.confidence ?? null,
-        streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
-        portionSuggestion: recipe ? derivePortionSuggestion(
-          portionOutcomesByRecipe.get(recipe.id) ?? [],
-          meal?.servings ?? recipe.servings,
-          ignoredThroughByRecipe.get(recipe.id),
-        ) : null,
-        recipe: recipe ? {
-          id: recipe.id,
-          title: recipe.title,
-          description: recipe.description,
-          servings: meal?.servings ?? recipe.servings,
-          prepTimeMinutes: recipe.prepTimeMinutes ?? null,
-          cookTimeMinutes: recipe.cookTimeMinutes ?? null,
-          tags: readStringArray(recipe.tags),
-        } : null,
-      }
-    })
-    const pantryStock = readPantryStock(shoppingProjection?.state)
+  const days = orderedDays.map((dayOfWeek, index) => {
+    const meal = projectionState.meals[dayOfWeek]
+    const recipe = meal ? recipesById.get(meal.recipeRef) : undefined
+    const state = projectionState.skippedDays.includes(dayOfWeek) ? 'skipped' as const : recipe ? 'planned' as const : 'empty' as const
 
     return {
-      household,
-      weekStartDate,
-      updatedAt: projection?.updatedAt.toISOString() ?? null,
-      economy: evaluateWeekEconomy(
-        recipeIds.map((id) => recipesById.get(id)).filter((recipe): recipe is NonNullable<typeof recipe> => Boolean(recipe)).map((recipe) => ({
-          id: recipe.id,
-          title: recipe.title,
-          servings: recipe.servings,
-          prepTimeMinutes: recipe.prepTimeMinutes,
-          tags: readStringArray(recipe.tags),
-          ingredients: readIngredientArray(recipe.ingredients),
-          cuisine: null,
-          proteinSource: null,
-          mealWeight: null,
-          householdId: null,
-        })),
-        pantryStock,
-      ),
-      pulse: {
-        responseCount: pulseMembers.filter((member) => member.respondedAt !== null).length,
-        memberCount: pulseMembers.length,
-        wishes: pulseMembers.flatMap((member) => {
-          if (!member.wishedMeal) return []
-          const fulfilled = plannedRecipeTitles.some((title) => recipeMatchesWish(title, member.wishedMeal!))
-          const available = accessibleRecipeTitles.some((recipe) => recipeMatchesWish(recipe.title, member.wishedMeal!))
-          return [{
-            userId: member.userId,
-            givenName: member.givenName,
-            wishedMeal: member.wishedMeal,
-            status: fulfilled ? 'fulfilled' as const : available ? 'not-selected' as const : 'unavailable' as const,
-          }]
-        }),
-      },
-      explanations: deriveWeekExplanations({
-        days,
-        recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
-        prepLinks: prepBatches.map((batch) => ({
-          recipeId: batch.recipeId,
-          recipeTitle: batch.recipeId ? recipesById.get(batch.recipeId)?.title ?? null : null,
-          cookDate: batch.cookDate,
-          coveredDates: assignmentsByBatch.get(batch.id) ?? [],
-        })),
-        pantryStock,
-      }),
-      days,
+      dayOfWeek,
+      date: addDays(weekStartDate, index),
+      state,
+      isLocked: projectionState.lockedDays.includes(dayOfWeek),
+      reason: meal?.reason ?? null,
+      confidence: meal?.confidence ?? null,
+      streakWeeks: recipe ? streakWeeksOrNull(computeCurrentStreak(recipe.id, weeksMostRecentFirst)) : null,
+      portionSuggestion: recipe ? derivePortionSuggestion(
+        portionOutcomesByRecipe.get(recipe.id) ?? [],
+        meal?.servings ?? recipe.servings,
+        ignoredThroughByRecipe.get(recipe.id),
+      ) : null,
+      recipe: recipe ? {
+        id: recipe.id,
+        title: recipe.title,
+        description: recipe.description,
+        servings: meal?.servings ?? recipe.servings,
+        prepTimeMinutes: recipe.prepTimeMinutes ?? null,
+        cookTimeMinutes: recipe.cookTimeMinutes ?? null,
+        tags: readStringArray(recipe.tags),
+      } : null,
     }
   })
+  const pantryStock = readPantryStock(shoppingProjection?.state)
+
+  return {
+    household,
+    weekStartDate,
+    updatedAt: projection?.updatedAt.toISOString() ?? null,
+    economy: evaluateWeekEconomy(
+      recipeIds.map((id) => recipesById.get(id)).filter((recipe): recipe is NonNullable<typeof recipe> => Boolean(recipe)).map((recipe) => ({
+        id: recipe.id,
+        title: recipe.title,
+        servings: recipe.servings,
+        prepTimeMinutes: recipe.prepTimeMinutes,
+        tags: readStringArray(recipe.tags),
+        ingredients: readIngredientArray(recipe.ingredients),
+        cuisine: null,
+        proteinSource: null,
+        mealWeight: null,
+        householdId: null,
+      })),
+      pantryStock,
+    ),
+    pulse: {
+      responseCount: pulseMembers.filter((member) => member.respondedAt !== null).length,
+      memberCount: pulseMembers.length,
+      wishes: pulseMembers.flatMap((member) => {
+        if (!member.wishedMeal) return []
+        const fulfilled = plannedRecipeTitles.some((title) => recipeMatchesWish(title, member.wishedMeal!))
+        const available = accessibleRecipeTitles.some((recipe) => recipeMatchesWish(recipe.title, member.wishedMeal!))
+        return [{
+          userId: member.userId,
+          givenName: member.givenName,
+          wishedMeal: member.wishedMeal,
+          status: fulfilled ? 'fulfilled' as const : available ? 'not-selected' as const : 'unavailable' as const,
+        }]
+      }),
+    },
+    explanations: deriveWeekExplanations({
+      days,
+      recipeIngredients: new Map(recipeRows.map((recipe) => [recipe.id, readRecipeIngredients(recipe.ingredients)])),
+      prepLinks: prepBatches.map((batch) => ({
+        recipeId: batch.recipeId,
+        recipeTitle: batch.recipeId ? recipesById.get(batch.recipeId)?.title ?? null : null,
+        cookDate: batch.cookDate,
+        coveredDates: assignmentsByBatch.get(batch.id) ?? [],
+      })),
+      pantryStock,
+    }),
+    days,
+  }
 }
 
 export async function previewPreviousWeekProposal(
@@ -992,41 +795,11 @@ export async function previewPreviousWeekProposal(
   request: TPreviousWeekProposalRequest,
 ): Promise<TPreviousWeekProposal | { error: 'NO_COMPLETED_WEEK' | 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' | 'STALE_WEEK_PLAN' }> {
   const priorWindowStart = addDays(weekStartDate, -42)
-  const [profileRows, projection, poolRecipes, feedbackRows, signalRows, priorProjections, outcomes, shoppingRows, prepAssignmentRows] = await Promise.all([
-    withRls(db, accessToken, (tx) => tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
-      .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)),
-    getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
-    withRls(db, accessToken, (tx) => tx.select({
-      id: recipes.id, title: recipes.title, servings: recipes.servings, prepTimeMinutes: recipes.prepTimeMinutes,
-      tags: recipes.tags, ingredients: recipes.ingredients, cuisine: recipes.cuisine,
-      proteinSource: recipes.proteinSource, mealWeight: recipes.mealWeight, householdId: recipes.householdId,
-    }).from(recipes).where(and(eq(recipes.isArchived, false), householdRecipePool(tx, householdId)))),
-    withRls(db, accessToken, (tx) => tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })
-      .from(mealFeedback).where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId)))),
-    withRls(db, accessToken, (tx) => tx.select({ mealId: householdMealSignals.mealId, signal: householdMealSignals.signal })
-      .from(householdMealSignals).where(eq(householdMealSignals.householdId, householdId))),
-    withRls(db, accessToken, (tx) => tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
-      .from(weekPlanProjections).where(and(eq(weekPlanProjections.householdId, householdId), gte(weekPlanProjections.weekStartDate, priorWindowStart), lt(weekPlanProjections.weekStartDate, weekStartDate)))),
-    withRls(db, accessToken, (tx) => tx.select({
-      weekStartDate: householdMealOutcomes.weekStartDate, date: householdMealOutcomes.date,
-      plannedRecipeId: householdMealOutcomes.plannedRecipeId, status: householdMealOutcomes.status,
-      actualRecipeId: householdMealOutcomes.actualRecipeId,
-    }).from(householdMealOutcomes).where(and(
-      eq(householdMealOutcomes.householdId, householdId), gte(householdMealOutcomes.weekStartDate, priorWindowStart), lt(householdMealOutcomes.weekStartDate, weekStartDate),
-    ))),
-    withRls(db, accessToken, (tx) => tx.select({ state: shoppingListProjections.state })
-      .from(shoppingListProjections)
-      .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
-      .orderBy(desc(shoppingListProjections.weekStartDate)).limit(1)),
-    withRls(db, accessToken, (tx) => tx
-      .select({ date: householdPrepBatchAssignments.date, recipeId: householdPrepBatches.recipeId })
-      .from(householdPrepBatchAssignments)
-      .innerJoin(householdPrepBatches, eq(householdPrepBatchAssignments.batchId, householdPrepBatches.id))
-      .where(and(
-        eq(householdPrepBatches.householdId, householdId), eq(householdPrepBatchAssignments.mealType, 'dinner'),
-        gte(householdPrepBatchAssignments.date, weekStartDate), lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
-      ))),
-  ])
+  const [profileRows, projection, poolRecipes, feedbackRows, signalRows, priorProjections, outcomes, shoppingRows, prepAssignmentRows] = await loadPreviousWeekInputs(
+    { db, accessToken, userId, householdId },
+    weekStartDate,
+    priorWindowStart,
+  )
 
   if (request.expectedUpdatedAt !== (projection?.updatedAt.toISOString() ?? null)) return { error: 'STALE_WEEK_PLAN' }
   if (poolRecipes.length === 0) return { error: 'NO_RECIPES' }
@@ -1129,8 +902,7 @@ export function applyPreviousWeekProposal(
 async function applyPreviousWeekProposalOnce(
   db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string, request: TPreviousWeekProposalRequest,
 ) {
-  const existing = await withRls(db, accessToken, (tx) => tx.select({ payload: weekPlanEvents.payload })
-    .from(weekPlanEvents).where(and(eq(weekPlanEvents.householdId, householdId), eq(weekPlanEvents.weekStartDate, weekStartDate), eq(weekPlanEvents.eventType, 'previous_week_reused'))))
+  const existing = await selectPreviousWeekReusedPayloads({ db, accessToken, householdId }, weekStartDate)
   const existingPayload = existing.map((row) => row.payload as z.infer<typeof PreviousWeekReusedPayloadSchema>).find((payload) => payload.proposalId === request.proposalId)
   if (existingPayload) {
     const proposal = { proposalId: existingPayload.proposalId, sourceWeekStartDate: existingPayload.sourceWeekStartDate, expectedUpdatedAt: null, keptCount: existingPayload.days.filter((day) => day.action === 'kept').length, changedCount: existingPayload.days.filter((day) => day.action !== 'kept').length, days: existingPayload.days }
@@ -1164,77 +936,11 @@ export async function doGenerateWeekPlan(
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
   const priorWeekStartDates = Array.from({ length: 6 }, (_, i) => addDays(weekStartDate, -7 * (i + 1)))
 
-  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseMemberRows] = await Promise.all([
-    withRls(db, accessToken, (tx) =>
-      tx.select({ avoidIngredients: householdProfiles.avoidIngredients, selectedDays: householdProfiles.selectedDays })
-        .from(householdProfiles).where(eq(householdProfiles.householdId, householdId)).limit(1)
-    ),
-    getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate }),
-    withRls(db, accessToken, (tx) =>
-      tx.select({
-        id: recipes.id,
-        title: recipes.title,
-        servings: recipes.servings,
-        prepTimeMinutes: recipes.prepTimeMinutes,
-        tags: recipes.tags,
-        ingredients: recipes.ingredients,
-        cuisine: recipes.cuisine,
-        proteinSource: recipes.proteinSource,
-        mealWeight: recipes.mealWeight,
-        householdId: recipes.householdId,
-      })
-        .from(recipes)
-        .where(and(
-          eq(recipes.isArchived, false),
-          householdRecipePool(tx, householdId),
-        ))
-    ),
-    withRls(db, accessToken, (tx) =>
-      tx.select({ mealId: mealFeedback.mealId, vote: mealFeedback.vote, signal: mealFeedback.signal })
-        .from(mealFeedback)
-        .where(and(eq(mealFeedback.householdId, householdId), eq(mealFeedback.userId, userId)))
-    ),
-    withRls(db, accessToken, (tx) =>
-      tx.select({ mealId: householdMealSignals.mealId, signal: householdMealSignals.signal })
-        .from(householdMealSignals)
-        .where(eq(householdMealSignals.householdId, householdId))
-    ),
-    withRls(db, accessToken, (tx) =>
-      tx.select({ weekStartDate: weekPlanProjections.weekStartDate, state: weekPlanProjections.state })
-        .from(weekPlanProjections)
-        .where(and(eq(weekPlanProjections.householdId, householdId), inArray(weekPlanProjections.weekStartDate, priorWeekStartDates)))
-    ),
-    withRls(db, accessToken, (tx) =>
-      tx.select({
-        weekStartDate: householdMealOutcomes.weekStartDate,
-        plannedRecipeId: householdMealOutcomes.plannedRecipeId,
-        status: householdMealOutcomes.status,
-        actualRecipeId: householdMealOutcomes.actualRecipeId,
-      })
-        .from(householdMealOutcomes)
-        .where(and(
-          eq(householdMealOutcomes.householdId, householdId),
-          inArray(householdMealOutcomes.weekStartDate, priorWeekStartDates),
-        ))
-    ),
-    withRls(db, accessToken, (tx) => tx
-      .select({ state: shoppingListProjections.state })
-      .from(shoppingListProjections)
-      .where(and(eq(shoppingListProjections.householdId, householdId), lte(shoppingListProjections.weekStartDate, weekStartDate)))
-      .orderBy(desc(shoppingListProjections.weekStartDate))
-      .limit(1)),
-    withRls(db, accessToken, (tx) => tx
-      .select({ date: householdPrepBatchAssignments.date, recipeId: householdPrepBatches.recipeId })
-      .from(householdPrepBatchAssignments)
-      .innerJoin(householdPrepBatches, eq(householdPrepBatchAssignments.batchId, householdPrepBatches.id))
-      .where(and(
-        eq(householdPrepBatches.householdId, householdId),
-        eq(householdPrepBatchAssignments.mealType, 'dinner'),
-        gte(householdPrepBatchAssignments.date, weekStartDate),
-        lte(householdPrepBatchAssignments.date, addDays(weekStartDate, 6)),
-      ))),
-    listWeekPulseRows(db, accessToken, householdId, weekStartDate),
-  ])
+  const [profileRows, projection, poolRecipes, feedbackRows, householdSignalRows, priorWeekProjections, outcomeRows, shoppingRows, prepAssignmentRows, pulseMemberRows] = await loadGenerationInputs(
+    { db, accessToken, userId, householdId },
+    weekStartDate,
+    priorWeekStartDates,
+  )
 
   const profile = profileRows[0] ?? null
   const selectedDayNames: z.infer<typeof dayOfWeek>[] = profile
@@ -1579,7 +1285,7 @@ export function buildWeekPlanRoutes(db: Db) {
     // Exactly one query, against the projection only — `getStreamProjection`
     // is what enforces the one rule the entire pattern hinges on (design doc
     // §2: "never replay the event log on the read path").
-    const projection = await getStreamProjection(db, accessToken, weekPlanProjections, { householdId, weekStartDate })
+    const projection = await selectWeekPlanProjection({ db, accessToken, householdId }, weekStartDate)
 
     if (!projection) return c.json({ error: 'No week plan found for this week' }, 404)
 

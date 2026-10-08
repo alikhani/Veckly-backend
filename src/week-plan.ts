@@ -1,14 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-import { and, eq } from 'drizzle-orm'
 import { requireAuth, type AuthedUser } from './auth.js'
-import { appendStreamEvent, StaleProjectionError } from './event-stream.js'
+import { StaleProjectionError } from './event-stream.js'
 import { assertMembership } from './membership.js'
-import { withRls } from './rls.js'
 import { releaseWeeklyGenerationBestEffort, reserveWeeklyGeneration, serverWeeklyUsagePeriodStart } from './ai-usage.js'
 import { resolveEntitlementForHousehold } from './entitlements.js'
 import { observePremiumGate, PremiumRequiredResponseSchema } from './premium-gates.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from './meal-history.js'
-import { householdWeekPlans, weekPlanEvents, weekPlanProjections } from './schema.js'
 import { readRecipeIngredients } from './ingredient-categories.js'
 import { pantryCoversIngredient } from './ingredient-identity.js'
 import { upsertMealOutcome } from './meal-outcomes.js'
@@ -38,7 +35,6 @@ import {
 import {
   addDays,
   defaultTodayForWeek,
-  getIsoWeekIdentity,
   isDateInWeek,
   isMonday,
   orderedDays,
@@ -72,7 +68,6 @@ import {
   WeekContextOverridesResponseSchema,
   WeekHistoryDetailSchema,
   WeekHistoryListItemSchema,
-  WeekHistoryPlanSchema,
   WeekHistoryQuerySchema,
   WeekPlanEventPayloadSchema,
   WeekPlanEventSchema,
@@ -92,6 +87,8 @@ import { contextOverrideItems, emptyProjectionState, foldEventIntoProjection, re
 import { deriveWeekExplanations } from './modules/week-plan/explanations.js'
 import { deriveWeekRescuePreview } from './modules/week-plan/rescue.js'
 import {
+  appendWeekPlanEvent,
+  finalizeWeekHistoryPlanRow,
   loadGenerationInputs,
   loadPreviousWeekInputs,
   loadWeekRescueInputs,
@@ -101,7 +98,8 @@ import {
   selectWeekHistoryPlans,
   selectWeekPlanEventPayloads,
   selectWeekPlanProjection,
-  toWeekHistoryPlanResponse,
+  type TUpsertWeekHistoryPlanResult,
+  upsertWeekHistoryPlanRow,
 } from './modules/week-plan/repository.js'
 
 // --- Routes ------------------------------------------------------------------
@@ -428,13 +426,8 @@ export async function upsertWeekContextOverride(
   date: string,
   override: TWeekContextOverride,
 ) {
-  await appendStreamEvent(
-    db,
-    accessToken,
-    { events: weekPlanEvents, projections: weekPlanProjections },
-    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+  await appendWeekPlanEvent({ db, accessToken, householdId },
     {
-      householdId,
       weekStartDate,
       causedBy: { source: 'user', userId },
       payload: { eventType: 'week_context_override_upserted', date, override },
@@ -451,13 +444,8 @@ export async function clearWeekContextOverride(
   weekStartDate: string,
   date: string,
 ) {
-  await appendStreamEvent(
-    db,
-    accessToken,
-    { events: weekPlanEvents, projections: weekPlanProjections },
-    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+  await appendWeekPlanEvent({ db, accessToken, householdId },
     {
-      householdId,
       weekStartDate,
       causedBy: { source: 'user', userId },
       payload: { eventType: 'week_context_override_cleared', date },
@@ -478,10 +466,6 @@ export async function getWeekHistoryPlan(db: Db, accessToken: string, householdI
   return selectWeekHistoryPlan({ db, accessToken, householdId }, weekStartDate)
 }
 
-type TUpsertWeekHistoryPlanResult =
-  | { outcome: 'saved'; plan: z.infer<typeof WeekHistoryPlanSchema> }
-  | { outcome: 'stale'; updatedAt: string | null }
-
 export async function upsertWeekHistoryPlan(
   db: Db,
   accessToken: string,
@@ -490,72 +474,11 @@ export async function upsertWeekHistoryPlan(
   weekStartDate: string,
   input: z.infer<typeof UpsertWeekHistoryPlanSchema>,
 ): Promise<TUpsertWeekHistoryPlanResult> {
-  return withRls(db, accessToken, async (tx) => {
-    const [existing] = await tx
-      .select({ updatedAt: householdWeekPlans.updatedAt })
-      .from(householdWeekPlans)
-      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
-      .limit(1)
-
-    const currentUpdatedAt = existing?.updatedAt.toISOString() ?? null
-    if (input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== currentUpdatedAt) {
-      return { outcome: 'stale', updatedAt: currentUpdatedAt }
-    }
-
-    const iso = getIsoWeekIdentity(weekStartDate)
-    const now = new Date()
-    const [row] = await tx
-      .insert(householdWeekPlans)
-      .values({
-        householdId,
-        weekStartDate,
-        weekNumber: iso.weekNumber,
-        weekYear: iso.weekYear,
-        timezone: input.timezone,
-        state: input.state,
-        status: input.status,
-        source: input.source,
-        updatedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [householdWeekPlans.householdId, householdWeekPlans.weekStartDate],
-        set: {
-          weekNumber: iso.weekNumber,
-          weekYear: iso.weekYear,
-          timezone: input.timezone,
-          state: input.state,
-          status: input.status,
-          source: input.source,
-          updatedBy: userId,
-          updatedAt: now,
-        },
-      })
-      .returning()
-
-    if (!row) throw new Error('Upsert did not return the persisted week history plan')
-    return { outcome: 'saved', plan: toWeekHistoryPlanResponse(row) }
-  })
+  return upsertWeekHistoryPlanRow({ db, accessToken, userId, householdId }, weekStartDate, input)
 }
 
 export async function finalizeWeekHistoryPlan(db: Db, accessToken: string, userId: string, householdId: string, weekStartDate: string) {
-  return withRls(db, accessToken, async (tx) => {
-    const [existing] = await tx
-      .select({ householdId: householdWeekPlans.householdId })
-      .from(householdWeekPlans)
-      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
-      .limit(1)
-
-    if (!existing) return null
-
-    const [row] = await tx
-      .update(householdWeekPlans)
-      .set({ status: 'finalized', updatedBy: userId, updatedAt: new Date() })
-      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
-      .returning()
-
-    return row ? toWeekHistoryPlanResponse(row) : null
-  })
+  return finalizeWeekHistoryPlanRow({ db, accessToken, userId, householdId }, weekStartDate)
 }
 
 export async function previewWeekRescue(db: Db, accessToken: string, householdId: string, weekStartDate: string, request: TWeekRescueRequest) {
@@ -621,12 +544,8 @@ async function applyWeekRescueOnce(db: Db, accessToken: string, userId: string, 
 
   const preview = await previewWeekRescue(db, accessToken, householdId, weekStartDate, request)
   if ('error' in preview) return preview
-  await appendStreamEvent(
-    db,
-    accessToken,
-    { events: weekPlanEvents, projections: weekPlanProjections },
-    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-    { householdId, weekStartDate, causedBy: { source: 'user', userId }, payload: {
+  await appendWeekPlanEvent({ db, accessToken, householdId },
+    { weekStartDate, causedBy: { source: 'user', userId }, payload: {
       eventType: 'week_rescued', rescueId: request.rescueId, rescueReason: request.intent,
       changes: [preview.primaryChange, ...preview.followUpChanges],
       shoppingDiff: preview.shoppingDiff,
@@ -910,8 +829,8 @@ async function applyPreviousWeekProposalOnce(
   }
   const proposal = await previewPreviousWeekProposal(db, accessToken, userId, householdId, weekStartDate, request)
   if ('error' in proposal) return proposal
-  await appendStreamEvent(db, accessToken, { events: weekPlanEvents, projections: weekPlanProjections }, { fold: foldEventIntoProjection, emptyState: emptyProjectionState }, {
-    householdId, weekStartDate,
+  await appendWeekPlanEvent({ db, accessToken, householdId }, {
+    weekStartDate,
     causedBy: { source: 'algorithm', algorithmVersion: '2.0', triggeredByUserId: userId },
     payload: { eventType: 'previous_week_reused', proposalId: proposal.proposalId, sourceWeekStartDate: proposal.sourceWeekStartDate, days: proposal.days },
     expectedUpdatedAt: proposal.expectedUpdatedAt,
@@ -1056,11 +975,8 @@ export async function doGenerateWeekPlan(
   const causedBy = { source: 'algorithm' as const, algorithmVersion: '2.0', triggeredByUserId: userId }
 
   if (!projState.weekStarted) {
-    await appendStreamEvent(
-      db, accessToken,
-      { events: weekPlanEvents, projections: weekPlanProjections },
-      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy, payload: { eventType: 'week_started' } },
+    await appendWeekPlanEvent({ db, accessToken, householdId },
+      { weekStartDate, causedBy, payload: { eventType: 'week_started' } },
     )
   }
 
@@ -1068,11 +984,8 @@ export async function doGenerateWeekPlan(
     const day = orderedDays[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7]
     if (!day) continue
     if (!selectedDayNames.includes(day) || projState.skippedDays.includes(day) || projState.lockedDays.includes(day) || projState.meals[day]) continue
-    await appendStreamEvent(
-      db, accessToken,
-      { events: weekPlanEvents, projections: weekPlanProjections },
-      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy, payload: { eventType: 'day_skipped', dayOfWeek: day } },
+    await appendWeekPlanEvent({ db, accessToken, householdId },
+      { weekStartDate, causedBy, payload: { eventType: 'day_skipped', dayOfWeek: day } },
     )
   }
 
@@ -1113,12 +1026,8 @@ export async function doGenerateWeekPlan(
       if (wishedMeal && recipeMatchesWish(next.title, wishedMeal)) remainingWishedMeals.splice(index, 1)
     }
     updateWeekContext(weekCtx, next)
-    await appendStreamEvent(
-      db, accessToken,
-      { events: weekPlanEvents, projections: weekPlanProjections },
-      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+    await appendWeekPlanEvent({ db, accessToken, householdId },
       {
-        householdId,
         weekStartDate,
         causedBy,
         payload: {
@@ -1251,12 +1160,8 @@ export function buildWeekPlanRoutes(db: Db) {
       return c.json({ error: 'INVALID_WEEK_CONTEXT_DATE' } as never, 400)
     }
 
-    const event = await appendStreamEvent(
-      db,
-      accessToken,
-      { events: weekPlanEvents, projections: weekPlanProjections },
-      { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
-      { householdId, weekStartDate, causedBy, payload: payload as z.infer<typeof WeekPlanEventPayloadSchema> },
+    const event = await appendWeekPlanEvent({ db, accessToken, householdId },
+      { weekStartDate, causedBy, payload: payload as z.infer<typeof WeekPlanEventPayloadSchema> },
     )
 
     return c.json(

@@ -1,14 +1,21 @@
 import { and, desc, eq, gte, inArray, lt, lte, or } from 'drizzle-orm'
 import type { z } from 'zod'
 import type { Db } from '../../db.js'
-import { getStreamProjection } from '../../event-stream.js'
+import { appendStreamEvent, getStreamProjection } from '../../event-stream.js'
 import type { RequestContext } from '../../platform/http-errors.js'
 import { withRls } from '../../rls.js'
 import { householdMealOutcomes, householdMealSignals, householdMemberships, householdPortionMemories, householdPrepBatchAssignments, householdPrepBatches, householdProfiles, householdSavedRecipes, householdWeekPlans, householdWeekPulses, households, mealFeedback, recipes, shoppingListProjections, userProfiles, weekPlanEvents, weekPlanProjections } from '../../schema.js'
-import { addDays, orderedDays } from '../../shared/week-dates.js'
+import { addDays, getIsoWeekIdentity, orderedDays } from '../../shared/week-dates.js'
 import { listWeekPulseRows } from '../../week-pulse.js'
-import { readProjectionState } from './projection.js'
-import type { WeekHistoryListItemSchema, WeekHistoryPlanSchema, WeekHistoryStateSchema } from './schemas.js'
+import { emptyProjectionState, foldEventIntoProjection, readProjectionState } from './projection.js'
+import type {
+  CausedBySchema,
+  UpsertWeekHistoryPlanSchema,
+  WeekHistoryListItemSchema,
+  WeekHistoryPlanSchema,
+  WeekHistoryStateSchema,
+  WeekPlanEventPayloadSchema,
+} from './schemas.js'
 
 // Every function here runs under the caller's RLS identity. Reads that never
 // need the caller's own id take the narrower household scope; a full
@@ -414,4 +421,102 @@ export function loadGenerationInputs(ctx: RequestContext, weekStartDate: string,
       ))),
     listWeekPulseRows(db, accessToken, householdId, weekStartDate),
   ])
+}
+
+export function appendWeekPlanEvent(
+  ctx: HouseholdScope,
+  args: {
+    weekStartDate: string
+    causedBy: z.infer<typeof CausedBySchema>
+    payload: z.infer<typeof WeekPlanEventPayloadSchema>
+    expectedUpdatedAt?: string | null
+  },
+) {
+  return appendStreamEvent(
+    ctx.db,
+    ctx.accessToken,
+    { events: weekPlanEvents, projections: weekPlanProjections },
+    { fold: foldEventIntoProjection, emptyState: emptyProjectionState },
+    { householdId: ctx.householdId, ...args },
+  )
+}
+
+export type TUpsertWeekHistoryPlanResult =
+  | { outcome: 'saved'; plan: z.infer<typeof WeekHistoryPlanSchema> }
+  | { outcome: 'stale'; updatedAt: string | null }
+
+// One transaction: the stale check and the write see the same row.
+export async function upsertWeekHistoryPlanRow(
+  ctx: RequestContext,
+  weekStartDate: string,
+  input: z.infer<typeof UpsertWeekHistoryPlanSchema>,
+): Promise<TUpsertWeekHistoryPlanResult> {
+  const { db, accessToken, userId, householdId } = ctx
+  return withRls(db, accessToken, async (tx) => {
+    const [existing] = await tx
+      .select({ updatedAt: householdWeekPlans.updatedAt })
+      .from(householdWeekPlans)
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    const currentUpdatedAt = existing?.updatedAt.toISOString() ?? null
+    if (input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== currentUpdatedAt) {
+      return { outcome: 'stale', updatedAt: currentUpdatedAt }
+    }
+
+    const iso = getIsoWeekIdentity(weekStartDate)
+    const now = new Date()
+    const [row] = await tx
+      .insert(householdWeekPlans)
+      .values({
+        householdId,
+        weekStartDate,
+        weekNumber: iso.weekNumber,
+        weekYear: iso.weekYear,
+        timezone: input.timezone,
+        state: input.state,
+        status: input.status,
+        source: input.source,
+        updatedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [householdWeekPlans.householdId, householdWeekPlans.weekStartDate],
+        set: {
+          weekNumber: iso.weekNumber,
+          weekYear: iso.weekYear,
+          timezone: input.timezone,
+          state: input.state,
+          status: input.status,
+          source: input.source,
+          updatedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!row) throw new Error('Upsert did not return the persisted week history plan')
+    return { outcome: 'saved', plan: toWeekHistoryPlanResponse(row) }
+  })
+}
+
+export async function finalizeWeekHistoryPlanRow(ctx: RequestContext, weekStartDate: string) {
+  const { db, accessToken, userId, householdId } = ctx
+  return withRls(db, accessToken, async (tx) => {
+    const [existing] = await tx
+      .select({ householdId: householdWeekPlans.householdId })
+      .from(householdWeekPlans)
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .limit(1)
+
+    if (!existing) return null
+
+    const [row] = await tx
+      .update(householdWeekPlans)
+      .set({ status: 'finalized', updatedBy: userId, updatedAt: new Date() })
+      .where(and(eq(householdWeekPlans.householdId, householdId), eq(householdWeekPlans.weekStartDate, weekStartDate)))
+      .returning()
+
+    return row ? toWeekHistoryPlanResponse(row) : null
+  })
 }

@@ -3,7 +3,6 @@ import type { z } from 'zod'
 import { resolveEntitlementForHousehold } from '../../entitlements.js'
 import { pantryCoversIngredient } from '../../ingredient-identity.js'
 import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory } from '../../meal-history.js'
-import { assertMembership } from '../../membership.js'
 import { mergeDayPlanningContext } from '../../planning-context.js'
 import type { RequestContext } from '../../platform/http-errors.js'
 import { observePremiumGate, type PremiumRequiredBody } from '../../premium-gates.js'
@@ -32,10 +31,9 @@ export async function doGenerateWeekPlan(
   regenerate: boolean,
   today = defaultTodayForWeek(weekStartDate),
   pantryItemKeys: string[] = [],
-): Promise<{ ok: true; generated: boolean } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' } | { error: 'NOT_MEMBER' }> {
-  const { db, accessToken, userId, householdId } = ctx
-  const member = await assertMembership(db, accessToken, householdId, userId)
-  if (!member) return { error: 'NOT_MEMBER' as const }
+): Promise<{ ok: true; generated: boolean } | { error: 'NO_RECIPES' } | { error: 'ALL_RECIPES_EXCLUDED' }> {
+  // `ctx` comes from `requireHouseholdMember`, so membership is already checked.
+  const { userId, householdId } = ctx
 
   // Up to 6 prior Monday-start weeks — feeds both recency (last 1-2 weeks)
   // and fatigue detection (needs ≥4 weeks of history; see week-scoring.ts).
@@ -238,7 +236,7 @@ export async function generateWeek(
   ctx: RequestContext,
   weekStartDate: string,
   input: { regenerate: boolean; today: string; pantryItemKeys: string[] },
-): Promise<{ gate: PremiumRequiredBody } | { error: 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' | 'NOT_MEMBER' } | { ok: true }> {
+): Promise<{ gate: PremiumRequiredBody } | { error: 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' } | { ok: true }> {
   const { db, userId, householdId } = ctx
   const { regenerate, today, pantryItemKeys } = input
   // Product date behavior follows the device-local header, but billing usage

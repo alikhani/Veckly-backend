@@ -28,6 +28,7 @@ import { deriveWeekExplanations } from '../src/modules/week-plan/explanations.js
 import { deriveWeekRescuePreview } from '../src/modules/week-plan/rescue.js'
 import { recipeMatchesAvoided } from '../src/shared/recipe-matching.js'
 import { requestToday } from '../src/shared/week-dates.js'
+import { assertMembership } from '../src/membership.js'
 import { fakeAccessToken } from './fake-access-token.js'
 
 // The HTTP-level tests need an authenticated caller. `requireAuth` verifies the
@@ -46,6 +47,12 @@ vi.mock('@supabase/supabase-js', () => ({
     },
   }),
 }))
+
+// Counts membership checks per request; the real check still runs.
+vi.mock('../src/membership.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/membership.js')>()
+  return { assertMembership: vi.fn(actual.assertMembership) }
+})
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -2386,6 +2393,13 @@ describeWithDb('Week-plan event log + projection', () => {
     it('returns stale history details as 409 through the route', async () => {
       const path = `/households/${householdAId}/week-plans/${weekStartDate}/history`
       await expectResponse(await call(userA, 'PATCH', path, { timezone: 'Europe/Stockholm', state: baseHistoryState, expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }), 409, { error: 'STALE_WEEK_PLAN_STATE', updatedAt: null })
+    })
+
+    it('checks membership once per generate request', async () => {
+      vi.mocked(assertMembership).mockClear()
+      const path = `/households/${householdAId}/week-plans/${weekStartDate}/generate`
+      await expectResponse(await call(userA, 'POST', path, {}, { 'X-Veckly-Today': weekStartDate }), 422, { error: 'NO_RECIPES' })
+      expect(assertMembership).toHaveBeenCalledTimes(1)
     })
 
     it('releases the generation reservation when generation answers NO_RECIPES', async () => {

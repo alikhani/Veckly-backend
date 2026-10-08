@@ -442,7 +442,6 @@ export function buildWeekPlanRoutes(db: Db) {
     const today = requestToday(c.req.header('X-Veckly-Today'))
     const result = await generateWeek(ctx, weekStartDate, { regenerate, today, pantryItemKeys })
     if ('gate' in result) throw new ApiError(403, result.gate)
-    if ('error' in result && result.error === 'NOT_MEMBER') throw new ApiError(404, 'NOT_MEMBER')
     if ('error' in result) throw new ApiError(422, result.error)
     return c.json({ ok: true }, 200)
   })

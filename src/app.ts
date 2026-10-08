@@ -26,6 +26,7 @@ import { buildEntitlementRoutes } from './entitlement-routes.js'
 import { buildAppStoreBillingRoutes } from './app-store-billing-routes.js'
 import { buildWeekPulseRoutes } from './week-pulse.js'
 import type { Db } from './db.js'
+import { ApiError } from './platform/http-errors.js'
 
 export function buildApp(db: Db) {
   const app = new OpenAPIHono()
@@ -94,6 +95,7 @@ export function buildApp(db: Db) {
   app.get('/health', (c) => c.json({ status: 'ok' }))
 
   app.onError((err, c) => {
+    if (err instanceof ApiError) return c.json(err.body, err.status)
     console.error('Unhandled error', err)
     return c.json({ error: 'Internal server error' }, 500)
   })

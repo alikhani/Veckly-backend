@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { createDb } from '../src/db.js'
@@ -13,6 +13,23 @@ import {
   type TShoppingListProjectionState,
 } from '../src/shopping-list.js'
 import { fakeAccessToken } from './fake-access-token.js'
+
+// The HTTP-level tests need an authenticated caller. `requireAuth` verifies the
+// bearer token with Supabase; stub that single call so a fake access token
+// resolves to its `sub` claim, exactly as `withRls` decodes it.
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: () => ({
+    auth: {
+      getUser: async (token: string) => {
+        const payload = token.split('.')[1]
+        const sub = payload ? (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sub?: string }).sub : undefined
+        return sub
+          ? { data: { user: { id: sub } }, error: null }
+          : { data: { user: null }, error: new Error('Invalid token') }
+      },
+    },
+  }),
+}))
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 
@@ -905,6 +922,154 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect(summary?.groups).toEqual([
         { category: 'Pantry', items: [{ itemKey: 'pantry:butter:g', label: 'butter', amount: '300', unit: 'g', checked: false, isCustom: false }] },
       ])
+    })
+  })
+  // Characterization of the shopping-list routes' HTTP error paths, end to end
+  // through `buildApp`. These lock today's exact status codes, bodies and check
+  // order — none of these routes validates that weekStartDate is a Monday, and
+  // request validation (params + body) runs before the membership check — so
+  // moving the handlers into a module cannot change the contract unnoticed.
+  describe('(g) HTTP error paths', () => {
+    const tuesday = '2026-06-09'
+    const validState = { checkedItems: ['rice:g'], pantryStock: {}, customItems: [] }
+    const validEvent = { causedBy: { source: 'user', userId: userA }, eventType: 'list_started' }
+
+    function call(userId: string | null, method: string, path: string, body?: unknown) {
+      return buildApp(db).request(path, {
+        method,
+        headers: {
+          ...(userId === null ? {} : { Authorization: `Bearer ${fakeAccessToken(userId)}` }),
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    }
+
+    async function expectResponse(response: Response, status: number, body: unknown) {
+      expect({ status: response.status, body: await response.json() }).toEqual({ status, body })
+    }
+
+    const base = (householdId: string, week: string) => `/households/${householdId}/shopping-lists/${week}`
+    const routes = (householdId: string, week: string): Array<[string, string, unknown?]> => [
+      ['POST', `${base(householdId, week)}/events`, validEvent],
+      ['GET', base(householdId, week)],
+      ['GET', `${base(householdId, week)}/summary`],
+      ['GET', `${base(householdId, week)}/state`],
+      ['PATCH', `${base(householdId, week)}/state`, { state: validState }],
+    ]
+
+    it('returns 401 from every route when no bearer token is supplied', async () => {
+      for (const [method, path, body] of routes(householdAId, weekStartDate)) {
+        const response = await call(null, method, path, body)
+        expect({ method, path, status: response.status }).toEqual({ method, path, status: 401 })
+      }
+    })
+
+    it('returns 404 NOT_MEMBER from every route for a non-member, without writing anything', async () => {
+      for (const [method, path, body] of routes(householdBId, weekStartDate)) {
+        await expectResponse(await call(userA, method, path, body), 404, { error: 'NOT_MEMBER' })
+      }
+      const events = await db.select().from(shoppingListEvents)
+      const projections = await db.select().from(shoppingListProjections)
+      expect({ events, projections }).toEqual({ events: [], projections: [] })
+    })
+
+    it('returns 404 NOT_MEMBER for a non-member on a non-Monday week (no Monday check on any route)', async () => {
+      for (const [method, path, body] of routes(householdBId, tuesday)) {
+        await expectResponse(await call(userA, method, path, body), 404, { error: 'NOT_MEMBER' })
+      }
+    })
+
+    it('accepts a non-Monday weekStartDate for a member on every route', async () => {
+      await expectResponse(await call(userA, 'GET', base(householdAId, tuesday)), 404, { error: 'No shopping list found for this week' })
+      await expectResponse(await call(userA, 'GET', `${base(householdAId, tuesday)}/state`), 200, { state: null, updatedAt: null })
+
+      const summary = await call(userA, 'GET', `${base(householdAId, tuesday)}/summary`)
+      expect(summary.status).toBe(200)
+      expect(await summary.json()).toEqual({
+        household: { id: householdAId, name: 'Household A' },
+        weekStartDate: tuesday,
+        updatedAt: null,
+        groups: [],
+      })
+
+      const appended = await call(userA, 'POST', `${base(householdAId, tuesday)}/events`, validEvent)
+      expect(appended.status).toBe(201)
+      expect(await appended.json()).toMatchObject({ householdId: householdAId, weekStartDate: tuesday, sequenceNumber: 1, eventType: 'list_started', payload: {} })
+
+      const patched = await call(userA, 'PATCH', `${base(householdAId, tuesday)}/state`, { state: validState })
+      expect(patched.status).toBe(200)
+      expect(await patched.json()).toMatchObject({ ok: true })
+    })
+
+    it('returns 404 with the free-text body when a member reads a list that has not started', async () => {
+      await expectResponse(await call(userA, 'GET', base(householdAId, weekStartDate)), 404, { error: 'No shopping list found for this week' })
+    })
+
+    it('rejects a malformed weekStartDate or householdId with 400 before the membership check', async () => {
+      for (const [method, path, body] of [
+        ...routes(householdBId, '2026-6-8'),
+        ...routes('not-a-uuid', weekStartDate),
+      ]) {
+        const response = await call(userA, method, path, body)
+        expect({ method, path, status: response.status }).toEqual({ method, path, status: 400 })
+        expect(await response.json()).toMatchObject({ success: false })
+      }
+    })
+
+    it('rejects an invalid body with 400 before the membership check', async () => {
+      for (const householdId of [householdAId, householdBId]) {
+        for (const [path, body] of [
+          [`${base(householdId, weekStartDate)}/events`, { causedBy: { source: 'user', userId: userA }, eventType: 'not_an_event' }],
+          [`${base(householdId, weekStartDate)}/events`, { eventType: 'list_started' }],
+          [`${base(householdId, weekStartDate)}/events`, { causedBy: { source: 'user', userId: userA }, eventType: 'item_checked', itemKey: '', checked: true }],
+        ] as const) {
+          const response = await call(userA, 'POST', path, body)
+          expect({ householdId, body, status: response.status }).toEqual({ householdId, body, status: 400 })
+          expect(await response.json()).toMatchObject({ success: false })
+        }
+        for (const body of [{}, { state: { checkedItems: 'rice:g', pantryStock: {} } }, { state: validState, expectedUpdatedAt: 42 }]) {
+          const response = await call(userA, 'PATCH', `${base(householdId, weekStartDate)}/state`, body)
+          expect({ householdId, body, status: response.status }).toEqual({ householdId, body, status: 400 })
+          expect(await response.json()).toMatchObject({ success: false })
+        }
+      }
+      expect(await db.select().from(shoppingListEvents)).toEqual([])
+    })
+
+    it('returns 409 STALE_SHOPPING_STATE with the current updatedAt when expectedUpdatedAt is stale', async () => {
+      const created = await call(userA, 'PATCH', `${base(householdAId, weekStartDate)}/state`, { state: validState, expectedUpdatedAt: null })
+      expect(created.status).toBe(200)
+      const { updatedAt } = await created.json() as { updatedAt: string }
+      expect(typeof updatedAt).toBe('string')
+
+      const stale = await call(userA, 'PATCH', `${base(householdAId, weekStartDate)}/state`, {
+        state: { checkedItems: [], pantryStock: {}, customItems: [] },
+        expectedUpdatedAt: '2026-04-06T04:00:00.000Z',
+      })
+      await expectResponse(stale, 409, { error: 'STALE_SHOPPING_STATE', updatedAt })
+
+      // A first write with a non-null expectation is stale against "no state yet".
+      await db.execute(sql`delete from "shopping_list_events"`)
+      await db.execute(sql`delete from "shopping_list_projections"`)
+      await expectResponse(
+        await call(userA, 'PATCH', `${base(householdAId, weekStartDate)}/state`, { state: validState, expectedUpdatedAt: updatedAt }),
+        409,
+        { error: 'STALE_SHOPPING_STATE', updatedAt: null },
+      )
+    })
+
+    it('clears state through PATCH with state null and reports updatedAt null', async () => {
+      await call(userA, 'PATCH', `${base(householdAId, weekStartDate)}/state`, { state: validState })
+      await expectResponse(await call(userA, 'PATCH', `${base(householdAId, weekStartDate)}/state`, { state: null }), 200, { ok: true, updatedAt: null })
+      await expectResponse(await call(userA, 'GET', `${base(householdAId, weekStartDate)}/state`), 200, { state: null, updatedAt: null })
+    })
+
+    it('sends Cache-Control no-store on the summary and on its NOT_MEMBER error', async () => {
+      const ok = await call(userA, 'GET', `${base(householdAId, weekStartDate)}/summary`)
+      expect({ status: ok.status, cacheControl: ok.headers.get('Cache-Control') }).toEqual({ status: 200, cacheControl: 'no-store' })
+      const notMember = await call(userA, 'GET', `${base(householdBId, weekStartDate)}/summary`)
+      expect({ status: notMember.status, cacheControl: notMember.headers.get('Cache-Control') }).toEqual({ status: 404, cacheControl: 'no-store' })
     })
   })
 })

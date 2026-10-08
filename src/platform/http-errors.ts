@@ -44,8 +44,12 @@ export const ValidationIssueSchema = z.object({
   message: z.string(),
 }).openapi('ValidationIssue')
 
+// `error` is published as an open enum (`anyOf: [ErrorCode, string]`): clients get
+// the typed code when they know it, and a build already in users' hands still
+// decodes a code added after it shipped instead of failing the whole response.
+// The server side stays strict — `ApiError` only accepts `ErrorCode`.
 export const ErrorResponseSchema = z.object({
-  error: ErrorCodeSchema,
+  error: z.union([ErrorCodeSchema, z.string()]),
   issues: z.array(ValidationIssueSchema).optional(),
 }).openapi('ErrorResponse')
 

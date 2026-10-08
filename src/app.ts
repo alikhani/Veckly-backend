@@ -99,6 +99,10 @@ export function buildApp(db: Db) {
 
   app.get('/health', (c) => c.json({ status: 'ok' }))
 
+  // JSON, not Hono's text/plain default: a client built against a newer
+  // contract than the deployed backend still decodes this as a 404.
+  app.notFound((c) => c.json({ error: 'ROUTE_NOT_FOUND' }, 404))
+
   app.onError((err, c) => {
     if (err instanceof ApiError) return c.json(err.body, err.status)
     // Hono's request validator throws a 400 HTTPException when a JSON body

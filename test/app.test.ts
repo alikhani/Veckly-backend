@@ -55,6 +55,26 @@ describe('app-level HTTP contracts', () => {
   })
 })
 
+describe('forward-compatible error contract', () => {
+  const app = buildApp({} as Db)
+
+  it('publishes ErrorResponse.error as an open enum so shipped clients decode codes added later', async () => {
+    const spec = await (await app.request('/openapi.json')).json() as {
+      components: { schemas: Record<string, { properties: Record<string, unknown> }> }
+    }
+    expect(spec.components.schemas.ErrorResponse!.properties.error).toEqual({
+      anyOf: [{ $ref: '#/components/schemas/ErrorCode' }, { type: 'string' }],
+    })
+  })
+
+  it('answers an unknown route with a JSON 404 body', async () => {
+    const response = await app.request('/no-such-route')
+    expect(response.status).toBe(404)
+    expect(response.headers.get('Content-Type')).toContain('application/json')
+    expect(await response.json()).toEqual({ error: 'ROUTE_NOT_FOUND' })
+  })
+})
+
 describe('ApiError mapping', () => {
   // Mirrors how feature modules mount: an OpenAPIHono sub-app with its own
   // middleware, no `onError` of its own, mounted with `app.route('/', ...)`.

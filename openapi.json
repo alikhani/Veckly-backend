@@ -62,7 +62,14 @@
         "type": "object",
         "properties": {
           "error": {
-            "$ref": "#/components/schemas/ErrorCode"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "issues": {
             "type": "array",

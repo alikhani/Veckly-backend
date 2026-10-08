@@ -72,6 +72,10 @@ app.openapi(route, async (c) => {
 
 Every expected failure from a module answers `{ error: ErrorCode }` (`ErrorResponse` in OpenAPI).
 `ErrorCode` is one enum in `platform/http-errors.ts`; add a code there before using it.
+In OpenAPI, `ErrorResponse.error` is an **open enum** (`anyOf: [ErrorCode, string]`), so app builds
+already in users' hands still decode a code added later. Adding a code to `ErrorCode` is therefore
+safe. Changing an operation's status code, or adding a value to one of the subset enums (below), is
+not: subset enums are closed in the generated Swift, so shipped builds fail to decode the new value.
 
 - Throw `new ApiError(status, 'CODE')` for expected failures; it is mapped in `app.onError`. The code is
   typed, so an unknown code does not compile. Extra fields go in the third argument

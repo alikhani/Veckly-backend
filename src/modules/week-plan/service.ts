@@ -7,7 +7,7 @@ import { upsertMealOutcome } from '../../meal-outcomes.js'
 import { mergeDayPlanningContext, type TWeekContextOverride } from '../../planning-context.js'
 import type { HouseholdScope, RequestContext } from '../../platform/http-errors.js'
 import { derivePortionSuggestion } from '../../portion-memory.js'
-import { observePremiumGate } from '../../premium-gates.js'
+import { observePremiumGate, type PremiumRequiredBody } from '../../premium-gates.js'
 import { readIngredientArray, readStringArray, recipeMatchesAvoided } from '../../shared/recipe-matching.js'
 import { addDays, orderedDays } from '../../shared/week-dates.js'
 import {
@@ -474,7 +474,10 @@ async function applyPreviousWeekProposalOnce(
 
 // The history list plus the premium gate for weeks older than the free
 // window. Membership and range validation happen before this is called.
-export async function listWeekHistory(ctx: RequestContext, range: { from?: string; to?: string }) {
+export async function listWeekHistory(
+  ctx: RequestContext,
+  range: { from?: string; to?: string },
+): Promise<{ gate: PremiumRequiredBody } | { plans: Awaited<ReturnType<typeof listWeekHistoryPlans>> }> {
   const { db, userId, householdId } = ctx
   const plans = await listWeekHistoryPlans(ctx, range)
   // Four most recent calendar weeks remain free. Shadow only for now.

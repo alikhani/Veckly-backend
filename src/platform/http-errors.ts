@@ -1,6 +1,6 @@
 import type { Db } from '../db.js'
 import { assertMembership } from '../membership.js'
-import { isMonday } from '../shared/week-dates.js'
+import { isDateInWeek, isMonday } from '../shared/week-dates.js'
 
 // A typed error a route (or the use case it calls) throws instead of
 // returning an error response. `app.onError` in app.ts maps it to
@@ -33,4 +33,8 @@ export async function requireHouseholdMember(
 
 export function requireMonday(date: string, error: { status: 400 | 422; code: string }) {
   if (!isMonday(date)) throw new ApiError(error.status, { error: error.code })
+}
+
+export function requireDateInWeek(weekStartDate: string, date: string, error: { status: 400 | 422; code: string }) {
+  if (!isDateInWeek(weekStartDate, date)) throw new ApiError(error.status, { error: error.code })
 }

@@ -6,7 +6,7 @@ import { detectConfirmedFatiguedMeals, recipeIdsFromRecords, resolveMealHistory 
 import { assertMembership } from '../../membership.js'
 import { mergeDayPlanningContext } from '../../planning-context.js'
 import type { RequestContext } from '../../platform/http-errors.js'
-import { observePremiumGate } from '../../premium-gates.js'
+import { observePremiumGate, type PremiumRequiredBody } from '../../premium-gates.js'
 import { readIngredientArray, readStringArray, recipeMatchesAvoided } from '../../shared/recipe-matching.js'
 import { addDays, defaultTodayForWeek, orderedDays } from '../../shared/week-dates.js'
 import {
@@ -238,7 +238,7 @@ export async function generateWeek(
   ctx: RequestContext,
   weekStartDate: string,
   input: { regenerate: boolean; today: string; pantryItemKeys: string[] },
-) {
+): Promise<{ gate: PremiumRequiredBody } | { error: 'NO_RECIPES' | 'ALL_RECIPES_EXCLUDED' | 'NOT_MEMBER' } | { ok: true }> {
   const { db, userId, householdId } = ctx
   const { regenerate, today, pantryItemKeys } = input
   // Product date behavior follows the device-local header, but billing usage

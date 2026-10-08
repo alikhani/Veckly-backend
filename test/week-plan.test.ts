@@ -2257,6 +2257,7 @@ describeWithDb('Week-plan event log + projection', () => {
     const notMember: TExpected = [404, { error: 'NOT_MEMBER' }]
     const noPlan: TExpected = [422, { error: 'NO_PLAN' }]
 
+    // Every route checks validation, then the Monday week, then membership.
     // [method, path suffix after the week segment, body,
     //  non-member + non-Monday, non-member + Monday, member + non-Monday]
     const routes: Array<[string, string, unknown, TExpected, TExpected, TExpected]> = [
@@ -2271,16 +2272,13 @@ describeWithDb('Week-plan event log + projection', () => {
       ['POST', '/rescue/apply', rescueBody, invalidWeek, notMember, invalidWeek],
       ['POST', '/previous-week/preview', proposalBody, invalidWeek, notMember, invalidWeek],
       ['POST', '/previous-week/apply', proposalBody, invalidWeek, notMember, invalidWeek],
-      // Membership is checked first here.
-      ['GET', '/history', undefined, notMember, notMember, invalidWeek],
-      // Membership is checked first here.
-      ['PATCH', '/history', { timezone: 'Europe/Stockholm', state: baseHistoryState }, notMember, notMember, invalidWeek],
-      // The Monday check runs first here.
+      ['GET', '/history', undefined, invalidWeek, notMember, invalidWeek],
+      ['PATCH', '/history', { timezone: 'Europe/Stockholm', state: baseHistoryState }, invalidWeek, notMember, invalidWeek],
       ['POST', '/finalize', undefined, invalidWeek, notMember, invalidWeek],
     ]
 
     for (const [method, suffix, body, nonMemberNonMonday, nonMemberMonday, memberNonMonday] of routes) {
-      it(`${method} week-plans/{week}${suffix} keeps its error statuses, bodies, and check order`, async () => {
+      it(`${method} week-plans/{week}${suffix} answers with its error statuses, bodies, and check order`, async () => {
         const path = (week: string) => `/households/${householdAId}/week-plans/${week}${suffix}`
         await expectResponse(await call(userB, method, path(tuesday), body), ...nonMemberNonMonday)
         await expectResponse(await call(userB, method, path(weekStartDate), body), ...nonMemberMonday)
@@ -2323,8 +2321,9 @@ describeWithDb('Week-plan event log + projection', () => {
       expect(await response.json()).toMatchObject({ success: false })
     })
 
-    it('checks membership before the history range', async () => {
-      await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), ...notMember)
+    it('checks the history range before membership', async () => {
+      await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })
+      await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${weekStartDate}`), ...notMember)
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?to=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${weekStartDate}`), 200, [])
@@ -2347,8 +2346,14 @@ describeWithDb('Week-plan event log + projection', () => {
       await expectResponse(await call(userA, 'POST', `/households/${householdAId}/week-plans/${weekStartDate}/previous-week/apply`, proposalBody), 422, { error: 'NO_RECIPES' })
     })
 
-    it('rejects a context date outside the week for members', async () => {
+    it('rejects a context date outside the week before membership', async () => {
       const base = `/households/${householdAId}/week-plans/${weekStartDate}`
+      await expectResponse(await call(userB, 'POST', `${base}/events`, {
+        causedBy: { source: 'user', userId: userB },
+        eventType: 'week_context_override_cleared',
+        date: '2026-06-15',
+      }), ...invalidContextDate)
+      await expectResponse(await call(userB, 'PUT', `${base}/context-overrides/2026-06-15`, { effortLevel: 'busy' }), ...invalidContextDate)
       await expectResponse(await call(userA, 'PUT', `${base}/context-overrides/2026-06-15`, { effortLevel: 'busy' }), ...invalidContextDate)
       await expectResponse(await call(userA, 'DELETE', `${base}/context-overrides/2026-06-15`), ...invalidContextDate)
       await expectResponse(await call(userA, 'POST', `${base}/events`, {

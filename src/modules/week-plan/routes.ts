@@ -397,9 +397,8 @@ function toWeekPlanProjectionResponse(projection: PersistedStreamProjection) {
 }
 
 // Every household route checks the caller's membership before any use case
-// runs (authenticate -> authorize -> repository). The order of the Monday
-// check and the membership check differs per route and is kept exactly as it
-// is (see "Kända inkonsekvenser" #6 in PLAN-arkitektur-pilot-week-2026-10.md).
+// runs (authenticate -> authorize -> repository), in one order: request
+// validation, then the Monday week (and any date inside it), then membership.
 export function buildWeekPlanRoutes(db: Db) {
   const app = new OpenAPIHono<TEnv>({ defaultHook: invalidRequestHook })
 
@@ -450,14 +449,14 @@ export function buildWeekPlanRoutes(db: Db) {
 
   app.openapi(appendWeekPlanEventRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
-    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
-    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     // The body's `causedBy` is never trusted (see shopping-list's event route):
     // events are always attributed to the authenticated caller.
     const { causedBy: _ignored, ...payload } = c.req.valid('json')
+    requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
     if (payload.eventType === 'week_context_override_upserted' || payload.eventType === 'week_context_override_cleared') {
       requireDateInWeek(weekStartDate, payload.date, { status: 400, code: 'INVALID_WEEK_CONTEXT_DATE' })
     }
+    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const event = await recordWeekPlanEvent(ctx, weekStartDate, { source: 'user', userId: ctx.userId }, payload as z.infer<typeof WeekPlanEventPayloadSchema>)
     return c.json(toWeekPlanEventResponse(event), 201)
   })
@@ -522,40 +521,36 @@ export function buildWeekPlanRoutes(db: Db) {
     return c.json(result, 200)
   })
 
-  // Membership first, then the range.
   app.openapi(listWeekHistoryPlansRoute, async (c) => {
     const { householdId } = c.req.valid('param')
     const { from, to } = c.req.valid('query')
-    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     if (from) requireMonday(from, { status: 400, code: 'INVALID_WEEK_RANGE' })
     if (to) requireMonday(to, { status: 400, code: 'INVALID_WEEK_RANGE' })
+    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await listWeekHistory(ctx, { from, to })
     if ('gate' in result) throw new ApiError(403, result.gate)
     return c.json(result.plans, 200)
   })
 
-  // Membership is checked before the Monday check.
   app.openapi(getWeekHistoryPlanRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
-    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
+    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const week = await getWeekHistoryPlan(ctx, weekStartDate)
     return c.json({ week }, 200)
   })
 
-  // Membership first, then the Monday check.
   app.openapi(upsertWeekHistoryPlanRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
     const body = c.req.valid('json')
-    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })
+    const ctx = await requireHouseholdMember(db, authOf(c), householdId)
     const result = await upsertWeekHistoryPlan(ctx, weekStartDate, body)
     if (result.outcome === 'stale') throw new ApiError(409, 'STALE_WEEK_PLAN_STATE', { updatedAt: result.updatedAt })
     const { plan } = result
     return c.json({ ok: true, weekStartDate: plan.weekStartDate, weekNumber: plan.weekNumber, weekYear: plan.weekYear, updatedAt: plan.updatedAt }, 200)
   })
 
-  // The Monday check runs before membership here.
   app.openapi(finalizeWeekHistoryPlanRoute, async (c) => {
     const { householdId, weekStartDate } = c.req.valid('param')
     requireMonday(weekStartDate, { status: 400, code: 'INVALID_WEEK_START_DATE' })

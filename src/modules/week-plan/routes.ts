@@ -5,7 +5,7 @@ import type { Db } from '../../db.js'
 import type { PersistedStreamEvent, PersistedStreamProjection } from '../../event-stream.js'
 import { assertMembership } from '../../membership.js'
 import { WeekContextOverrideSchema } from '../../planning-context.js'
-import { ApiError, requireDateInWeek, requireHouseholdMember, requireMonday, type ErrorCode } from '../../platform/http-errors.js'
+import { ApiError, invalidRequestHook, requireDateInWeek, requireHouseholdMember, requireMonday, type ErrorCode } from '../../platform/http-errors.js'
 import { PremiumRequiredResponseSchema } from '../../premium-gates.js'
 import { requestToday } from '../../shared/week-dates.js'
 import {
@@ -397,7 +397,7 @@ function toWeekPlanProjectionResponse(projection: PersistedStreamProjection) {
 // check and the membership check differs per route and is kept exactly as it
 // is (see "Kända inkonsekvenser" #6 in PLAN-arkitektur-pilot-week-2026-10.md).
 export function buildWeekPlanRoutes(db: Db) {
-  const app = new OpenAPIHono<TEnv>()
+  const app = new OpenAPIHono<TEnv>({ defaultHook: invalidRequestHook })
 
   // Hono middleware doesn't cross OpenAPIHono sub-app boundaries — the
   // households module registers its own `requireAuth` on `/households/*`,

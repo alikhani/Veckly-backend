@@ -2301,6 +2301,30 @@ describeWithDb('Week-plan event log + projection', () => {
       }
     })
 
+    it('answers params, query, and body that fail validation with 400 INVALID_REQUEST before the membership check', async () => {
+      for (const userId of [userA, userB]) {
+        for (const [method, path, body] of [
+          ['GET', `/households/${householdAId}/week-plans/2026-6-8/summary`, undefined],
+          ['GET', `/households/not-a-uuid/week-plans/${weekStartDate}/summary`, undefined],
+          ['GET', `/households/${householdAId}/week-plans?from=June`, undefined],
+          ['POST', `/households/${householdAId}/week-plans/${weekStartDate}/rescue/preview`, { ...rescueBody, intent: 'teleport' }],
+          ['POST', `/households/${householdAId}/week-plans/${weekStartDate}/generate`, { pantryItemKeys: 'rice' }],
+        ] as const) {
+          const response = await call(userId, method, path, body)
+          const json = await response.json() as { error: string; issues: Array<{ code: string; path: string[]; message: string }> }
+          expect({ path, status: response.status, error: json.error }).toEqual({ path, status: 400, error: 'INVALID_REQUEST' })
+          expect(json.issues.length).toBeGreaterThan(0)
+          for (const issue of json.issues) expect(issue).toEqual({ code: expect.any(String), path: expect.any(Array), message: expect.any(String) })
+        }
+      }
+    })
+
+    it('leaves validation errors of non-migrated routes in the Zod format', async () => {
+      const response = await call(userA, 'GET', '/households/not-a-uuid/shopping-preferences')
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ success: false })
+    })
+
     it('checks membership before the history range', async () => {
       await expectResponse(await call(userB, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), ...notMember)
       await expectResponse(await call(userA, 'GET', `/households/${householdAId}/week-plans?from=${tuesday}`), 400, { error: 'INVALID_WEEK_RANGE' })

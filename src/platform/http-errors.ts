@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import type { Context } from 'hono'
 import type { Db } from '../db.js'
 import { assertMembership } from '../membership.js'
 import type { PremiumRequiredBody } from '../premium-gates.js'
@@ -52,6 +53,15 @@ export type TValidationIssue = z.infer<typeof ValidationIssueSchema>
 export type TErrorResponse = z.infer<typeof ErrorResponseSchema>
 
 export type ApiErrorStatus = 400 | 403 | 404 | 409 | 422
+
+// `defaultHook` for a migrated module's `OpenAPIHono`: a request that fails
+// param, query, or body validation answers 400 INVALID_REQUEST instead of
+// Zod's `{ success: false, error }`. Not-yet-migrated files keep Zod's format.
+export function invalidRequestHook(result: { success: true } | { success: false; error: z.ZodError }, c: Context) {
+  if (result.success) return
+  const issues: TValidationIssue[] = result.error.issues.map((issue) => ({ code: issue.code, path: issue.path.map(String), message: issue.message }))
+  return c.json({ error: 'INVALID_REQUEST', issues } satisfies TErrorResponse, 400)
+}
 
 // `responses` entries for `createRoute`: `errorResponses({ 404: 'Caller is not a member' })`.
 export function errorResponses<const T extends Partial<Record<ApiErrorStatus, string>>>(descriptions: T) {

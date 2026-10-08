@@ -938,6 +938,13 @@ describeWithDb('Shopping-list event log + projection', () => {
       expect({ status: response.status, body: await response.json() }).toEqual({ status, body })
     }
 
+    async function expectInvalidRequest(response: Response) {
+      const body = await response.json() as { error: string; issues: Array<{ code: string; path: string[]; message: string }> }
+      expect({ status: response.status, error: body.error }).toEqual({ status: 400, error: 'INVALID_REQUEST' })
+      expect(body.issues.length).toBeGreaterThan(0)
+      for (const issue of body.issues) expect(issue).toEqual({ code: expect.any(String), path: expect.any(Array), message: expect.any(String) })
+    }
+
     const base = (householdId: string, week: string) => `/households/${householdId}/shopping-lists/${week}`
     const routes = (householdId: string, week: string): Array<[string, string, unknown?]> => [
       ['POST', `${base(householdId, week)}/events`, validEvent],
@@ -995,32 +1002,26 @@ describeWithDb('Shopping-list event log + projection', () => {
       await expectResponse(await call(userA, 'GET', base(householdAId, weekStartDate)), 404, { error: 'No shopping list found for this week' })
     })
 
-    it('rejects a malformed weekStartDate or householdId with 400 before the membership check', async () => {
+    it('rejects a malformed weekStartDate or householdId with 400 INVALID_REQUEST before the membership check', async () => {
       for (const [method, path, body] of [
         ...routes(householdBId, '2026-6-8'),
         ...routes('not-a-uuid', weekStartDate),
       ]) {
-        const response = await call(userA, method, path, body)
-        expect({ method, path, status: response.status }).toEqual({ method, path, status: 400 })
-        expect(await response.json()).toMatchObject({ success: false })
+        await expectInvalidRequest(await call(userA, method, path, body))
       }
     })
 
-    it('rejects an invalid body with 400 before the membership check', async () => {
+    it('rejects an invalid body with 400 INVALID_REQUEST before the membership check', async () => {
       for (const householdId of [householdAId, householdBId]) {
         for (const [path, body] of [
           [`${base(householdId, weekStartDate)}/events`, { causedBy: { source: 'user', userId: userA }, eventType: 'not_an_event' }],
           [`${base(householdId, weekStartDate)}/events`, { eventType: 'list_started' }],
           [`${base(householdId, weekStartDate)}/events`, { causedBy: { source: 'user', userId: userA }, eventType: 'item_checked', itemKey: '', checked: true }],
         ] as const) {
-          const response = await call(userA, 'POST', path, body)
-          expect({ householdId, body, status: response.status }).toEqual({ householdId, body, status: 400 })
-          expect(await response.json()).toMatchObject({ success: false })
+          await expectInvalidRequest(await call(userA, 'POST', path, body))
         }
         for (const body of [{}, { state: { checkedItems: 'rice:g', pantryStock: {} } }, { state: validState, expectedUpdatedAt: 42 }]) {
-          const response = await call(userA, 'PATCH', `${base(householdId, weekStartDate)}/state`, body)
-          expect({ householdId, body, status: response.status }).toEqual({ householdId, body, status: 400 })
-          expect(await response.json()).toMatchObject({ success: false })
+          await expectInvalidRequest(await call(userA, 'PATCH', `${base(householdId, weekStartDate)}/state`, body))
         }
       }
       expect(await db.select().from(shoppingListEvents)).toEqual([])

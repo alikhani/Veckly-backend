@@ -4,7 +4,7 @@ import { requireAuth, type AuthedUser } from '../../auth.js'
 import type { Db } from '../../db.js'
 import type { PersistedStreamEvent, PersistedStreamProjection } from '../../event-stream.js'
 import { languageFromAcceptLanguage } from '../../locale.js'
-import { ApiError, requireHouseholdMember } from '../../platform/http-errors.js'
+import { ApiError, invalidRequestHook, requireHouseholdMember } from '../../platform/http-errors.js'
 import {
   AppendShoppingListEventRequestSchema,
   CausedBySchema,
@@ -153,7 +153,7 @@ function toShoppingListProjectionResponse(projection: PersistedStreamProjection)
 // runs (authenticate -> authorize -> repository). None of these routes checks
 // that weekStartDate is a Monday; that is today's contract and is kept as is.
 export function buildShoppingListRoutes(db: Db) {
-  const app = new OpenAPIHono<TEnv>()
+  const app = new OpenAPIHono<TEnv>({ defaultHook: invalidRequestHook })
 
   // Same sub-app middleware-isolation note as week-plan's: this registration
   // doesn't cross into the parent app via `.route('/', ...)`.
